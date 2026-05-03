@@ -1,0 +1,17 @@
+.DS_Store
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+.swiftpm/
+Loom.xcodeproj/
+*.xcworkspace/xcuserdata/
+site/
+
+# Code signing material — should only ever live in the macOS keychain.
+*.p12
+*.pem
+*.key
+*.cer
+*.crt
+*.mobileprovision

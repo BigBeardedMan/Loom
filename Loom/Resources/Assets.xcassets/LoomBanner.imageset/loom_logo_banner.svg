@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 400" width="1200" height="400">
+  <!-- Rounded dark background -->
+  <rect x="0" y="0" width="1200" height="400" rx="36" fill="#0a0a0a"/>
+
+  <!-- Stacked terminal windows -->
+  <g transform="translate(260, 130) scale(2.5)">
+    <!-- Back window -->
+    <rect x="14" y="14" width="56" height="42" rx="5" fill="#18181b" stroke="#3f3f46" stroke-width="1.2"/>
+    <!-- Middle window -->
+    <rect x="7" y="7" width="56" height="42" rx="5" fill="#1c1c20" stroke="#52525b" stroke-width="1.2"/>
+    <circle cx="11" cy="11" r="1.5" fill="#52525b"/>
+    <circle cx="16" cy="11" r="1.5" fill="#3f3f46"/>
+    <!-- Front window -->
+    <rect x="0" y="0" width="56" height="42" rx="5" fill="#27272a" stroke="#a1a1aa" stroke-width="1.2"/>
+    <circle cx="6" cy="6" r="1.8" fill="#5eead4"/>
+    <circle cx="12" cy="6" r="1.8" fill="#a1a1aa" opacity="0.4"/>
+    <circle cx="18" cy="6" r="1.8" fill="#a1a1aa" opacity="0.25"/>
+    <!-- Code lines -->
+    <rect x="6" y="16" width="3" height="2" fill="#5eead4"/>
+    <rect x="12" y="16" width="20" height="2" fill="#a1a1aa" opacity="0.5"/>
+    <rect x="6" y="22" width="3" height="2" fill="#5eead4"/>
+    <rect x="12" y="22" width="14" height="2" fill="#a1a1aa" opacity="0.5"/>
+    <rect x="6" y="28" width="3" height="2" fill="#5eead4"/>
+    <rect x="12" y="28" width="6" height="2" fill="#5eead4"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="540" y="200" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Helvetica Neue', Arial, sans-serif" font-size="160" font-weight="500" fill="#fafafa" letter-spacing="-7" dominant-baseline="central">loom</text>
+</svg>

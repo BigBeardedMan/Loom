@@ -1,0 +1,2073 @@
+# The Loom Guide
+
+A complete, single-page reference for the Loom macOS workspace app. Covers
+installation, every pane, every settings tab, the agent stack, the kanban, the
+auto-update pipeline, the release flow, and the underlying architecture.
+
+> Loom is a personal command center for builders. One window holds your
+> terminal, editor, AI agent, and task board side by side. Local-first, no
+> tenants, no tiers, no cloud sync.
+
+This guide is generated and maintained alongside the app. The hosted MkDocs
+version of these chapters lives at
+[bigbeardedman.github.io/Loom](https://bigbeardedman.github.io/Loom/).
+
+---
+
+## Table of Contents
+
+1. [Overview](#1-overview)
+2. [Install](#2-install)
+3. [First Run](#3-first-run)
+4. [Workspaces](#4-workspaces)
+   1. [Prompt Workspace](#41-prompt-workspace)
+   2. [Ideas Workspace](#42-ideas-workspace)
+   3. [Review Workspace](#43-review-workspace)
+5. [Layout System](#5-layout-system)
+6. [Panes](#6-panes)
+   1. [Terminal](#61-terminal)
+   2. [Editor](#62-editor)
+   3. [Tasks (Kanban)](#63-tasks-kanban)
+   4. [Notes](#64-notes)
+   5. [Preview](#65-preview)
+   6. [Agent](#66-agent)
+7. [Agent Providers](#7-agent-providers)
+   1. [Claude Code (Default)](#71-claude-code-default)
+   2. [Anthropic API (Direct)](#72-anthropic-api-direct)
+   3. [Local LLMs (Ollama and OpenAI compatible)](#73-local-llms-ollama-and-openai-compatible)
+   4. [Custom Providers](#74-custom-providers)
+8. [Live Agent Tasks](#8-live-agent-tasks)
+9. [Task Handoff](#9-task-handoff)
+10. [Usage Dashboard](#10-usage-dashboard)
+11. [Settings](#11-settings)
+    1. [Appearance](#111-appearance)
+    2. [Tasks](#112-tasks)
+    3. [Providers](#113-providers)
+    4. [Advanced](#114-advanced)
+12. [Updates](#12-updates)
+    1. [Auto Update](#121-auto-update)
+    2. [Manual Check](#122-manual-check)
+13. [Keyboard Shortcuts](#13-keyboard-shortcuts)
+14. [Architecture](#14-architecture)
+    1. [Source Layout](#141-source-layout)
+    2. [Storage](#142-storage)
+    3. [Swift Concurrency](#143-swift-concurrency)
+15. [Security Model](#15-security-model)
+16. [Reference](#16-reference)
+    1. [File Paths](#161-file-paths)
+    2. [Keychain Keys](#162-keychain-keys)
+    3. [UserDefaults Keys](#163-userdefaults-keys)
+17. [Releasing a New Build](#17-releasing-a-new-build)
+18. [Building from Source](#18-building-from-source)
+19. [Troubleshooting](#19-troubleshooting)
+20. [Roadmap](#20-roadmap)
+
+---
+
+## 1. Overview
+
+Loom is a native macOS workspace app built in SwiftUI on Swift 6 with strict
+concurrency. It targets macOS 14 (Sonoma) and above. The app combines four
+first-class capabilities in one resizable window:
+
+| Capability | Built on | Notes |
+| ---------- | -------- | ----- |
+| Terminal | SwiftTerm | PTY-backed login shell with click-to-position cursor |
+| Editor | SwiftUI `TextEditor` | File tree with breadcrumb, plain-text editing |
+| AI Agent | Claude Code subprocess + HTTP providers | Sub-agent picker, local LLM streaming |
+| Tasks | SwiftData kanban | Five fixed columns, task-to-agent and task-to-terminal handoff |
+
+Loom is single-user by design. There are no accounts, no telemetry, no hosted
+control plane. Every secret lives in the macOS Keychain. Every persistent
+record lives in SwiftData on disk. Network access is limited to four code
+paths: GitHub Releases polling, the Anthropic API (when configured),
+user-defined local LLM endpoints, and the in-app web preview.
+
+### Product Principles
+
+- Personal command center first. Optimize for one builder moving quickly.
+- Local-first by default. Tasks, settings, workspace metadata, and agent
+  configuration live on this Mac unless explicitly synced.
+- Bring your own providers. API keys live in Keychain; provider integrations
+  stay replaceable.
+- No artificial tiers. If Loom can do something locally, it should be available.
+- Terminal work should be reviewable. Commands, output, exit status, and
+  agent actions become structured history over time.
+
+### Status
+
+Current shipping version: see `project.yml` `MARKETING_VERSION`. Loom 1.x
+covers the four-pane cockpit, multi-vendor agent integration (Claude Code,
+Anthropic API, Ollama, OpenAI compatible), the live agent tasks mirror, the
+SwiftData kanban with handoff, the rolling Usage dashboard, stable local
+codesigning, and SHA-256 verified over-the-air updates.
+
+---
+
+## 2. Install
+
+Loom ships as a notarized-shape but ad-hoc-signed `.dmg` from GitHub Releases.
+
+### Steps
+
+1. Download the latest `Loom-<version>.dmg` from the
+   [Releases page](https://github.com/BigBeardedMan/Loom/releases/latest).
+2. Open the DMG.
+3. Drag **Loom** onto the **Applications** alias inside the mounted volume.
+4. Eject the volume.
+
+### First launch (Gatekeeper)
+
+The build is ad-hoc signed (no Apple Developer ID), so macOS will refuse to
+launch it on the first try with the standard "Apple cannot check it for
+malicious software" dialog.
+
+Bypass once:
+
+1. Open `/Applications` in Finder.
+2. Right-click **Loom**, choose **Open**.
+3. Confirm in the dialog.
+
+Subsequent launches behave normally. macOS remembers the override.
+
+### Requirements
+
+- macOS 14 Sonoma or later (uses `@Observable`, SwiftData, Swift 6 strict
+  concurrency).
+- Internet access for: GitHub release polling (60 second cadence), the optional
+  Anthropic API, and any local LLM endpoint you configure.
+- Optional: `claude` (Claude Code CLI) on your `PATH` if you want the default
+  agent provider to work without an API key.
+
+### Uninstall
+
+Drag `/Applications/Loom.app` to the Trash. Loom-owned data lives in:
+
+- `~/Library/Application Support/Loom/` (staging directory and update manifest)
+- `~/Library/Application Support/com.chasesims.Loom/` (SwiftData store)
+- `~/Library/Preferences/com.chasesims.Loom.plist` (UserDefaults)
+- macOS Keychain, service `com.chasesims.Loom` (Anthropic key, local endpoint
+  bearer tokens)
+
+See [File Paths](#161-file-paths) and [Keychain Keys](#162-keychain-keys) for
+the full inventory.
+
+---
+
+## 3. First Run
+
+When Loom opens for the first time it seeds three default workspaces (Prompt,
+Ideas, Review) and a corresponding empty layout for each. The window is sized
+1024 by 640 minimum, 1400 by 800 by default.
+
+A 30-second tour:
+
+1. Click a workspace in the left sidebar to select it. The center deck
+   re-renders with that workspace's pane lineup.
+2. Use the top-bar **Add Block** strip (or `Command Shift 1` through
+   `Command Shift 4`) to add a pane that the current workspace kind allows.
+3. In a Prompt workspace, an Agent pane is preconfigured. Type a prompt at
+   the bottom and press Return to send it to the default Claude Code provider.
+4. Drag any pane's title bar to reorder. Drop near the left, right, top, or
+   bottom edge to pin the pane to that side. Drop on top of another pane to
+   swap their positions.
+5. Use `Command Option Arrow` to pin the focused pane via keyboard, or
+   `Command Option F` to toggle the focused pane to a full-row span.
+
+### Setting a workspace folder
+
+Each workspace can carry a folder URL (its working directory). Right-click a
+workspace row in the sidebar and choose **Set folder...** to bind one. Once
+set, the folder feeds three things:
+
+- The **Terminal** pane's startup `cwd`.
+- The **Editor** pane's file tree root.
+- The **Agent** pane's `cwd` (passed to the `claude` subprocess).
+
+The folder also appears under the workspace name in the sidebar so the row
+self-documents.
+
+### Renaming panes
+
+Double-click a pane's title bar to rename it inline. The custom name is
+remembered per-block and survives workspace switches. Right-click the title
+bar and choose **Reset name** to clear the override.
+
+---
+
+## 4. Workspaces
+
+A workspace is one named layout in the sidebar with its own folder, color,
+kind, and pane configuration. Loom ships with three kinds, picked at creation
+and immutable afterward.
+
+| Raw value | Sidebar label | Icon | Available panes |
+| --------- | ------------- | ---- | --------------- |
+| `code` | Prompt | text.cursor | Terminal, Editor, Tasks, Agent |
+| `ideas` | Ideas | lightbulb | Notes, Agent |
+| `review` | Review | magnifyingglass | Preview, Agent |
+
+The kind drives:
+
+- Which buttons appear in the top-bar **Add Block** strip.
+- Which `Command Shift <N>` shortcut adds which pane (the order in
+  `availablePanels` is the shortcut order).
+- Which sidebar section appears below the workspace list (Terminal Sessions,
+  Ideas, or nothing for Review).
+
+### Persistence
+
+Each workspace persists:
+
+- Its name, color, kind, folder path, last-opened timestamp, created-at
+  timestamp.
+- Its layout per kind (block list with kind, custom title, pin, full-row span,
+  preview URL override, terminal slot index, preview slot index, terminal
+  cwd path).
+
+Layout is stored in `~/Library/Application Support/Loom/layout.json` and
+keyed by workspace kind. The store is read once into an in-memory cache; saves
+are coalesced through a single in-flight task so two rapid mutations cannot
+race each other to disk.
+
+### Switching workspaces
+
+- Click a row in the sidebar.
+- `Command Shift O` flips back to the previous workspace (handy when bouncing
+  between Prompt and Review).
+- The previously selected workspace is remembered in `WorkspaceLayout`'s
+  `previousWorkspaceID` so flip is one keystroke.
+
+When you switch workspaces Loom disables the default SwiftUI cross-fade and
+swaps the deck in a single frame. Cross-fades cost about 100ms of perceived
+latency for no payoff here.
+
+### 4.1. Prompt Workspace
+
+Loom's cockpit. Four panes available, in this default order:
+
+1. Terminal (`Command Shift 1`)
+2. Editor (`Command Shift 2`)
+3. Tasks (`Command Shift 3`)
+4. Agent (`Command Shift 4`)
+
+Default layout: Terminal, Tasks, Agent (the Editor pane is added on demand).
+
+Use Prompt for:
+
+- Active build and debug loops.
+- Driving a CLI agent (Claude Code, Codex, Gemini) inside the terminal while
+  watching its tasks mirror in the Tasks pane.
+- Holding multiple terminals side by side. Add as many `Terminal` blocks as
+  you want; each gets an auto-incrementing slot index (Terminal, Terminal 2,
+  Terminal 3) so the sidebar list stays legible.
+
+### 4.2. Ideas Workspace
+
+Two panes available:
+
+1. Notes (`Command Shift 1`)
+2. Agent (`Command Shift 2`)
+
+Use Ideas for:
+
+- Drafting copy, plans, and journal-style notes.
+- Bouncing rough ideas off a model without spinning up a terminal.
+- Capturing fleeting thoughts that do not yet belong on a kanban board.
+
+Notes are SwiftData-backed (`IdeaNote` model) with autosave. Each note has a
+title and a body. The sidebar's Ideas section lists every note in the active
+workspace, sorted newest-first.
+
+### 4.3. Review Workspace
+
+Two panes available:
+
+1. Preview (`Command Shift 1`)
+2. Agent (`Command Shift 2`)
+
+Use Review for:
+
+- Looking at a localhost dev server alongside the agent that built it.
+- Reviewing a deployed page, a GitHub PR diff, or rendered output without
+  switching to a separate browser.
+
+The Preview pane defaults to `http://localhost:3000` for the first preview
+block, `http://localhost:3001` for the second, etc. The auto-incrementing
+slot is global across kinds so two Review workspaces' previews do not
+collide. The block remembers any URL override; setting the URL back to the
+default clears the override so the slot keeps tracking its port.
+
+---
+
+## 5. Layout System
+
+Every pane (called a "block" internally) lives on the workspace's deck. The
+deck arranges blocks into a grid that adapts to the window size. Blocks can
+be reordered via drag, pinned to an edge, expanded to a full row, or swapped
+with another block.
+
+### Deck capacity
+
+The deck's capacity scales with the window size:
+
+| Window width | Window height | Cols | Rows | Max blocks |
+| ------------ | ------------- | ---- | ---- | ---------- |
+| 1800+ | 900+ | 4 | 3 | 12 |
+| 1300+ | (any) | 4 | 2 | 8 |
+| 900+ | (any) | 3 | 2 | 6 |
+| (smaller) | (any) | 2 | 2 | 4 |
+
+When the deck is at capacity the **Add Block** buttons in the top bar dim
+out and tooltips read "Block limit reached for this window size." Resize the
+window or remove a block to add a new one.
+
+### Pinning
+
+Pinning docks one block to one edge of the deck. The remaining blocks
+distribute evenly across the complementary region.
+
+| Shortcut | Action |
+| -------- | ------ |
+| `Command Option Left` | Pin to left half |
+| `Command Option Right` | Pin to right half |
+| `Command Option Up` | Pin to top half |
+| `Command Option Down` | Pin to bottom half |
+| `Command Option F` | Toggle full row span |
+| `Command Option U` | Unpin |
+
+Drag-to-pin is supported as well. When you drag a pane near an edge, a
+dashed orange-blue ghost appears showing where the pin will land. Corner
+zones (top-left, top-right, bottom-left, bottom-right) take priority over
+edge zones. Dropping in a corner pins the block to that quadrant; the
+"neighbor" quadrant takes the next-most-recent block; the rest fill the
+complementary half-row.
+
+Only one block can be pinned at a time. Pinning a second block clears the
+first pin.
+
+### Full row span
+
+`Command Option F` toggles the focused block between "shares its row with
+peers" and "spans the full deck width." Useful for the Terminal pane when
+you need wide command output without unpinning everything else.
+
+### Reorder by drag
+
+Drag a block's title bar to reorder it. Drop on top of another block to
+swap. Drop near an edge to pin. The deck animates with a 320ms spring; the
+ghost indicator uses a 120ms ease-out so the drop target stays snappy.
+
+### Resize
+
+Each block fills its allotted grid cell automatically. There are no
+draggable dividers between blocks today; the cell sizes are computed from
+the deck capacity, the block count, and any pin and span flags.
+
+### Persistence
+
+Layout state is serialized via `LayoutPersistence` to
+`~/Library/Application Support/Loom/layout.json`. Each kind (Prompt, Ideas,
+Review) has its own block list. Switching kinds preserves each kind's
+last-seen layout: drop two terminals into a Prompt workspace, switch to
+Ideas, switch back, and the two terminals are still there.
+
+What is **not** persisted: the live `TerminalSession` object (PTYs are not
+checkpointable, so a restored terminal block gets a fresh shell that respawns
+in the saved cwd) and the in-memory message log of an Agent pane.
+
+---
+
+## 6. Panes
+
+### 6.1. Terminal
+
+Loom's Terminal pane is a real terminal, backed by
+[SwiftTerm](https://github.com/migueldeicaza/SwiftTerm). It runs your login
+shell with a TTY so interactive tools (Vim, top, fzf, ssh) work the same as
+they do in iTerm.
+
+#### What it ships with
+
+- Login shell. Defaults to `/bin/zsh -l`; respects `$SHELL` if set. The
+  argv 0 is set to `-zsh` so the shell treats itself as a login shell and
+  runs `zprofile` / `zshrc` (where Homebrew's `PATH` lives).
+- TTY allocation. `top`, `bat`, and friends get a real width.
+- Working directory seeded from the workspace folder.
+- Standard ANSI color and 256-color support; truecolor via SwiftTerm.
+- `TERM=xterm-256color`, `COLORTERM=truecolor`, `TERM_PROGRAM=Loom`,
+  `TERM_PROGRAM_VERSION=<MARKETING_VERSION>`.
+
+#### What it strips from the inherited environment
+
+The PTY shell sources your dotfiles and re-exports anything you actually
+want. Loom defensively strips a list of credential-shaped variables before
+spawning the shell so a leaked secret in Loom's launch environment does not
+flow into every subprocess you run:
+
+- Exact matches: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENAI_ORG_ID`,
+  `GOOGLE_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`,
+  `DEEPSEEK_API_KEY`, `XAI_API_KEY`, `AWS_SECRET_ACCESS_KEY`,
+  `AWS_SESSION_TOKEN`, `AZURE_OPENAI_API_KEY`, `HUGGINGFACE_TOKEN`,
+  `HF_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`, `NPM_TOKEN`, `STRIPE_SECRET_KEY`.
+- Suffix matches: any variable ending in `_API_KEY`, `_SECRET_KEY`,
+  `_ACCESS_TOKEN`, or `_AUTH_TOKEN`.
+
+#### Multi-row click to position cursor
+
+When a known CLI agent (`claude`, `codex`, `gemini`) is the foreground
+process, single-clicking inside its prompt area sends arrow-key sequences to
+walk the cursor to the clicked column and row. Same UX as Warp or iTerm with
+shell integration.
+
+Vertical movement is gated behind the CLI-agent check because sending up or
+down arrows into a plain shell prompt would walk command history rather than
+move the cursor. Cross-row clicks are also bounded to a 10-row radius from
+the cursor so accidental scrollback clicks do not blast a hundred arrow
+sequences into the foreground.
+
+Single clicks with any modifier (Shift, Command, Option, Control) are
+ignored so SwiftTerm's native selection and word-lookup gestures keep
+working.
+
+#### CLI agent detection
+
+The Terminal session reads `tcgetpgrp` on the PTY's child file descriptor to
+find the foreground process group, then `sysctl(KERN_PROC_PID)` to read its
+command name. Three names are currently recognized: `claude`, `codex`,
+`gemini`.
+
+When detection fires:
+
+- The active sessions badge in the workspace sidebar increments.
+- The Tasks pane (in Prompt workspaces) starts mirroring the agent's live
+  task list from `~/.claude/tasks/<session>/<id>.json`.
+- The terminal's click-to-position behavior unlocks vertical movement.
+
+When the agent process exits, detection drops on the next 2 second poll.
+
+#### Copy / paste
+
+Standard macOS shortcuts: `Command C` copies the selection, `Command V`
+pastes. Selection works with mouse drag.
+
+#### Scrollback
+
+SwiftTerm keeps the default 1000-line scrollback. Scroll with two-finger
+drag or your terminal's Page Up / Page Down (depending on `terminfo`).
+
+#### Restart
+
+There is no "restart shell" button. Close the pane (the **x** in its title
+bar) and re-add it to get a fresh shell that respawns in the workspace
+folder. The previous shell's scrollback is lost.
+
+#### Roadmap items
+
+- Command-block history. Every shell command becomes its own scrollable,
+  copyable card with exit code and timing metadata.
+- Multi-pane terminal layouts (split panes inside one Terminal pane).
+- Built-in MCP server bridging.
+
+### 6.2. Editor
+
+The Editor pane today is a plain-text file editor backed by SwiftUI's
+`TextEditor`, with a recursive file tree on the left.
+
+#### What works today
+
+- Browse the workspace folder via the file tree (left side).
+- Click a file to open it; non-binary text files load into the editor.
+- Edit the buffer; `Command S` saves to disk.
+- A yellow dot in the title bar marks unsaved changes.
+- The breadcrumb in the title bar shows the current file path relative to
+  the workspace folder (or relative to `~` if it lives outside).
+- A folder icon button in the title bar opens an `NSOpenPanel` to pick a
+  file outside the workspace tree.
+- `Command S` shortcut to save, `xmark.circle` button to close.
+
+#### Binary file guard
+
+The editor refuses to open files whose extension is in this set:
+
+```
+png, jpg, jpeg, gif, webp, heic, icns,
+pdf, zip, tar, gz, dmg, app,
+mp3, mp4, mov, wav, flac,
+ttf, otf, woff, woff2,
+sqlite, db, store, data
+```
+
+Trying to open one shows "Binary files aren't supported in the editor yet."
+in the error banner.
+
+#### What it does not do (yet)
+
+- Syntax highlighting.
+- Multi-file tabs.
+- Diff or git decoration.
+- Find and replace.
+
+The roadmap includes a [CodeEdit](https://github.com/CodeEditApp/CodeEdit)
+integration to swap the plain `TextEditor` for a real `NSTextView`-based
+editing surface with syntax highlighting and Loom-native chrome.
+
+### 6.3. Tasks (Kanban)
+
+A SwiftData-backed kanban board. Available in Prompt workspaces.
+
+#### Models
+
+```
+KanbanBoard
+  ├── name
+  ├── createdAt
+  ├── workspace (relationship)
+  └── columns: [KanbanColumn]
+       ├── name
+       ├── position
+       ├── board (relationship)
+       └── cards: [KanbanCard]
+            ├── title
+            ├── instructions
+            ├── taskKnowledge
+            ├── status (KanbanStatus enum)
+            ├── agentName
+            ├── projectPath
+            └── timestamps
+```
+
+#### Five fixed columns
+
+The board ships with five status columns. Order is fixed; renaming is not
+supported today.
+
+| Column | Status raw value |
+| ------ | ---------------- |
+| Todo | `todo` |
+| In Progress | `inProgress` |
+| In Review | `inReview` |
+| Complete | `complete` |
+| Cancelled | `cancelled` |
+
+Drag cards between columns to update status.
+
+#### Card fields
+
+- `title`. Short label shown on the card face.
+- `instructions`. Long-form description. Surfaced in the inspector.
+- `taskKnowledge`. Free-form notes and prior context.
+- `status`. Drives the column.
+- `agentName`. Optional CLI agent name to use when handing off to the Agent
+  pane (passed as `--agent <name>`).
+- `projectPath`. Working folder for handoff. Defaults to the workspace
+  folder if blank.
+
+#### Inspector
+
+Click a card to open the inspector. Edit any field; changes save
+immediately to SwiftData. Press Escape to dismiss.
+
+#### Persistence
+
+`KanbanCard` is a `@Model`. The container is on disk under the standard
+SwiftData application-support location, so cards survive app relaunches.
+
+#### Live agent tasks block
+
+When a CLI agent is detected in any Terminal pane (in any workspace), the
+Tasks pane shows its in-progress task list above the kanban columns. See
+[Live Agent Tasks](#8-live-agent-tasks).
+
+### 6.4. Notes
+
+The Notes pane is a list of `IdeaNote` records on the left and a markdown-
+adjacent body editor on the right. Available in Ideas workspaces.
+
+Each note has:
+
+- `title` (auto-derived from the first line of the body)
+- `body` (plain text, soft-wrapped, monospaced)
+- `createdAt` and `updatedAt` timestamps
+
+Notes are workspace-scoped (`workspace: Workspace?` relationship). The
+sidebar's Ideas section shows the active workspace's notes sorted newest
+first; double-click any row to rename inline.
+
+Bulk operations:
+
+- The trash icon in the sidebar's Ideas section header opens a
+  confirmation, then deletes every note in the active workspace.
+
+### 6.5. Preview
+
+The Preview pane is a `WKWebView` with a URL bar, back / forward / reload
+controls, and a small loading indicator overlay. Available in Review
+workspaces.
+
+#### URL handling
+
+Type into the address bar and hit `Return` (or click **Go**) to navigate.
+
+URL normalization rules:
+
+- Anything containing `://` is used as-is.
+- A leading `/` or `~` is treated as a file path; `~` is expanded.
+- A bare `localhost` or a leading digit is prefixed with `http://`.
+- Otherwise the input is prefixed with `https://`.
+
+#### Auto-default URL
+
+Each Preview block has an `autoPreviewIndex` (1, 2, 3, ...) used to compute
+its default URL: `http://localhost:3000` for the first block,
+`http://localhost:3001` for the second, etc. The default is recomputed across
+all kinds so two Review workspaces with one Preview each both default to
+`localhost:3000` only if they were created in different sessions; auto
+indexes are unique within a single launch.
+
+If you set a custom URL, the block remembers it. Resetting the URL field to
+the default clears the override.
+
+#### WebKit configuration
+
+`WKWebView` is configured with `javaScriptCanOpenWindowsAutomatically: false`
+to avoid pop-ups during dev preview. The `WebController` is owned by the
+block (not the view) so the loaded page survives workspace switches without
+forcing a full reload of the previewed URL.
+
+### 6.6. Agent
+
+The Agent pane is a streaming chat surface that routes prompts to one of two
+provider families (CLI subprocess, HTTP streaming) through a single picker.
+Available in Prompt, Ideas, and Review workspaces.
+
+See [Agent Providers](#7-agent-providers) for the per-provider details. This
+section covers the pane mechanics.
+
+#### Header
+
+The header carries:
+
+- A spark icon (orange).
+- The agent picker (vendor and display name with a chevron).
+- A subtitle: for CLI providers, the first 8 characters of the session id;
+  for local HTTP providers, the endpoint host (and port).
+- A refresh button to re-query the registry. Useful after `claude agents`
+  adds a new sub-agent or `ollama pull` lands a new model.
+- A small spinner when the registry is refreshing.
+- During an in-flight turn: a progress spinner and a Stop button.
+
+#### Picker
+
+The picker groups agents by section. Sections are determined by each
+descriptor's `group` field:
+
+- `Default` for Claude Code's vendor default.
+- `Plugin agents`, `Built-in agents`, etc. for sub-agents discovered via
+  `claude agents list`.
+- `Local . <endpoint name>` for each Ollama model or each OpenAI-compatible
+  endpoint.
+
+Click any item to switch providers within the same pane. Switching mid-
+conversation creates a new logical conversation; the new provider does not
+get the prior history of the previous one. Open a fresh workspace to start
+clean across providers.
+
+#### Message bubbles
+
+Three roles render with distinct chrome:
+
+| Role | Avatar | Background |
+| ---- | ------ | ---------- |
+| User | person.crop.circle.fill (blue) | white 5% |
+| Assistant | sparkles (orange) | white 3% |
+| System | exclamationmark.bubble (gray) | orange 8% |
+
+Assistant bubbles label themselves `AGENT` for CLI providers and `LOCAL` for
+Ollama / OpenAI-compatible endpoints. Text is selectable; an empty bubble
+during streaming shows a single ellipsis.
+
+#### Input bar
+
+A multiline `TextField` (1 to 6 lines) with a placeholder ("Ask the
+agent..."). Press Return to send, Shift Return for a newline. The send
+button (orange arrow) lights up when the draft is non-empty and no turn is
+in flight.
+
+#### Streaming
+
+| Provider | Stream | Cancel mechanism |
+| -------- | ------ | ---------------- |
+| Claude Code (CLI) | One-shot. Bubble fills when the subprocess exits. | `Process.terminate()` on the active subprocess. Resumes on next turn. |
+| Anthropic API | Live token stream (SSE) | Cancels the URLSession task. |
+| Ollama | Live token stream (NDJSON) | Cancels the URLSession task. |
+| OpenAI compatible | Live token stream (SSE) | Cancels the URLSession task. |
+
+#### Conversation memory
+
+- CLI providers retain context server-side via `--resume <session-id>`. The
+  session id is shown in the header so you can see when a new conversation
+  starts.
+- HTTP providers are stateless. Loom replays the full chat history on every
+  turn, so context survives but request size grows over the conversation.
+
+#### Per-workspace state
+
+Each workspace renders its own Agent pane with local message state. The
+in-memory log survives workspace switches (the pane's view re-mounts but the
+state is held by the deck), but it is not persisted across app relaunches
+today.
+
+---
+
+## 7. Agent Providers
+
+### 7.1. Claude Code (Default)
+
+Loom's default agent. Drives the
+[Claude Code CLI](https://docs.claude.com/en/docs/agents-and-tools/claude-code/overview)
+as a subprocess so the chat surface uses your existing OAuth login. No API
+key needed.
+
+#### Requirements
+
+- `claude` on `PATH`. Install via `npm i -g @anthropic-ai/claude-code` or the
+  official installer.
+- An authenticated Claude Code session (`claude auth login`).
+
+If `claude` is not on `PATH`, sending a prompt fails with "Failed to launch
+claude:" plus the underlying error. Surface it in the chat error banner.
+
+#### Subprocess invocation
+
+`ClaudeCodeProvider` builds the argv array directly and runs through
+`/usr/bin/env`:
+
+```
+/usr/bin/env claude -p [--agent <name>] (--session-id | --resume) <uuid> <prompt>
+```
+
+The first turn passes `--session-id <uuid>`. Subsequent turns pass
+`--resume <uuid>` so the conversation has memory.
+
+Arguments are passed as an array, never as a shell string. This keeps any
+user-controlled value (the prompt, the agent name) from being interpreted as
+shell syntax.
+
+#### PATH resolution
+
+The Claude Code provider runs `zsh -lic 'echo $PATH'` once on the first send
+to capture the user's interactive `PATH`. The result is cached in a static
+across the app's lifetime so subsequent sends do not re-spawn a login shell
+just to read `PATH`.
+
+#### Sub-agent picker
+
+The Agent registry queries `claude agents list` and parses the textual
+output:
+
+```
+N active agents
+
+Plugin agents:
+  feature-dev:code-architect . sonnet
+
+Built-in agents:
+  Explore . haiku
+```
+
+Each row becomes an `AgentDescriptor` grouped under its section header.
+Picking one passes its name as `--agent <name>` on the next turn.
+
+Click the refresh icon in the Agent pane header after installing a new
+plugin or editing your `~/.claude/agents/` definitions to re-query.
+
+#### Cancellation
+
+The Stop button calls `cancel()`, which bumps a generation counter and calls
+`Process.terminate()` on the active subprocess. The captured generation in
+the in-flight `send()` ensures stale responses do not deliver to the UI
+after a cancel; the assistant placeholder is removed and the user sees the
+input come back unblocked.
+
+#### Working directory
+
+The Agent pane passes the workspace's folder URL as the subprocess `cwd` so
+`claude`'s tool calls target the right project. Set the workspace folder
+before sending the first prompt; switching folders mid-session does not
+migrate context.
+
+#### No token streaming
+
+The CLI's `-p` mode is one-shot; the subprocess prints the full response
+when it exits. If you want token-by-token streaming, point the picker at a
+local LLM or the [Anthropic API](#72-anthropic-api-direct).
+
+### 7.2. Anthropic API (Direct)
+
+Loom can talk directly to `https://api.anthropic.com/v1/messages` using an
+Anthropic API key. Provider-direct (no Claude Code CLI), with live token
+streaming.
+
+#### When to use it
+
+- You want streamed tokens.
+- You want a model that the Claude Code CLI's `-p` mode does not yet expose.
+- You are running on a machine without `claude` on `PATH`.
+
+For day-to-day work the Claude Code provider is preferred (no key
+management, full sub-agent system). Use this path when the above tradeoffs
+matter.
+
+#### Setup
+
+1. Get an API key from [console.anthropic.com](https://console.anthropic.com).
+2. Open **Settings -> Advanced**.
+3. Paste the key into the **Anthropic API Key** field.
+4. Click **Save**.
+
+The key is stored in macOS Keychain under service `com.chasesims.Loom`,
+account `anthropic_api_key`. See [Keychain Keys](#162-keychain-keys).
+
+#### Wire format
+
+```
+POST https://api.anthropic.com/v1/messages
+content-type: application/json
+x-api-key: <your key>
+anthropic-version: 2023-06-01
+```
+
+Request body shape:
+
+```
+{
+  "model": "claude-opus-4-7",
+  "max_tokens": 4096,
+  "stream": true,
+  "system": "<optional>",
+  "messages": [{"role": "user", "content": "..."}]
+}
+```
+
+Streamed `content_block_delta` events with `delta.type == "text_delta"` are
+emitted as tokens.
+
+#### Default model
+
+`claude-opus-4-7`, max tokens 4096. Both are tunable in code
+(`AnthropicProvider`) but not yet exposed in Settings.
+
+#### Cost
+
+Direct API calls bill against your Anthropic account, separate from any
+Claude Code subscription. The Usage dashboard reads on-disk Claude Code
+session logs and does **not** track direct API usage.
+
+### 7.3. Local LLMs (Ollama and OpenAI compatible)
+
+Loom can stream chat from any LLM you run on `localhost` or your LAN. Two
+integrations are built in.
+
+| Kind | Best for | Wire format |
+| ---- | -------- | ----------- |
+| Ollama | `ollama serve` running locally or on a homelab box | `POST /api/chat` (NDJSON), `GET /api/tags` for models |
+| OpenAI compatible | LM Studio, llama.cpp's `llama-server`, Jan, vLLM, LocalAI, anything that speaks `/v1/chat/completions` | OpenAI SSE stream |
+
+Both are added in [Settings -> Providers](#113-providers).
+
+#### Ollama setup
+
+1. Install Ollama: `brew install ollama` (or download from
+   [ollama.com](https://ollama.com/download)).
+2. Pull a model: `ollama pull llama3.2:3b`.
+3. Ensure the daemon is running: `ollama serve` (the GUI installer launches
+   it automatically; brew install does not).
+4. Loom -> **Settings -> Providers -> Add**.
+   - Display name: `Ollama`
+   - Kind: Ollama
+   - Base URL: `http://localhost:11434`
+   - Default model: leave blank. Loom auto-discovers via `/api/tags`.
+   - Requires auth: off.
+5. Click **Test connection**. Should report `N model(s)`.
+6. Click **Save**.
+
+The Agent pane picker now has a `Local . Ollama` group with one entry per
+pulled model. Pick one, send a prompt, watch tokens stream in.
+
+LAN setup: run `OLLAMA_HOST=0.0.0.0:11434 ollama serve` on the remote box and
+set Loom's Base URL to `http://<host>:11434`.
+
+#### OpenAI-compatible setup
+
+These tools all expose an OpenAI-shaped HTTP API. Pick one, start its
+server, then add an endpoint in Loom.
+
+LM Studio:
+
+1. In LM Studio: **Developer -> Local Server -> Start Server** (default port
+   1234).
+2. Note the model identifier (e.g. `lmstudio-community/Llama-3.1-8B-Instruct`).
+3. Loom -> **Settings -> Providers -> Add**.
+   - Display name: `LM Studio`
+   - Kind: OpenAI-compatible
+   - Base URL: `http://localhost:1234/v1`
+   - Model: the identifier from step 2
+   - Requires auth: off
+4. **Save**.
+
+llama.cpp:
+
+```
+./llama-server -m /path/to/model.gguf --host 0.0.0.0 --port 8080
+```
+
+In Loom, Base URL = `http://localhost:8080/v1`, Model = whatever string you
+want (llama-server echoes it back regardless).
+
+Jan: default port `1337/v1`. Same setup; paste in the model identifier from
+Jan's UI.
+
+vLLM / LocalAI: same shape. Set Base URL to wherever the server listens
+(commonly `http://localhost:8000/v1`), set the Model id to whatever the
+server expects, save.
+
+#### Auth tokens
+
+Some local servers (or LAN proxies in front of them) want a bearer token.
+Toggle **Requires auth** in the editor and paste the token. It is stored in
+macOS Keychain under account `local_endpoint_<UUID>` and sent as
+`Authorization: Bearer <token>` on every request.
+
+#### URL safety filter
+
+`LocalEndpoint.isAllowedURL` enforces a conservative allowlist on every
+endpoint URL:
+
+- Scheme must be `http` or `https`. `file://`, `ftp://`, etc. are rejected
+  outright.
+- Hostname must be present.
+- Three host strings are denied: `169.254.169.254`, `metadata.google.internal`,
+  `metadata`, `fd00:ec2::254` (cloud instance metadata IPs).
+
+A rejected URL silently fails to materialize as an `AgentDescriptor`, so the
+endpoint is invisible in the picker. The Test connection button surfaces
+"Invalid URL" so the user can fix it.
+
+#### Streaming and cancel
+
+All HTTP providers stream tokens live into the assistant bubble. Hit the
+Stop button to cancel; the URLSession task is canceled and the bubble shows
+whatever was already emitted.
+
+### 7.4. Custom Providers
+
+Need to point Loom at something that is not Claude Code, Ollama, or an
+OpenAI-compatible server? Two paths.
+
+#### Try OpenAI compatible first
+
+A surprising number of "weird" LLM servers actually speak the OpenAI wire
+format. If your server has any of these in its docs, add it as
+**OpenAI-compatible**:
+
+- "OpenAI-compatible API"
+- "OpenAI proxy"
+- A `POST /v1/chat/completions` endpoint
+- A `POST /chat/completions` endpoint (set Base URL to the parent and Loom
+  appends `/chat/completions`)
+
+This covers vLLM, LocalAI, OpenRouter (with their key), Together, Groq,
+Mistral's chat endpoint, Anyscale, Perplexity, Fireworks, DeepInfra, and
+dozens more.
+
+#### Add a new provider in code
+
+If your target speaks a non-OpenAI wire format, drop a file into
+`Loom/Agents/` that conforms to `LLMProvider`:
+
+```swift
+struct MyCoolProvider: LLMProvider {
+    let baseURL: URL
+    let model: String
+    var displayName: String { "MyCool . \(model)" }
+
+    func stream(
+        messages: [LLMMessage],
+        system: String?
+    ) -> AsyncThrowingStream<LLMEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    // Build URLRequest, call URLSession.shared.bytes(for:),
+                    // parse the wire format, yield .textDelta(...) per token.
+                    continuation.yield(.done)
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+```
+
+Then:
+
+1. Add a vendor case to `AgentDescriptor.Vendor` in `AgentRegistry.swift`.
+   Mark it `isLocalHTTP` if HTTP-streamed.
+2. Surface the provider in the registry. Either register it from a
+   `LocalEndpoint.Kind` or add a hardcoded descriptor.
+3. Wire it into `AgentPaneView.sendViaLocalHTTP` (or write a parallel send
+   method for unique requirements).
+4. Run `xcodegen generate` to regenerate the project after adding the file.
+
+Reference implementations: `OllamaProvider.swift` and
+`OpenAICompatibleProvider.swift`.
+
+---
+
+## 8. Live Agent Tasks
+
+When a CLI agent runs in a Terminal pane (anywhere in Loom), the Tasks pane
+mirrors its in-progress task list in real time.
+
+### Where the data comes from
+
+Claude Code (and other compatible CLIs) write per-session task state to:
+
+```
+~/.claude/tasks/<session-id>/<task-id>.json
+```
+
+Each JSON file describes one task: id, subject, description, activeForm,
+status. Loom polls this directory every 2 seconds via
+`LiveAgentTasksService` (off-main-thread JSON decode) and surfaces the
+active tasks grouped by session id.
+
+### Task statuses
+
+| Raw value | Label |
+| --------- | ----- |
+| `pending` | Todo |
+| `in_progress` | In progress |
+| `completed` | Done |
+| `cancelled` | Cancelled |
+| `deleted` | (hidden from the pane) |
+
+Within a group, tasks are sorted by status priority then by `updatedAt`
+descending.
+
+### What you see
+
+In a Prompt workspace's Tasks pane, live agent tasks appear in their own
+section above the kanban columns:
+
+- Header: **Live . <session-id-prefix>** (e.g. `Live . 33280421`).
+- One row per task, with a status badge.
+- Click a task to expand and read its full description and `activeForm`.
+
+When a session finishes (or its session id rotates), the live block clears
+on the next 2 second poll.
+
+### Multiple sessions
+
+If multiple CLI agents are running across multiple Terminal panes (or
+outside Loom), each appears with its own header. The active session count
+in the workspace sidebar increments accordingly.
+
+### Stale window
+
+Configurable in [Settings -> Tasks](#112-tasks). Sessions whose most recent
+task update is older than the window are treated as dead and hidden from
+the pane:
+
+| Window | Hides sessions older than |
+| ------ | ------------------------- |
+| 30 minutes | 30 min |
+| 1 hour | 1 h (default) |
+| 4 hours | 4 h |
+| 12 hours | 12 h |
+| 24 hours | 24 h |
+| Never | (always show everything) |
+
+The poll keeps running regardless of the window; it is purely a display
+filter.
+
+### Lock and highwatermark files
+
+Claude Code touches `.lock` and `.highwatermark` files even on dormant
+sessions. Loom deliberately ignores those mtimes when computing
+"is this session active" so long-completed sessions do not look alive
+forever. Only `.json` task-file mtimes count.
+
+### Privacy
+
+Loom only reads files under `~/.claude/tasks/`. Nothing leaves your
+machine. The polling service uses standard `FileManager` calls and does not
+watch via FSEvents (which would require a separate privacy entitlement).
+
+### Clearing
+
+The trash icon next to a session's header deletes that session's `.json`
+files. Live CLI sessions will rewrite them on the next turn, so this only
+"sticks" for crashed or zombie sessions.
+
+The "Clear all" button in the pane header opens a confirmation, then deletes
+every visible session's task files.
+
+---
+
+## 9. Task Handoff
+
+Kanban cards can carry the next action (a prompt or a shell command) and
+dispatch it to the right pane in one click.
+
+### Two handoff fields
+
+Every card has two optional fields:
+
+- `agentPrompt`: text auto-injected into the Agent pane on handoff.
+- `terminalCommand`: shell command auto-injected into the Terminal pane on
+  handoff.
+
+Set them in the card inspector. Either or both can be filled.
+
+### Send to agent
+
+In the card inspector or the card's context menu, click **Send to agent**.
+Loom:
+
+1. Grabs `agentPrompt`.
+2. Auto-fills the Agent pane's input.
+3. Submits the prompt.
+4. Optionally selects the configured `agentName` in the picker (passed as
+   `--agent` for Claude Code).
+
+If no Agent pane is open in the current workspace, Loom adds one first.
+
+### Send to terminal
+
+Click **Send to terminal**. Loom:
+
+1. Grabs `terminalCommand`.
+2. Injects it into the focused Terminal pane (typed into the foreground
+   process's stdin).
+3. Sends a newline so the command runs.
+
+If no Terminal pane is open, Loom adds one first.
+
+### Caveats
+
+- No multi-line scripts. The whole command is one stdin write. Most shells
+  handle this fine; partially-typed control-flow blocks can interleave
+  oddly.
+- No password prompts. Do not inject `sudo` and expect the password prompt
+  to fill itself.
+- The shell sees it as user input. History (`history`, `Up`) records
+  injected commands the same as typed ones.
+- No auto-execute of agent suggestions. The agent does not silently inject
+  commands. Every handoff is one explicit click.
+
+### Why two separate fields?
+
+Some tasks are pure conversation ("Have the agent draft a release note").
+Some are pure execution ("Run the migration script"). And some are both:
+set both fields, fire one then the other. Keeping the pipelines separate
+avoids gymnastics about whether a string is a prompt or a command.
+
+---
+
+## 10. Usage Dashboard
+
+Loom reads on-disk usage data from the local CLI agents you have installed
+and renders it as a full-deck dashboard. Three tabs in the top bar
+(**Claude Usage**, **Codex Usage**, **Gemini Usage**) sit immediately to the
+right of the Loom logo. Click any tab to open that CLI's dedicated
+full-width dashboard; click the same tab again or click any workspace in the
+sidebar to dismiss. Each tab tints to its CLI's brand color when active.
+
+### What it tracks
+
+Three CLIs are recognized by name today: Claude Code, Codex, Gemini.
+
+| CLI | Source |
+| --- | ------ |
+| Claude Code | `~/.claude/projects/<slug>/<id>.jsonl` (line by line) |
+| Codex | `~/.codex/sessions/.../<rollout>.jsonl` (cumulative `total_token_usage` event) |
+| Gemini | Stub. The Gemini CLI does not expose usage we can read locally yet. |
+
+For Claude Code, every JSONL session file is scanned line by line for
+`"usage":{...}` events (actual per-turn timestamp + model) and `"role":"user"`
+prompt lines. This drives:
+
+- Per-bucket token totals across the selected timeframe.
+- Per-model token attribution.
+- Per-project token slices.
+- Hourly distribution (when in the day did you actually drive the CLI).
+- Top topics across user prompts (filtered against a hand-curated stopword
+  list).
+- Recent prompts (newest first, capped for display).
+
+### Timeframes
+
+Pick a timeframe at the top of the dashboard:
+
+| Timeframe | Buckets | Span |
+| --------- | ------- | ---- |
+| Day | 24 hourly buckets | Last 24 hours (rolling) |
+| Week | 7 daily buckets | Last 7 days (rolling) |
+| Month | 30 daily buckets | Last 30 days (rolling) |
+| Year | 12 monthly buckets | Last 365 days (rolling) |
+
+Switching timeframe triggers a full snapshot recompute.
+
+### Refresh cadence
+
+Two cadences:
+
+- **Light path.** Every 3 seconds, count `.jsonl` files modified within the
+  last 5 minutes. Drives the active sessions badge.
+- **Full snapshot.** Heavy. On demand (timeframe change or pane open).
+  Reads every JSONL file in full, runs the regex scan off the main actor.
+  Year-range refreshes can take roughly a minute on large logs; the
+  dashboard shows a giant centered throbber over the existing data while
+  it computes so the wait is announced.
+
+### Per-CLI dashboard
+
+Each tab opens a single-CLI dashboard tinted with that CLI's brand color
+(Claude orange, Codex green, Gemini blue). The dashboard shows:
+
+- Total tokens across the timeframe (input, output, cached).
+- Today's session count.
+- Total session count.
+- Active session count.
+- Last activity timestamp.
+- A bar chart of per-bucket token totals.
+- Top projects, top models, top topics.
+- An hourly distribution.
+- Recent prompts (clickable to expand).
+
+CLIs that are not installed render an "installed but no data" placeholder
+so the tab still works as a feature-discovery surface.
+
+### Why no live API quotas?
+
+The Anthropic console's quota and billing dashboards are the source of
+truth for paid usage. Loom's dashboard is purely a local-disk read of CLI
+session logs. It does not call the Anthropic API or the OpenAI API to look
+up live quotas.
+
+### Privacy
+
+Same model as the live agent tasks reader. Loom only reads
+`~/.claude/projects/`, `~/.codex/sessions/`, and `~/.gemini/`. Nothing
+leaves your machine.
+
+---
+
+## 11. Settings
+
+Loom's Settings window is a four-tab `TabView` (`SettingsScene.swift`),
+sized 620x460:
+
+1. Appearance
+2. Tasks
+3. Providers
+4. Advanced
+
+Open it via `Command ,` or the **Loom -> Settings...** menu item.
+
+### 11.1. Appearance
+
+| Field | Storage | Purpose |
+| ----- | ------- | ------- |
+| Appearance picker | UserDefaults `loom.appearance` | Match System / Light / Dark (default) |
+
+The picker is a segmented control. Switching applies to every Loom window
+immediately via the `loomAppearance()` modifier.
+
+### 11.2. Tasks
+
+| Field | Storage | Purpose |
+| ----- | ------- | ------- |
+| Stale window | UserDefaults `loom.tasks.staleHours` (Double, hours) | Hides CLI sessions whose most recent task update is older than the window |
+
+Options: 30 minutes, 1 hour (default), 4 hours, 12 hours, 24 hours, Never.
+
+Lower the window when cycling through many short Claude Code runs and you
+do not want yesterday's sessions cluttering the pane. Raise it for
+long-running agents that go idle for hours between turns.
+
+### 11.3. Providers
+
+Manages the local LLM endpoints listed in the Agent pane's picker.
+
+The Providers tab lists every configured endpoint with its kind, base URL,
+and a row of actions:
+
+- **Edit.** Opens the editor sheet pre-filled.
+- **Trash icon.** Removes the endpoint and clears its Keychain auth token.
+
+Empty state shows a hint pointing at Add.
+
+#### Add a provider
+
+| Field | Notes |
+| ----- | ----- |
+| Display name | Free-form. Shown as the menu group header (`Local . <name>`). |
+| Kind | Ollama or OpenAI-compatible. Switching kinds swaps the default base URL hint. |
+| Base URL | Full URL. Trailing slash is stripped. Defaults: `http://localhost:11434` (Ollama), `http://localhost:1234/v1` (OpenAI-compatible). |
+| Default model / Model | For Ollama: optional fallback when `/api/tags` fails. For OpenAI-compatible: required. |
+| Requires auth token | Toggle. When on, reveals a SecureField for a bearer token. |
+
+#### Test connection
+
+Click **Test connection** before saving:
+
+- Ollama: hits `GET <baseURL>/api/tags`. Reports the number of models or
+  "No models / unreachable".
+- OpenAI compatible: hits `GET <baseURL>/models`. Reports HTTP 200 or the
+  failure reason.
+
+Test does not save the endpoint; you still have to click **Save**.
+
+#### Storage
+
+- Endpoint metadata: UserDefaults under key `loom.localEndpoints`,
+  JSON-encoded `[LocalEndpoint]`.
+- Auth tokens: macOS Keychain, service `com.chasesims.Loom`, account
+  `local_endpoint_<UUID>`.
+
+Saving (or removing) an endpoint triggers `AgentRegistry.refresh(...)`. The
+Agent pane picker updates without an app restart.
+
+### 11.4. Advanced
+
+| Field | Storage | Purpose |
+| ----- | ------- | ------- |
+| Anthropic API Key | Keychain `anthropic_api_key` | Optional, for the Anthropic API direct provider |
+
+The key is masked in a SecureField. **Save** writes to Keychain; **Clear**
+deletes the item. A green "Saved" badge appears for ~2 seconds after a
+successful save.
+
+The key is read just-in-time when an `AnthropicProvider` is instantiated.
+There is no in-memory cache.
+
+---
+
+## 12. Updates
+
+### 12.1. Auto Update
+
+Loom polls GitHub Releases on a 60 second cadence. New builds are downloaded
+and verified in the background; the **Update** pill in the top bar lights up
+once a build is staged. Click the pill to swap in the new version.
+
+#### Cadence
+
+- Remote poll: every 60 seconds.
+- Local manifest poll: every 4 seconds (cheap; just `stat`s the staging
+  directory).
+- API endpoint:
+  `https://api.github.com/repos/BigBeardedMan/Loom/releases/latest`
+  (unauthenticated; 60 req/hr per IP).
+
+#### Pipeline
+
+1. `GitHubReleaseFetcher.fetchLatest()` returns the latest release. If its
+   tag is a strictly higher semver than the running build, proceed.
+2. **Integrity check.** Fetch the published `.sha256` sidecar asset. The
+   release MUST publish a SHA-256 of the DMG (hex, optionally followed by
+   filename). Loom downloads the DMG and computes its SHA-256 in 256 KB
+   chunks. If the hash does not match (or the sidecar is missing), refuse
+   to mount. Without this, an attacker who compromised the GitHub release
+   could replace the DMG with arbitrary code and Loom would silently
+   install it.
+3. Mount the DMG read-only at a private mountpoint via `hdiutil attach`.
+4. Copy `Loom.app` from the mounted volume into
+   `~/Library/Application Support/Loom/staging/Loom.app`.
+5. Detach the DMG via `hdiutil detach -force` and remove the mountpoint.
+6. Strip the iCloud `com.apple.fileprovider.fpfs#P` xattr (which would
+   otherwise trip iCloud "uploading..." rename behavior). Quarantine is
+   left in place so Gatekeeper still blesses the bundle on first launch.
+7. Read `CFBundleShortVersionString` and `CFBundleVersion` from the staged
+   `Info.plist` and write `manifest.json` next to the staged bundle.
+8. The `UpdateService.available` flag flips on the next 4 second local poll.
+
+#### Apply (click the pill)
+
+Clicking the pill calls `applyAndRelaunch()`:
+
+1. Spawn a small detached helper script. The script body lives only in the
+   helper process's argv (passed via `zsh -c "<body>"`); no script file is
+   written to a user-writable directory and re-executed.
+2. The helper waits up to 10 seconds for the running Loom PID to exit.
+3. The helper removes `/Applications/Loom.app` and copies the staged bundle
+   in.
+4. The helper removes the staged manifest.
+5. The helper relaunches Loom from `/Applications` via `open`.
+6. Logs land in
+   `~/Library/Application Support/Loom/staging/last-apply.log` for forensics.
+
+The hand-off is fast. Loom quits, the new build launches in well under a
+second.
+
+#### Failure surfacing
+
+When a remote check fails (network down, GitHub 5xx, missing checksum
+sidecar, mount failure, copy failure), the error is captured in
+`UpdateService.lastRemoteError`. The next **Help -> Check for Updates...**
+surfaces it in the alert ("Update check failed: ...") instead of silently
+returning "up to date".
+
+### 12.2. Manual Check
+
+Use **Help -> Check for Updates...** in the menu bar (or `?` in the menu)
+to force a remote check now. The path is the same as the automatic poll;
+it just bypasses the 60 second interval and posts an alert with the result:
+
+- "Update available: Loom <version> (<build>) is ready. Click Update in the
+  top bar to install and relaunch."
+- "Update check failed: <reason>"
+- "Loom is up to date. You're running <version> (<build>)."
+
+The menu item is disabled while a remote check is in flight.
+
+### Disabling auto-update
+
+There is no UI toggle today. To stop it, edit
+`Loom/App/UpdateService.swift` and short-circuit `start()`, then rebuild.
+Or kill the Loom process and remove
+`~/Library/Application Support/Loom/staging/`.
+
+---
+
+## 13. Keyboard Shortcuts
+
+Every shortcut is wired in `Loom/App/LoomApp.swift` via `Commands` and
+shows up in the menu bar.
+
+### Workspaces
+
+| Shortcut | Action |
+| -------- | ------ |
+| `Command N` | New workspace (focuses sidebar) |
+| `Command Shift O` | Switch to previous workspace |
+
+### Adding panes
+
+The number maps to the panel order for the current workspace kind. In a
+Prompt workspace the order is Terminal, Editor, Tasks, Agent, so
+`Command Shift 1` adds a terminal and `Command Shift 4` adds an agent.
+
+| Shortcut | Action |
+| -------- | ------ |
+| `Command Shift 1` | Add the first available panel |
+| `Command Shift 2` | Add the second |
+| `Command Shift 3` | Add the third |
+| `Command Shift 4` | Add the fourth |
+
+### Layout
+
+These act on the focused (first) pane.
+
+| Shortcut | Action |
+| -------- | ------ |
+| `Command Option Left` | Pin focused pane to the left |
+| `Command Option Right` | Pin focused pane to the right |
+| `Command Option Up` | Pin focused pane to the top |
+| `Command Option Down` | Pin focused pane to the bottom |
+| `Command Option F` | Toggle full row span |
+| `Command Option U` | Unpin |
+
+### Editor
+
+| Shortcut | Action |
+| -------- | ------ |
+| `Command S` | Save the active file |
+
+### Help
+
+| Shortcut | Action |
+| -------- | ------ |
+| `Help -> Check for Updates...` | Force a remote release check now |
+
+### Build & Run (Xcode)
+
+When you are hacking on Loom itself in Xcode:
+
+| Shortcut | Action |
+| -------- | ------ |
+| `Command R` | Build & run |
+| `Command Shift K` | Clean build folder |
+| `Command B` | Build only |
+
+---
+
+## 14. Architecture
+
+Loom is one Swift app target with all source under `Loom/`. The codebase
+is intentionally compact: roughly 35 Swift files across nine top-level
+directories.
+
+### 14.1. Source Layout
+
+```
+Loom/
+  App/                @main, scene, environment wiring, update service,
+                      GitHub release fetcher, theme, app icon exporter
+  Workspace/          Deck container, layout persistence, sidebar, model,
+                      block + workspace types
+  Terminal/           SwiftTerm-backed pane, PTY session, click-to-position
+  Editor/             File tree, breadcrumb, FSNode, plain-text editor
+  Agents/             LLM provider protocol, Anthropic, Claude Code
+                      subprocess, Ollama, OpenAI compatible, registry,
+                      agent pane UI, Keychain store, usage service,
+                      live agent tasks, local endpoints
+  Kanban/             SwiftData task board, columns, cards, inspector
+  Notes/              IdeaNote model, notes pane
+  Build/              Preview pane (WKWebView)
+  Settings/           Preferences window (Appearance / Tasks / Providers /
+                      Advanced)
+  Resources/          Asset catalog, app icon, accent color
+  Info.plist          Bundle metadata
+  Loom.entitlements   App sandbox off, network client on
+```
+
+### 14.2. Storage
+
+Three storage backends, each chosen for what it does well.
+
+#### SwiftData
+
+Persistent app data: workspaces, kanban, notes.
+
+| Model | Purpose |
+| ----- | ------- |
+| `Workspace` | One row per workspace; kind + folder URL + color + timestamps |
+| `KanbanBoard` | Per-workspace board container |
+| `KanbanColumn` | Status column (Todo / In Progress / In Review / Complete / Cancelled) |
+| `KanbanCard` | Title, instructions, knowledge, agent prompt, terminal command, project path |
+| `IdeaNote` | Title (derived) + body for the Notes pane |
+
+The schema is declared in `LoomApp.swift` inside the `ModelContainer`
+definition. Default storage location: macOS application support container
+(managed by SwiftData). Not in iCloud.
+
+#### UserDefaults
+
+Lightweight settings and lists where SwiftData would be overkill.
+
+| Key | Type | Purpose |
+| --- | ---- | ------- |
+| `loom.appearance` | String | Theme: `system`, `light`, `dark` |
+| `loom.tasks.staleHours` | Double | Live agent tasks stale window (hours) |
+| `loom.localEndpoints` | Data | JSON-encoded `[LocalEndpoint]` |
+| `loom.workspaceSeed.v0_8` | Bool | Migration flag (v0.8 seed cleanup) |
+| `loom.workspaceSeed.v0_9` | Bool | Migration flag (v0.9 build -> review) |
+| `loom.workspaceSeed.v0_10` | Bool | Migration flag (v0.10 Code -> Prompt) |
+
+Migration flags are only flipped on a successful save; otherwise a write
+failure would silently mark the migration "done" and the work would never
+re-run.
+
+#### Keychain
+
+Secrets only. Service: `com.chasesims.Loom`. See
+[Keychain Keys](#162-keychain-keys).
+
+#### What is not persisted
+
+- Agent message history. In-memory only.
+- Terminal scrollback. SwiftTerm holds it; not persisted across launches.
+- In-flight HTTP requests and subprocesses. All canceled on quit.
+
+### 14.3. Swift Concurrency
+
+Loom builds with `SWIFT_STRICT_CONCURRENCY: complete` on Swift 6. Every
+value that crosses an actor boundary is `Sendable`.
+
+#### Default isolation
+
+- App-level state (workspace layout, agent registry, live tasks, settings,
+  usage service) is `@MainActor`. SwiftUI views read these directly;
+  mutations land on the main actor.
+- Pure data types (`LocalEndpoint`, `LLMMessage`, `LLMEvent`, `KanbanCard`)
+  are structs or enums marked `Sendable`. They cross actors freely.
+- HTTP providers (`AnthropicProvider`, `OllamaProvider`,
+  `OpenAICompatibleProvider`) are structs.
+
+#### Subprocess providers
+
+`ClaudeCodeProvider` is a `@MainActor final class` that owns mutable state
+(`activeProcess`, `hasLaunchedSession`, `sessionID`, `generation`). The
+actual subprocess work runs off main via
+`withCheckedThrowingContinuation` plus a `terminationHandler` so a
+cancelling `Process.terminate()` from the main actor actually unblocks the
+awaiting caller. The previous `process.waitUntilExit()` form blocked
+indefinitely.
+
+#### Streaming
+
+`AsyncThrowingStream<LLMEvent, Error>` is the streaming primitive. Each
+provider builds a stream like this (via `makeLLMStream` helper):
+
+```swift
+AsyncThrowingStream { continuation in
+    let task = Task {
+        do {
+            try await runStream(..., continuation: continuation)
+            continuation.yield(.done)
+            continuation.finish()
+        } catch {
+            continuation.finish(throwing: error)
+        }
+    }
+    continuation.onTermination = { _ in task.cancel() }
+}
+```
+
+Cancellation is two-way:
+
+- The caller drops the stream. `onTermination` fires, the inner `Task`
+  cancels, `URLSession.bytes(for:)` throws `CancellationError`.
+- The inner task hits an HTTP error. It calls
+  `continuation.finish(throwing:)` and the caller's `for try await`
+  rethrows.
+
+#### URLSession.bytes(for:)
+
+The streaming body iterator. Crucially, it propagates `Task.cancel()` into
+the underlying `URLSessionDataTask`. We do call
+`try Task.checkCancellation()` inside the inner loop as belt and braces.
+
+#### Static parsing helpers
+
+Where parsing is pure, the function is `nonisolated static` so it can run
+off any actor and be unit-tested in isolation. Examples:
+`AgentRegistry.parseClaudeAgentsList(_:)`, every regex-driven parse in
+`UsageService`.
+
+#### `nonisolated(unsafe)`: avoided
+
+Loom does not use `nonisolated(unsafe)` to silence concurrency warnings.
+Anything that is tempting becomes a `@MainActor` access, a `Sendable`
+struct, or a `Task.detached`.
+
+#### SwiftData on the main actor
+
+All `ModelContext` access is `@MainActor`. The schema is on the main actor.
+There is no fan-out to background contexts; the data volume does not
+warrant it.
+
+---
+
+## 15. Security Model
+
+Loom is unsandboxed (network and filesystem access are required for the
+core feature set), runs hardened-runtime, and ad-hoc-signed by default.
+The security model is built around four ideas:
+
+1. **Secrets live in Keychain.** Anthropic API key and per-endpoint bearer
+   tokens are stored as `kSecClassGenericPassword` items with
+   `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` and
+   `kSecAttrSynchronizable: false`. They never sync to iCloud Keychain
+   and never write to the UserDefaults plist on disk.
+
+2. **Subprocess invocation is array-only.** Every `Process` launch passes
+   arguments as an array, never as a shell-interpolated string. The
+   Claude Code provider runs through `/usr/bin/env claude ...` with the
+   prompt as a discrete argv element, so a prompt containing shell
+   metacharacters cannot escape into command execution. The auto-update
+   helper script body is passed inline via `zsh -c "<body>"`; no script
+   file is written to a user-writable directory and re-executed.
+
+3. **Auto-update is hash-verified.** Every release MUST publish a
+   `<dmg-name>.sha256` sidecar containing the SHA-256 of the DMG.
+   `GitHubReleaseFetcher` downloads the DMG, computes its hash in 256 KB
+   streaming chunks, and refuses to mount if the hash does not match (or
+   if the sidecar is missing). Without this, an attacker who compromised
+   the GitHub release (stolen PAT, MITM'd CDN) could replace the DMG with
+   arbitrary code and Loom would silently install it.
+
+4. **Local endpoints are URL-allowlisted.** `LocalEndpoint.isAllowedURL`
+   refuses non-`http(s)` schemes (so a typo cannot turn a `file://` URL
+   into a local file read), refuses empty hostnames, and explicitly blocks
+   cloud instance metadata IPs (`169.254.169.254`,
+   `metadata.google.internal`, `fd00:ec2::254`). Rejected URLs simply
+   never materialize as `AgentDescriptor`s.
+
+Adjacent precautions:
+
+- The PTY shell environment strips a list of credential-shaped variables
+  before spawn (see [Terminal](#61-terminal)). Loom reads its own keys
+  from Keychain, not from the inherited environment.
+- The auto-update helper waits up to 10 seconds for the running Loom PID
+  to exit before swapping the bundle. If the PID is still alive after the
+  wait, the helper sends `SIGTERM` rather than racing the swap.
+- The auto-update manifest no longer accepts a `bundlePath` override; the
+  staged bundle path is computed from `stagingRoot`. Without this, a
+  user-writable manifest pointing the path outside the staging dir was a
+  path-traversal vector that the apply script would happily `cp -R` into
+  `/Applications`.
+- HTTP errors from LLM providers log the response body privately
+  (`Logger(... privacy: .private)`) but expose only the status code in
+  the chat error banner. Provider error payloads can contain account or
+  billing identifiers we do not want in the UI.
+
+---
+
+## 16. Reference
+
+### 16.1. File Paths
+
+#### Loom-owned
+
+| Path | Purpose |
+| ---- | ------- |
+| `~/Library/Application Support/Loom/staging/Loom.app` | Newly downloaded build, waiting for Update click |
+| `~/Library/Application Support/Loom/staging/manifest.json` | `{ version, build, stagedAt }` for the staged build |
+| `~/Library/Application Support/Loom/staging/last-apply.log` | Helper-script log from the last apply |
+| `~/Library/Application Support/Loom/layout.json` | Per-kind block list (custom titles, pins, span flags, terminal cwds) |
+| `~/Library/Application Support/com.chasesims.Loom/default.store` | SwiftData store (workspaces, kanban, notes) |
+| `~/Library/Preferences/com.chasesims.Loom.plist` | UserDefaults |
+
+#### Loom-read (external)
+
+| Path | Why Loom reads it |
+| ---- | ----------------- |
+| `~/.claude/tasks/<session-id>/<task-id>.json` | Live agent tasks polling |
+| `~/.claude/projects/<slug>/<id>.jsonl` | Usage dashboard (Claude Code totals, per-bucket, per-model, per-project) |
+| `~/.codex/sessions/.../<rollout>.jsonl` | Usage dashboard (Codex `total_token_usage`) |
+| `~/.gemini/...` | Existence check for the Gemini installed flag |
+| The workspace's folder URL | Editor file tree root, terminal `cwd`, agent `cwd` |
+
+#### Build / dev paths
+
+| Path | Purpose |
+| ---- | ------- |
+| `<repo>/` | Wherever you cloned Loom |
+| `~/Library/Developer/Xcode/DerivedData/Loom-*/Build/Products/Release/Loom.app` | Build output |
+| `<repo>/build/release/Loom-<version>.dmg` | Packaged DMG ready for `gh release upload` |
+| `<repo>/build/release/Loom-<version>.dmg.sha256` | SHA-256 sidecar for the DMG |
+
+#### Why Application Support, not the app bundle?
+
+The app bundle is read-only after Gatekeeper-blessing it; SwiftData and the
+staging directory both need write access. Application Support is the
+standard macOS location for that.
+
+#### Why not iCloud Drive?
+
+Two reasons:
+
+1. iCloud renames build artifacts mid-build (`Foo` -> `Foo 2`) when sync
+   detects a duplicate, which breaks Xcode and DMG packaging.
+2. Loom is single-device by design.
+
+The repo's `project.yml` defensively sweeps `* 2.*` and `* 3.*` shadow
+files before each build and excludes them from the source list.
+
+### 16.2. Keychain Keys
+
+Service: `com.chasesims.Loom`. Every secret uses
+`kSecClassGenericPassword` with
+`kSecAttrAccessibleWhenUnlockedThisDeviceOnly` and
+`kSecAttrSynchronizable: false`.
+
+| Account | Set by | Purpose |
+| ------- | ------ | ------- |
+| `anthropic_api_key` | Settings -> Advanced | Anthropic API key for direct-API agent provider |
+| `local_endpoint_<UUID>` | Settings -> Providers (when **Requires auth** is on) | Bearer token for an OpenAI-compatible local endpoint |
+
+`<UUID>` is the `LocalEndpoint.id`. Each endpoint gets its own Keychain
+item; deleting an endpoint deletes its item.
+
+#### CLI inspection
+
+```bash
+# View what Loom has stored.
+security dump-keychain | grep -A1 "com.chasesims.Loom"
+
+# Read a specific value (shows the password in stdout).
+security find-generic-password -s com.chasesims.Loom -a anthropic_api_key -w
+
+# Delete one.
+security delete-generic-password -s com.chasesims.Loom -a anthropic_api_key
+
+# Delete every Loom secret in one go (DESTRUCTIVE).
+security dump-keychain | awk -F\" '/svce.*com.chasesims.Loom/{getline; print $4}' | \
+  xargs -I{} security delete-generic-password -s com.chasesims.Loom -a {}
+```
+
+#### What is NOT in Keychain
+
+- The Claude Code OAuth token. Lives in `~/.claude/credentials.json`,
+  managed by the Claude Code CLI itself. Loom does not read or modify it.
+- Workspace data (kanban, notes). SwiftData on disk.
+- Settings (theme, stale window). UserDefaults.
+
+### 16.3. UserDefaults Keys
+
+| Key | Type | Purpose |
+| --- | ---- | ------- |
+| `loom.appearance` | String | Theme picker value |
+| `loom.tasks.staleHours` | Double | Live tasks stale window (hours) |
+| `loom.localEndpoints` | Data | JSON-encoded `[LocalEndpoint]` |
+| `loom.workspaceSeed.v0_8` | Bool | One-time migration flag |
+| `loom.workspaceSeed.v0_9` | Bool | One-time migration flag |
+| `loom.workspaceSeed.v0_10` | Bool | One-time migration flag |
+
+Inspect via:
+
+```bash
+defaults read com.chasesims.Loom
+```
+
+---
+
+## 17. Releasing a New Build
+
+Loom's release script is `bin/release.sh`. Run from the repo root:
+
+```bash
+# 1. Bump MARKETING_VERSION (and CURRENT_PROJECT_VERSION) in project.yml.
+# 2. Commit + push.
+bin/release.sh
+```
+
+### Prereqs
+
+- `xcodegen` and `xcodebuild` (Xcode CLI tools).
+- `hdiutil` (built-in).
+- `gh` CLI authenticated for the active account
+  (`gh auth login -h github.com`).
+- A clean working tree at the commit you want to tag.
+
+### What the script does
+
+1. Reads version from `project.yml` (`MARKETING_VERSION` and
+   `CURRENT_PROJECT_VERSION`).
+2. Pre-flight: verify `gh` is authed (via `gh api user`), the local tag
+   does not already exist, and the GitHub release does not already exist.
+3. Regenerate the Xcode project: `xcodegen generate`.
+4. Build Release: `xcodebuild ... -configuration Release build`.
+5. Locate the built `.app` under DerivedData.
+6. Stage `.app` and an `/Applications` alias in a temp dir; strip xattrs.
+7. Package the DMG via `hdiutil create -format UDZO`, named
+   `Loom-<version>.dmg`.
+8. Compute SHA-256 of the DMG; write a `.sha256` sidecar file.
+9. Tag and push: `git tag -a v<version> -m "Loom <version> (<build>)"`,
+   `git push origin v<version>`.
+10. Create the GitHub release via `gh release create` with both the DMG
+    and the `.sha256` sidecar attached.
+
+### Post-release
+
+Every running Loom on every machine picks the new build up via the
+[auto-update](#121-auto-update) path within 60 seconds.
+
+### What can go wrong
+
+- "tag vX.Y.Z already exists locally": you forgot to bump
+  `MARKETING_VERSION`. Bump it, commit, retry.
+- "built Release/Loom.app not found under DerivedData": `xcodebuild` failed
+  silently. Re-run with `-quiet` removed from the script to see the actual
+  compile errors.
+- `gh release create` 422: the release already exists on GitHub. Bump
+  version, retry.
+- Local codesign fails: see [Building from Source](#18-building-from-source)
+  for the local-codesign cert setup.
+
+### Why ad-hoc signing?
+
+Loom is a personal tool with no Apple Developer Program enrollment.
+Ad-hoc signing (with the local "Loom Local Codesign" cert) is enough for
+local distribution; users do the right-click -> Open dance once and macOS
+remembers.
+
+---
+
+## 18. Building from Source
+
+```bash
+brew install xcodegen          # one-time
+git clone https://github.com/BigBeardedMan/Loom.git
+cd Loom
+xcodegen generate
+open Loom.xcodeproj
+```
+
+Then build & run from Xcode (`Command R`). macOS 14+.
+
+### Local codesign cert
+
+`project.yml` declares `CODE_SIGN_IDENTITY: "Loom Local Codesign"`. This is
+a self-signed cert in the user's login keychain. It exists so granted
+folder permissions and TCC grants persist across rebuilds (otherwise every
+clean build invalidates the bundle's stable identity and macOS re-prompts
+for every protected resource).
+
+To create the cert (one time):
+
+1. Open Keychain Access.
+2. Choose **Keychain Access -> Certificate Assistant -> Create a
+   Certificate**.
+3. Name: `Loom Local Codesign`. Identity Type: Self Signed Root.
+   Certificate Type: Code Signing.
+4. Save into the **login** keychain.
+
+Without this cert, the build will fall back to ad-hoc signing (`-`) which
+also works but loses TCC grant stability across rebuilds.
+
+### Why xcodegen?
+
+`Loom.xcodeproj` is a build artifact. The source of truth is `project.yml`.
+Edit `project.yml`, run `xcodegen generate`, and the project regenerates
+from scratch. The committed `.xcodeproj` exists for convenience (so
+casual users can `open Loom.xcodeproj` without installing xcodegen first)
+but should never be edited by hand.
+
+### Pre and post-build scripts
+
+Defined in `project.yml`:
+
+- Pre-build: `find` and delete iCloud shadow duplicates (`* 2.*`, `* 3.*`)
+  inside the source tree. Defensive cleanup before xcodegen sees the
+  source list.
+- Post-build: `xattr -cr "$TARGET_BUILD_DIR/$WRAPPER_NAME"` to strip
+  Finder/iCloud xattrs that confuse Gatekeeper.
+
+---
+
+## 19. Troubleshooting
+
+### "Loom can't be opened because Apple cannot check it for malicious software"
+
+Right-click `/Applications/Loom.app` in Finder, choose **Open**, confirm
+the dialog. Subsequent launches behave normally.
+
+### Auto-update never lights up
+
+1. Confirm a newer release is actually published:
+   `gh release view --repo BigBeardedMan/Loom`.
+2. Wait at least 60 seconds; the remote poll is on a one-minute cadence.
+3. **Help -> Check for Updates...** to force a remote check now and surface
+   any error.
+4. Inspect `~/Library/Application Support/Loom/staging/last-apply.log` for
+   any failed swap.
+5. Check `~/Library/Application Support/Loom/staging/`. If the staged
+   bundle is present and the manifest is valid, the local 4 second poll
+   should be lighting the pill. If the manifest is missing, the remote
+   stage failed; check Console.app for `com.chasesims.Loom` log entries
+   under the `updates` category.
+
+### Update fails with "Release is missing the .sha256 checksum sidecar"
+
+The release is published without a SHA-256 sidecar. Loom refuses to
+install. Either re-run `bin/release.sh` (which now publishes the sidecar)
+or manually upload `Loom-<version>.dmg.sha256` to the existing release.
+
+### Agent pane returns "Failed to launch claude: ..."
+
+`claude` is not on `PATH` for the user account that launched Loom.
+Install via `npm i -g @anthropic-ai/claude-code` or the official
+installer, then verify via `which claude` in a fresh terminal. The Agent
+pane uses a cached interactive `PATH` (re-spawned via `zsh -lic 'echo $PATH'`
+on first send), so newly-installed `claude` may need an app restart.
+
+### Agent pane returns "Cancelled" repeatedly
+
+The Stop button bumps a generation counter. If a previous send is still in
+flight when you hit Stop, its response will arrive but be discarded as
+stale. Wait for "Cancelled" once and the next send should proceed normally.
+
+### Local LLM endpoint shows "HTTP 404" on every send
+
+Check the Base URL. OpenAI-compatible servers expect the `/v1` suffix
+(e.g. `http://localhost:1234/v1`). Ollama does not (`http://localhost:11434`).
+
+### Local LLM endpoint shows "Could not connect to the server"
+
+The daemon is not running, the port is wrong, or a firewall is blocking
+it. The **Test connection** button in the editor sheet isolates the
+network problem from the model problem.
+
+### Live agent tasks pane shows nothing
+
+1. Make sure a CLI agent is actually running in a Terminal pane.
+2. Check that `~/.claude/tasks/<session-id>/` contains JSON files.
+3. Check the stale window in **Settings -> Tasks**; if your last task
+   update is older than the window, the session is hidden.
+
+### Usage dashboard's Year refresh hangs
+
+Year-range refreshes can take roughly a minute on a large Claude Code log.
+The dashboard shows a giant centered throbber over the existing data while
+it computes; do not click the dashboard or switch workspaces during the
+refresh and it will complete on its own.
+
+### Editor pane refuses to open my file
+
+The file extension is in the binary guard list. To force-open, rename
+or copy the file to a non-binary extension. The binary list is in
+`EditorPaneView.swift`'s `isBinary(_:)` method.
+
+### Workspace folder doesn't update the terminal cwd
+
+The terminal is only seeded with the workspace folder on launch. Close
+the Terminal pane (the **x** in its title bar) and re-add it to get a
+fresh shell rooted at the new folder.
+
+### iCloud is renaming my source files mid-build
+
+The repo lives under an iCloud-synced location (commonly `~/Documents`).
+The repo's pre-build script defensively deletes `* 2.*` and `* 3.*`
+shadow files before each build, but the cleanest fix is to move the
+clone outside iCloud (`~/code`, `~/dev`, etc.).
+
+---
+
+## 20. Roadmap
+
+Items in active design, not promises. Order is rough priority.
+
+| Item | Why |
+| ---- | --- |
+| Command-block terminal history | Every shell command becomes its own scrollable, copyable card with exit code and timing. The terminal is Loom's product differentiator; structuring its output is the next step. |
+| Multi-pane terminal layouts | Split panes inside one Terminal pane (without spinning up multiple Terminal blocks). |
+| MCP server bridging | Native MCP support so Loom can expose its own state (kanban cards, workspace folder, layout) as MCP tools to the agents it hosts. |
+| CodeEdit integration | Replace the plain `TextEditor` with [CodeEdit](https://github.com/CodeEditApp/CodeEdit)'s `NSTextView`-based editing surface. Syntax highlighting, save in-pane. |
+| Persistent agent message history | Today the chat log is in-memory only. Persist per-workspace so a quit-relaunch does not lose context. |
+| Codex live tasks | Mirror in-progress task state from Codex sessions the same way Claude Code is mirrored today. |
+| Anthropic API model picker in Settings | Today the Anthropic API provider's model is hardcoded in `AnthropicProvider`. Surface it in Settings. |
+
+---
+
+## Appendix: Versioning
+
+Loom follows [Semantic Versioning](https://semver.org/). The version is
+bumped in `project.yml` (`MARKETING_VERSION`) on every meaningful build.
+`CURRENT_PROJECT_VERSION` is the monotonic build number; bump it whenever
+`MARKETING_VERSION` changes.
+
+The Bundle reads both via `CFBundleShortVersionString` and
+`CFBundleVersion`. The Usage dashboard, the auto-update flow, the release
+script, and the GitHub release all key off `MARKETING_VERSION`.
+
+## Appendix: License
+
+Apache License 2.0. See `LICENSE`.
+
+## Appendix: Credits
+
+- [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) by Miguel de
+  Icaza, the only third-party dependency.
+- The Claude Code, Codex, and Gemini CLIs, whose on-disk logs make the
+  Usage dashboard and live tasks reader possible.
+- Apple's SwiftUI, SwiftData, AppKit, WebKit, and CryptoKit frameworks,
+  on which the rest of the app is built.

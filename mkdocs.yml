@@ -1,0 +1,109 @@
+site_name: Loom
+site_description: Native macOS workspace for terminals, editor, AI agents, and task state in one window.
+site_url: https://bigbeardedman.github.io/Loom/
+repo_url: https://github.com/BigBeardedMan/Loom
+repo_name: BigBeardedMan/Loom
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: black
+      accent: deep orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: black
+      accent: deep orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.tracking
+    - navigation.indexes
+    - content.code.copy
+    - content.action.edit
+    - search.highlight
+    - search.suggest
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+nav:
+  - Home: index.md
+  - Complete Guide: guide.md
+  - Getting Started:
+      - getting-started/install.md
+      - getting-started/first-run.md
+      - getting-started/keyboard-shortcuts.md
+  - Workspaces:
+      - workspaces/overview.md
+      - workspaces/prompt.md
+      - workspaces/ideas.md
+      - workspaces/review.md
+      - workspaces/layouts.md
+  - Agents:
+      - agents/overview.md
+      - agents/claude-code.md
+      - agents/anthropic-api.md
+      - agents/local-llms.md
+      - agents/custom-providers.md
+  - Tasks:
+      - tasks/overview.md
+      - tasks/handoff.md
+      - tasks/live-agent-tasks.md
+  - Terminal:
+      - terminal/overview.md
+      - terminal/cli-detection.md
+      - terminal/command-injection.md
+  - Editor:
+      - editor/overview.md
+  - Settings:
+      - settings/appearance.md
+      - settings/tasks.md
+      - settings/providers.md
+      - settings/advanced.md
+  - Updates:
+      - updates/auto-update.md
+      - updates/manual-check.md
+  - Releasing:
+      - releasing/cutting-a-release.md
+      - releasing/project-yml.md
+  - Architecture:
+      - architecture/source-layout.md
+      - architecture/swift-concurrency.md
+      - architecture/storage.md
+  - Reference:
+      - reference/keychain-keys.md
+      - reference/file-paths.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/BigBeardedMan/Loom
