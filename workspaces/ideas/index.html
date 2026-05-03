@@ -2234,6 +2234,7 @@
 <li>Default provider: Claude Code via OAuth.</li>
 <li>Local LLMs work too — point at Ollama or any OpenAI-compatible endpoint via <a href="../../settings/providers/">Settings → Providers</a>.</li>
 <li><code>cwd</code> is the workspace folder if set, otherwise nil.</li>
+<li>Every turn carries a workspace snapshot — workspace name, project folder, <code>CLAUDE.md</code>/<code>AGENTS.md</code>/<code>GUIDE.md</code>/<code>README.md</code> from that folder, the active tab's body, and short excerpts of sibling tabs — so asking for ideas is grounded in the project, not generic. See <a href="../../agents/overview/#workspace-context-block">Agents → Workspace context block</a> for the full payload shape.</li>
 </ul>
 <h3 id="save-to-tab-proposal-cards">Save-to-tab proposal cards<a class="headerlink" href="#save-to-tab-proposal-cards" title="Permanent link">&para;</a></h3>
 <p>When the agent's response in an Ideas workspace looks like a list (numbered or bulleted, three or more items), an inline confirmation card appears under the response:</p>
