@@ -681,6 +681,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Agent integration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#save-to-tab-proposal-cards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Save-to-tab proposal cards
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -2140,6 +2157,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Agent integration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#save-to-tab-proposal-cards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Save-to-tab proposal cards
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -2201,6 +2235,16 @@
 <li>Local LLMs work too — point at Ollama or any OpenAI-compatible endpoint via <a href="../../settings/providers/">Settings → Providers</a>.</li>
 <li><code>cwd</code> is the workspace folder if set, otherwise nil.</li>
 </ul>
+<h3 id="save-to-tab-proposal-cards">Save-to-tab proposal cards<a class="headerlink" href="#save-to-tab-proposal-cards" title="Permanent link">&para;</a></h3>
+<p>When the agent's response in an Ideas workspace looks like a list (numbered or bulleted, three or more items), an inline confirmation card appears under the response:</p>
+<ul>
+<li>Title: <code>N ideas for "&lt;active tab name&gt;"</code>.</li>
+<li>Each item rendered as a checkbox row — uncheck items you don't want.</li>
+<li>Mode toggle: <strong>Create as new tabs</strong> (one new note per item) or <strong>Append to active tab</strong> (bullets added to the current note's body).</li>
+<li><code>Add N ideas</code> commits the selected items via SwiftData; <code>Dismiss</code> collapses the card.</li>
+</ul>
+<p>The card is gated by the active workspace kind. Other kinds (Prompt, Review) ignore proposals and render the response as plain text.</p>
+<p>For Anthropic-direct providers, items are produced via the <code>propose_items</code> tool. For Claude Code subprocess and local HTTP providers, a fallback list parser extracts items from the finalized response — phrasing requests like "give me 8 ideas for X" reliably triggers the card.</p>
 <h2 id="when-to-use-ideas-vs-prompt">When to use Ideas vs Prompt<a class="headerlink" href="#when-to-use-ideas-vs-prompt" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
