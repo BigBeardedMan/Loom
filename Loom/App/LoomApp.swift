@@ -86,7 +86,19 @@ struct LoomApp: App {
                 .disabled(layout.previousWorkspaceID == nil)
             }
 
-            CommandGroup(after: .help) {
+            CommandGroup(replacing: .help) {
+                Button("Loom Help") {
+                    if let url = URL(string: "https://github.com/BigBeardedMan/Loom/blob/main/GUIDE.md") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .keyboardShortcut("?", modifiers: [.command])
+                Button("Loom Documentation Site") {
+                    if let url = URL(string: "https://bigbeardedman.github.io/Loom/") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                Divider()
                 Button("Check for Updates…") {
                     Task { await updateService.checkRemoteAndAnnounce() }
                 }

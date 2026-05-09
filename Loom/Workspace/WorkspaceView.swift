@@ -5,6 +5,7 @@ struct WorkspaceView: View {
     @Environment(WorkspaceLayout.self) private var layout
     @Environment(UpdateService.self) private var updates
     @Environment(WorkspaceContext.self) private var workspaceContext
+    @Environment(\.openURL) private var openURL
     @Query(sort: \Workspace.createdAt) private var workspaces: [Workspace]
     @State private var deckSize: CGSize = CGSize(width: 1400, height: 800)
     @State private var draggingBlockID: UUID?
@@ -94,16 +95,25 @@ struct WorkspaceView: View {
 
     private var topBar: some View {
         HStack(spacing: 12) {
-            Image("LoomBanner")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 132, height: 44)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(LoomTheme.hairline, lineWidth: 1)
-                }
-                .accessibilityLabel("Loom")
+            Button {
+                openURL(URL(string: "https://github.com/BigBeardedMan/Loom")!)
+            } label: {
+                Image("LoomBanner")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 132, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(LoomTheme.hairline, lineWidth: 1)
+                    }
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering in
+                if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+            }
+            .help("Open Loom on GitHub")
+            .accessibilityLabel("Loom, open on GitHub")
 
             usageTabs
 

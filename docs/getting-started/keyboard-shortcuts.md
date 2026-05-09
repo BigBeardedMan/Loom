@@ -48,4 +48,9 @@ When you're hacking on Loom itself in Xcode:
 
 | Shortcut | Action |
 | -------- | ------ |
+| ⌘? | Open the GUIDE on GitHub |
+| Help → Loom Help | Open the GUIDE on GitHub |
+| Help → Loom Documentation Site | Open the hosted MkDocs site |
 | Help → Check for Updates… | Force a remote release check now |
+
+Clicking the **Loom banner** in the top-left of the window also opens the GitHub repo in your browser.
