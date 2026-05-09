@@ -1192,6 +1192,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#card-view" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Card view
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#multi-pane-splits" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2165,6 +2176,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#card-view" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Card view
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#multi-pane-splits" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2255,9 +2277,12 @@
 </ul>
 <h2 id="what-it-doesnt-have-yet">What it doesn't have (yet)<a class="headerlink" href="#what-it-doesnt-have-yet" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Inline command-block history inside the terminal pane</strong>: today, command history shows up in a separate <strong>Commands</strong> panel (see <a href="../command-history/">Command history</a>). Inline cards rendered alongside scrollback are a future expansion.</li>
+<li><strong>Inline cards rendered alongside scrollback</strong>: today the per-pane card view <em>replaces</em> the live PTY (toggle in pane header). Cards interleaved with raw output is a future expansion.</li>
 <li><strong>Built-in SSH session manager</strong>: out of scope. Use <code>ssh</code> like normal.</li>
 </ul>
+<h2 id="card-view">Card view<a class="headerlink" href="#card-view" title="Permanent link">&para;</a></h2>
+<p>Every pane's header has a toggle (<code>list.bullet.rectangle</code>) that flips between the live PTY and a vertical stack of cards. The cards are rendered from the JSONL log, filtered to that pane's <code>LOOM_SESSION_ID</code>, so each pane shows only the commands it ran.</p>
+<p>Per-card actions: copy command to pasteboard, rerun in the workspace's first terminal session. The status badge is green for exit 0 and orange <code>×</code> for non-zero. Mode is per-pane and not persisted across launches.</p>
 <h2 id="multi-pane-splits">Multi-pane splits<a class="headerlink" href="#multi-pane-splits" title="Permanent link">&para;</a></h2>
 <p>A single Terminal block can host up to four PTY sessions arranged side by side, stacked, or as a 2x2 grid. Each pane runs its own login shell; the cwd of the pane you split <em>from</em> seeds the cwd of the new pane.</p>
 <p>Pane header buttons (right side):</p>
