@@ -9,6 +9,8 @@ struct CommandHistoryPaneView: View {
     @Environment(WorkspaceLayout.self) private var layout
     @State private var filterToWorkspace: Bool = true
     @State private var copiedID: String?
+    @State private var expandedID: String?
+    @State private var expandedOutputCache: [String: String] = [:]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -99,6 +101,17 @@ struct CommandHistoryPaneView: View {
         .padding(24)
     }
 
+    private func toggleExpand(_ record: CommandRecord) {
+        if expandedID == record.id {
+            expandedID = nil
+            return
+        }
+        if expandedOutputCache[record.id] == nil, let path = record.outputPath {
+            expandedOutputCache[record.id] = CommandHistoryService.readCapturedOutput(at: path)
+        }
+        expandedID = record.id
+    }
+
     private func row(_ record: CommandRecord) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -121,7 +134,7 @@ struct CommandHistoryPaneView: View {
                 .help("Copy command to pasteboard")
                 if let session = layout.firstTerminalSession() {
                     Button {
-                        session.submit(record.command)
+                        session.submit(record.command, capture: true)
                     } label: {
                         Image(systemName: "arrow.uturn.right")
                             .font(.system(size: 10))
@@ -129,7 +142,19 @@ struct CommandHistoryPaneView: View {
                     }
                     .buttonStyle(.plain)
                     .pointingHandCursor()
-                    .help("Send to active terminal")
+                    .help("Send to active terminal (captures output)")
+                }
+                if record.hasCapturedOutput {
+                    Button {
+                        toggleExpand(record)
+                    } label: {
+                        Image(systemName: expandedID == record.id ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .pointingHandCursor()
+                    .help(expandedID == record.id ? "Hide output" : "Show captured output")
                 }
             }
             HStack(spacing: 6) {
@@ -148,6 +173,24 @@ struct CommandHistoryPaneView: View {
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                 }
+            }
+            if expandedID == record.id, let body = expandedOutputCache[record.id] {
+                ScrollView(.vertical, showsIndicators: true) {
+                    Text(body.isEmpty ? "(empty)" : body)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(LoomTheme.primaryText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                        .padding(8)
+                }
+                .frame(maxHeight: 240)
+                .background(Color.black.opacity(0.18))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(LoomTheme.hairline, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .padding(.top, 4)
             }
         }
         .padding(.horizontal, 10)

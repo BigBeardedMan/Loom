@@ -257,6 +257,8 @@ private struct InlineCardsView: View {
     @Environment(CommandHistoryService.self) private var history
     @Environment(WorkspaceLayout.self) private var layout
     @State private var copiedID: String?
+    @State private var expandedID: String?
+    @State private var expandedOutputCache: [String: String] = [:]
 
     var body: some View {
         let records = history.records.filter { $0.sessionID == sessionID }
@@ -313,7 +315,7 @@ private struct InlineCardsView: View {
                 .pointingHandCursor()
                 .help("Copy command")
                 Button {
-                    layout.firstTerminalSession()?.submit(record.command)
+                    layout.firstTerminalSession()?.submit(record.command, capture: true)
                 } label: {
                     Image(systemName: "arrow.uturn.right")
                         .font(.system(size: 10))
@@ -321,7 +323,19 @@ private struct InlineCardsView: View {
                 }
                 .buttonStyle(.plain)
                 .pointingHandCursor()
-                .help("Rerun in active terminal")
+                .help("Rerun in active terminal (captures output)")
+                if record.hasCapturedOutput {
+                    Button {
+                        toggleExpand(record)
+                    } label: {
+                        Image(systemName: expandedID == record.id ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white.opacity(0.55))
+                    }
+                    .buttonStyle(.plain)
+                    .pointingHandCursor()
+                    .help(expandedID == record.id ? "Hide output" : "Show captured output")
+                }
             }
             HStack(spacing: 6) {
                 Text(displayCwd(record.cwd))
@@ -346,6 +360,24 @@ private struct InlineCardsView: View {
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(Color(red: 0.95, green: 0.39, blue: 0.18))
                 }
+            }
+            if expandedID == record.id, let body = expandedOutputCache[record.id] {
+                ScrollView(.vertical, showsIndicators: true) {
+                    Text(body.isEmpty ? "(empty)" : body)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                        .padding(8)
+                }
+                .frame(maxHeight: 240)
+                .background(Color.black.opacity(0.30))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .padding(.top, 4)
             }
         }
         .padding(.horizontal, 10)
@@ -389,5 +421,16 @@ private struct InlineCardsView: View {
                 if copiedID == record.id { copiedID = nil }
             }
         }
+    }
+
+    private func toggleExpand(_ record: CommandRecord) {
+        if expandedID == record.id {
+            expandedID = nil
+            return
+        }
+        if expandedOutputCache[record.id] == nil, let path = record.outputPath {
+            expandedOutputCache[record.id] = CommandHistoryService.readCapturedOutput(at: path)
+        }
+        expandedID = record.id
     }
 }

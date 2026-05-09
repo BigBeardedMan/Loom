@@ -12,12 +12,23 @@ struct CommandRecord: Identifiable, Hashable, Sendable {
     let cwd: String
     let command: String
     let sessionID: String
+    /// Path to a captured stdout+stderr file written by the
+    /// `__loom_capture` shim wrapper. Set only for commands submitted
+    /// through Loom's submit() API with capture: true; nil for
+    /// hand-typed commands (which would have broken interactive TUIs
+    /// if the shim had wrapped them automatically).
+    let outputPath: String?
 
     var duration: TimeInterval {
         max(0, ended.timeIntervalSince(started))
     }
 
     var succeeded: Bool { exitCode == 0 }
+
+    var hasCapturedOutput: Bool {
+        guard let path = outputPath, !path.isEmpty else { return false }
+        return FileManager.default.fileExists(atPath: path)
+    }
 }
 
 /// Polls the JSONL log the shell shim writes and exposes the most recent
@@ -108,7 +119,8 @@ final class CommandHistoryService {
                 exitCode: payload.exit,
                 cwd: payload.cwd,
                 command: payload.command,
-                sessionID: payload.session
+                sessionID: payload.session,
+                outputPath: payload.output
             ))
         }
         if out.count > maxRecords {
@@ -126,5 +138,24 @@ final class CommandHistoryService {
         let cwd: String
         let command: String
         let session: String
+        let output: String?
+    }
+
+    /// Read up to `maxBytes` of a captured-output file. Returns "(output
+    /// not captured)" when the record never had `outputPath`, or the file
+    /// content (truncated with a trailing notice) when it does. Done
+    /// synchronously because the Expand button is a user-initiated action,
+    /// not part of the polling cadence.
+    static func readCapturedOutput(at path: String, maxBytes: Int = 1_048_576) -> String {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
+            return "(output file missing)"
+        }
+        if data.count <= maxBytes {
+            return String(data: data, encoding: .utf8) ?? "(non-UTF8 output)"
+        }
+        let truncated = data.prefix(maxBytes)
+        let prefix = String(data: truncated, encoding: .utf8) ?? "(non-UTF8 output)"
+        let dropped = data.count - maxBytes
+        return prefix + "\n\n... (\(dropped) more bytes truncated)"
     }
 }

@@ -30,9 +30,15 @@ enum ShellIntegration {
     }
 
     /// JSONL log every command appends to. Each line is one record:
-    /// `{"started":..,"ended":..,"exit":..,"cwd":..,"command":..,"session":..}`
+    /// `{"started":..,"ended":..,"exit":..,"cwd":..,"command":..,"session":..,"output":..?}`
     static var historyLogURL: URL {
         supportDirectory.appendingPathComponent("history.jsonl", isDirectory: false)
+    }
+
+    /// Directory where Loom's `__loom_capture` shim writes stdout+stderr
+    /// of opt-in commands. One file per captured command.
+    static var captureDirectory: URL {
+        supportDirectory.appendingPathComponent("output", isDirectory: true)
     }
 
     /// Write the shim zshrc to disk if missing or out of date. Idempotent;
@@ -68,6 +74,8 @@ enum ShellIntegration {
 
     __loom_log_dir="$__loom_zdotdir_self"
     __loom_log_file="$__loom_log_dir/history.jsonl"
+    __loom_capture_dir="$__loom_log_dir/output"
+    typeset -g __loom_last_capture_path=""
 
     __loom_json_escape() {
       local s="$1"
@@ -77,6 +85,25 @@ enum ShellIntegration {
       s="${s//$'\\t'/\\\\t}"
       s="${s//$'\\r'/\\\\r}"
       print -r -- "\\"$s\\""
+    }
+
+    # Loom-internal: wrap a single command so its stdout+stderr is also
+    # tee'd to a per-command file under output/. Loom's submit() API
+    # invokes this for programmatic sends so the cards can show output;
+    # hand-typed commands skip this path entirely so interactive TUIs
+    # like vim/top/ssh keep working unchanged.
+    __loom_capture() {
+      local cmd="$1"
+      mkdir -p "$__loom_capture_dir" 2>/dev/null
+      # Timestamp + PID + $RANDOM gives a unique filename without depending
+      # on mktemp's template-suffix handling (BSD mktemp on macOS leaves
+      # XXXXXX literal when there's an extension after it).
+      local stamp=$(/bin/date +%s)
+      local out="$__loom_capture_dir/cap-${stamp}-$$-${RANDOM}.out"
+      __loom_last_capture_path="$out"
+      setopt local_options pipefail
+      eval "$cmd" 2>&1 | tee "$out"
+      return ${pipestatus[1]}
     }
 
     __loom_preexec() {
@@ -91,8 +118,13 @@ enum ShellIntegration {
         local cmd_json=$(__loom_json_escape "$__loom_cmd")
         local cwd_json=$(__loom_json_escape "$PWD")
         local sess_json=$(__loom_json_escape "${LOOM_SESSION_ID:-unknown}")
-        printf '{"started":%s,"ended":%s,"exit":%s,"cwd":%s,"command":%s,"session":%s}\\n' \\
-          "$__loom_cmd_start" "$end_ts" "$exit_code" "$cwd_json" "$cmd_json" "$sess_json" \\
+        local output_field=""
+        if [[ -n "$__loom_last_capture_path" ]]; then
+          output_field=",\\"output\\":$(__loom_json_escape "$__loom_last_capture_path")"
+          __loom_last_capture_path=""
+        fi
+        printf '{"started":%s,"ended":%s,"exit":%s,"cwd":%s,"command":%s,"session":%s%s}\\n' \\
+          "$__loom_cmd_start" "$end_ts" "$exit_code" "$cwd_json" "$cmd_json" "$sess_json" "$output_field" \\
           >> "$__loom_log_file" 2>/dev/null
         unset __loom_cmd __loom_cmd_start
       fi

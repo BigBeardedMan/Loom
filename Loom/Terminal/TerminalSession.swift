@@ -50,11 +50,26 @@ final class TerminalSession: Identifiable {
     }
 
     /// Send a command into the live shell as if the user typed it.
-    func submit(_ command: String) {
+    /// When `capture` is true and shell integration is enabled, wraps
+    /// the command in the shim's `__loom_capture` helper so its
+    /// stdout+stderr lands in `output/<stamp>-<pid>.out` and the matching
+    /// `CommandRecord` carries an `outputPath`. Off by default to keep
+    /// the legacy "send to terminal" semantics intact for callers that
+    /// don't care about capture.
+    func submit(_ command: String, capture: Bool = false) {
         start()
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        terminalView.send(txt: trimmed + "\n")
+
+        if capture && Self.shellIntegrationEnabled {
+            // Single-quote the command for `eval` inside the shim, escaping
+            // any embedded single quotes via `'\''` (the canonical zsh /
+            // bash idiom for closing-then-reopening a quoted string).
+            let escaped = trimmed.replacingOccurrences(of: "'", with: "'\\''")
+            terminalView.send(txt: "__loom_capture '\(escaped)'\n")
+        } else {
+            terminalView.send(txt: trimmed + "\n")
+        }
     }
 
     /// Send a Ctrl-C to whatever is running.

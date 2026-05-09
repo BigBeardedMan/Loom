@@ -237,7 +237,7 @@ struct CommandPalette: View {
         case .switchWorkspace(let id):
             layout.selectedWorkspaceID = id
         case .rerunCommand(let cmd):
-            layout.firstTerminalSession()?.submit(cmd)
+            layout.firstTerminalSession()?.submit(cmd, capture: true)
         case .addBlock(let panel):
             layout.addBlock(panel)
         case .openSettings:

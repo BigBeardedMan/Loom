@@ -28,9 +28,19 @@ Each row carries the `cwd` it was run from. The panel header has a **Workspace o
 - **Copy** copies the command text to the macOS pasteboard.
 - **Send** (when at least one Terminal block exists in the active workspace) submits the command to the first terminal session as if you'd typed it. Useful for re-running something from an earlier session without retyping.
 
+## Output capture (v2.2.0+)
+
+Commands submitted through Loom's UI (Commands panel **Send**, inline card **Rerun**, ⌘K palette rerun) are wrapped in the shim's `__loom_capture` helper, which tees their stdout+stderr into a per-command file under `~/Library/Application Support/Loom/shell/output/`. The matching JSONL record carries an extra `output` field with the full path.
+
+Hand-typed commands skip this wrapping entirely so interactive TUIs (vim, top, ssh, tmux) keep working unchanged. If you want capture for a hand-typed command, prefix it with `__loom_capture '...'` yourself.
+
+Cards in both the Commands panel and the inline-card terminal view show a chevron when their record has captured output. Click to expand an inline reader (capped at 1 MB, with a truncation notice if exceeded; selectable text for copy-paste).
+
+Exit codes are preserved across the `tee` pipeline via zsh's `pipefail` and `${pipestatus[1]}`.
+
 ## What's not captured (yet)
 
-- **Output** is not captured. Output capture without breaking interactive TUIs (vim, top, ssh) needs a `script`-style PTY tee, which is a future expansion.
+- **Output for hand-typed commands** stays uncaptured by design (TUIs would break). Prefix manually with `__loom_capture '...'` if you want it.
 - **Non-zsh shells** are not supported. The shim is zsh-specific. If your `$SHELL` is `bash` or `fish`, the shell still runs normally; nothing breaks, but no commands appear in the panel.
 - **Commands run before Loom started writing the shim** (i.e. older zsh sessions or terminals from outside Loom) are not in the log.
 

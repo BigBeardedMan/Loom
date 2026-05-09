@@ -125,6 +125,12 @@ Loom 2.x extends the cockpit. Highlights:
   the pane header flips between the live PTY and a stack of cards
   (filtered by `LOOM_SESSION_ID`) so the user can skim a structured
   history of just that pane without scrolling raw output.
+- **Output capture for programmatic commands**: every command sent
+  through Loom's UI (Commands panel Send, inline card Rerun, ⌘K palette
+  rerun) is wrapped in the shim's `__loom_capture` helper that tees
+  stdout+stderr to a per-command file. Cards expand in place to show
+  the captured output. Hand-typed commands skip the wrap so
+  interactive TUIs keep working.
 
 ---
 
@@ -539,9 +545,8 @@ flipping back is free.
 
 #### Roadmap items
 
-- Output capture for command history (currently command + exit + cwd
-  only; no captured stdout/stderr).
 - Inline cards rendered *alongside* scrollback rather than replacing it.
+- bash and fish shim variants so non-zsh users get parity.
 - CodeEdit integration as a richer editor surface.
 
 ### 6.2. Editor
@@ -1934,7 +1939,7 @@ command.
 #### Record format
 
 ```json
-{"started":1778302670,"ended":1778302675,"exit":0,"cwd":"/Users/me/code","command":"git pull","session":"7E3..."}
+{"started":1778302670,"ended":1778302675,"exit":0,"cwd":"/Users/me/code","command":"git pull","session":"7E3...","output":"/Users/me/Library/Application Support/Loom/shell/output/cap-1778302670-...-..out"}
 ```
 
 - `started` / `ended`: Unix epoch seconds.
@@ -1943,6 +1948,28 @@ command.
 - `command`: raw command text, JSON-escaped by the shim's
   `__loom_json_escape` helper.
 - `session`: the `LOOM_SESSION_ID` of the terminal session that ran it.
+- `output` (optional): path to a per-command file containing the
+  captured stdout+stderr. Set only for commands wrapped via
+  `__loom_capture` (see below).
+
+#### Output capture
+
+`__loom_capture <cmd>` is a zsh function the shim defines globally. It
+tees `<cmd>`'s combined stdout+stderr into
+`output/cap-<stamp>-<pid>-<rand>.out` and records the path in a global
+`__loom_last_capture_path` variable that `__loom_precmd` reads when
+emitting the JSONL record. Exit code is preserved through the pipe via
+`setopt local_options pipefail` plus `${pipestatus[1]}`.
+
+Loom's `TerminalSession.submit(_:capture:)` wraps any
+programmatically-submitted command in `__loom_capture '...'` (with
+shell-escaped single quotes) so the UI doesn't have to teach users any
+new syntax. Hand-typed commands deliberately skip the wrap so
+interactive TUIs (vim, top, ssh, tmux) continue to work unchanged.
+
+`CommandHistoryService.readCapturedOutput(at:maxBytes:)` reads up to
+1 MB of a captured file on demand, with a trailing
+`(... N more bytes truncated)` notice when the file exceeds the cap.
 
 #### Polling
 
@@ -2037,6 +2064,7 @@ Adjacent precautions:
 | `~/Library/Application Support/Loom/layout.json` | Per-kind block list (custom titles, pins, span flags, terminal cwds, multi-pane split axis) |
 | `~/Library/Application Support/Loom/shell/.zshrc` | Shell-integration shim sourced via `ZDOTDIR` |
 | `~/Library/Application Support/Loom/shell/history.jsonl` | Append-only command-log written by the shim |
+| `~/Library/Application Support/Loom/shell/output/cap-*.out` | Captured stdout+stderr for commands wrapped via `__loom_capture` |
 | `~/Library/Application Support/com.chasesims.Loom/default.store` | SwiftData store (workspaces, kanban, notes) |
 | `~/Library/Preferences/com.chasesims.Loom.plist` | UserDefaults |
 
