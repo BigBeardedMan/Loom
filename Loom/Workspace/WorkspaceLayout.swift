@@ -46,12 +46,23 @@ enum BlockPin: String, Hashable {
     }
 }
 
+/// Direction the panes inside a multi-pane terminal block are arranged when
+/// the count is 2 or 3. Ignored at count 1 (no split) and 4 (always 2x2).
+enum TerminalSplitAxis: String, Codable, Hashable {
+    case horizontal  // panes laid out left-to-right
+    case vertical    // panes stacked top-to-bottom
+}
+
 @Observable
 @MainActor
 final class WorkspaceBlock: Identifiable {
     let id: UUID
     let kind: PanelKind
-    var terminalSession: TerminalSession?
+    /// Live PTY sessions hosted by this block. For non-terminal blocks the
+    /// array stays empty. For terminal blocks the array has 1 to 4 entries;
+    /// each entry is its own resizable pane in the rendered layout.
+    var terminalSessions: [TerminalSession]
+    var terminalSplitAxis: TerminalSplitAxis
     /// Persistent WebKit controller for preview blocks. Owned by the block
     /// so the WKWebView (and its loaded page) survives workspace switches —
     /// otherwise each switch tears down and re-creates the WebView, forcing
@@ -64,6 +75,17 @@ final class WorkspaceBlock: Identifiable {
     var autoPreviewIndex: Int?
     var previewURL: String?
 
+    /// Compatibility shim. Most consumers (sidebar label, live-agent count,
+    /// persistence) only care about the first session. Multi-pane-aware
+    /// callers walk `terminalSessions` directly.
+    var terminalSession: TerminalSession? {
+        terminalSessions.first
+    }
+
+    /// Hard ceiling on splits. The 2x2 grid is the practical limit before
+    /// the panes get too small to read on typical macOS windows.
+    static let maxTerminalPanes = 4
+
     init(kind: PanelKind, cwd: URL = FileManager.default.homeDirectoryForCurrentUser) {
         self.id = UUID()
         self.kind = kind
@@ -73,8 +95,10 @@ final class WorkspaceBlock: Identifiable {
         self.autoTerminalIndex = nil
         self.autoPreviewIndex = nil
         self.previewURL = nil
+        self.terminalSessions = []
+        self.terminalSplitAxis = .horizontal
         if kind == .terminal {
-            self.terminalSession = TerminalSession(cwd: cwd)
+            self.terminalSessions = [TerminalSession(cwd: cwd)]
         }
         if kind == .preview {
             self.webController = WebController()
@@ -104,7 +128,36 @@ final class WorkspaceBlock: Identifiable {
     }
 
     func cleanup() {
-        terminalSession?.cleanup()
+        for session in terminalSessions {
+            session.cleanup()
+        }
+    }
+
+    /// Add a new pane to a terminal block, capped at `maxTerminalPanes`.
+    /// The new session inherits the block's most recent pane's cwd so the
+    /// split feels like a fork from where the user just was.
+    func addTerminalPane(defaultCwd: URL) {
+        guard kind == .terminal,
+              terminalSessions.count < Self.maxTerminalPanes else { return }
+        let cwd = terminalSessions.last?.cwd ?? defaultCwd
+        terminalSessions.append(TerminalSession(cwd: cwd))
+    }
+
+    /// Remove a specific pane by id and clean up its PTY. No-op when the
+    /// block is already a single pane (we don't allow zero panes).
+    func removeTerminalPane(id sessionID: UUID) {
+        guard kind == .terminal,
+              terminalSessions.count > 1,
+              let idx = terminalSessions.firstIndex(where: { $0.id == sessionID }) else { return }
+        let removed = terminalSessions.remove(at: idx)
+        removed.cleanup()
+    }
+
+    /// Toggle the layout direction for 2- or 3-pane blocks. No effect at 1
+    /// pane (axis is moot) or 4 panes (always rendered as 2x2 quad).
+    func toggleTerminalSplitAxis() {
+        guard kind == .terminal else { return }
+        terminalSplitAxis = (terminalSplitAxis == .horizontal) ? .vertical : .horizontal
     }
 }
 
@@ -318,7 +371,7 @@ final class WorkspaceLayout {
         var count = 0
         for blocks in blocksByKind.values {
             for block in blocks where block.kind == .terminal {
-                if block.terminalSession?.isRunningCLIAgent == true {
+                for session in block.terminalSessions where session.isRunningCLIAgent {
                     count += 1
                 }
             }

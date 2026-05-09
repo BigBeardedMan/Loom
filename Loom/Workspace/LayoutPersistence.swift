@@ -25,9 +25,16 @@ enum LayoutPersistence {
         var previewURL: String?
         var pin: String?
         var spansFullRow: Bool
-        /// Persisted only for terminal blocks so a restored session reopens
-        /// in the same directory the user had it in.
+        /// Single-pane terminal cwd. Kept for backward compatibility with
+        /// pre-1.9.0 stores; new writes also populate `terminalCwds`.
         var cwdPath: String?
+        /// One cwd per pane in a terminal block. When unset on read, the
+        /// stored block is treated as single-pane and falls back to
+        /// `cwdPath`.
+        var terminalCwds: [String]?
+        /// Layout direction for 2- or 3-pane terminal blocks. Ignored at
+        /// 1 pane and at 4 panes (always rendered 2x2).
+        var terminalSplitAxis: String?
     }
 
     fileprivate struct StoredLayout: Codable, Sendable {
@@ -110,20 +117,23 @@ private extension LayoutPersistence.StoredBlock {
         self.previewURL = block.previewURL
         self.pin = block.pin?.rawValue
         self.spansFullRow = block.spansFullRow
-        self.cwdPath = block.kind == .terminal ? block.terminalSession?.cwd.path : nil
+        if block.kind == .terminal {
+            self.cwdPath = block.terminalSessions.first?.cwd.path
+            self.terminalCwds = block.terminalSessions.map { $0.cwd.path }
+            self.terminalSplitAxis = block.terminalSplitAxis.rawValue
+        } else {
+            self.cwdPath = nil
+            self.terminalCwds = nil
+            self.terminalSplitAxis = nil
+        }
     }
 
     func materialize(defaultCwd: URL) -> WorkspaceBlock? {
-        // Skip stored blocks whose kind no longer exists in this Loom build —
+        // Skip stored blocks whose kind no longer exists in this Loom build,
         // e.g. the short-lived `.usage` panel that 0.11.0 shipped before
         // moving Usage to a top-bar overlay.
         guard let kind = PanelKind(rawValue: self.kind) else { return nil }
-        let resolvedCwd: URL = {
-            guard let path = cwdPath, !path.isEmpty else { return defaultCwd }
-            var isDir: ObjCBool = false
-            let exists = FileManager.default.fileExists(atPath: path, isDirectory: &isDir)
-            return exists && isDir.boolValue ? URL(fileURLWithPath: path) : defaultCwd
-        }()
+        let resolvedCwd: URL = Self.resolveDir(cwdPath, fallback: defaultCwd)
         let block = WorkspaceBlock(kind: kind, cwd: resolvedCwd)
         block.customTitle = customTitle
         block.autoTerminalIndex = autoTerminalIndex
@@ -131,6 +141,39 @@ private extension LayoutPersistence.StoredBlock {
         block.previewURL = previewURL
         block.pin = pin.flatMap(BlockPin.init(rawValue:))
         block.spansFullRow = spansFullRow
+
+        if kind == .terminal {
+            // Migrate forward: when terminalCwds is present, recreate the
+            // exact pane layout. Older stores (pre-1.9.0) only have
+            // `cwdPath` and the constructor already created the single
+            // session that maps to it, so no extra work is needed.
+            if let extras = terminalCwds, extras.count > 1 {
+                let trimmed = Array(extras.prefix(WorkspaceBlock.maxTerminalPanes))
+                // The block's init already created the first session at
+                // resolvedCwd. Replace it so each restored pane gets its
+                // own saved cwd.
+                let firstCwd = Self.resolveDir(trimmed.first, fallback: resolvedCwd)
+                let firstSession = TerminalSession(cwd: firstCwd)
+                block.terminalSessions = [firstSession]
+                for path in trimmed.dropFirst() {
+                    let cwd = Self.resolveDir(path, fallback: resolvedCwd)
+                    block.terminalSessions.append(TerminalSession(cwd: cwd))
+                }
+            }
+            if let raw = terminalSplitAxis,
+               let axis = TerminalSplitAxis(rawValue: raw) {
+                block.terminalSplitAxis = axis
+            }
+        }
         return block
+    }
+
+    /// Validate a saved directory string and fall back when it's missing
+    /// or no longer a directory on disk.
+    private static func resolveDir(_ path: String?, fallback: URL) -> URL {
+        guard let path, !path.isEmpty else { return fallback }
+        var isDir: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: path, isDirectory: &isDir)
+        return exists && isDir.boolValue ? URL(fileURLWithPath: path) : fallback
     }
 }

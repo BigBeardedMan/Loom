@@ -11,9 +11,23 @@ Loom's Terminal pane is a real terminal, backed by [SwiftTerm](https://github.co
 
 ## What it doesn't have (yet)
 
-- **Command-block history** — every shell command becomes its own scrollable, copyable card. On the roadmap; today the pane is a flat scrollback like a normal terminal.
-- **Multi-pane terminal layouts** (split panes inside one Terminal pane) — also on the roadmap. Today, add multiple Terminal panes to the workspace and pin them.
-- **Built-in SSH session manager** — out of scope. Use `ssh` like normal.
+- **Command-block history**: every shell command becomes its own scrollable, copyable card. On the roadmap; today the pane is a flat scrollback like a normal terminal.
+- **Built-in SSH session manager**: out of scope. Use `ssh` like normal.
+
+## Multi-pane splits
+
+A single Terminal block can host up to four PTY sessions arranged side by side, stacked, or as a 2x2 grid. Each pane runs its own login shell; the cwd of the pane you split *from* seeds the cwd of the new pane.
+
+Pane header buttons (right side):
+
+- **Split** (`+ rectangle on rectangle`) — adds a new pane to this block, capped at four. Visible when fewer than four panes are open.
+- **Axis toggle** (`rectangle.split.1x2` / `2x1`) — at 2 or 3 panes, flips between left-right and top-bottom layout. Hidden at 1 pane (no split) and 4 panes (always rendered as a 2x2 quad).
+- **Close pane** (`xmark.circle`) — removes that pane and cleans up its PTY. Hidden when the block only has one pane.
+- **Send Ctrl-C** (`stop.circle`) — same as before; sends an interrupt to the foreground process of *this* pane only.
+
+Splits use SwiftUI's native `HSplitView` / `VSplitView`, so the divider between panes is draggable.
+
+Layouts persist: the next time you open the workspace, the panes return with the same axis, count, and per-pane cwd. PTYs themselves don't survive relaunch — each restored pane spawns a fresh shell in its saved directory.
 
 ## Working directory
 

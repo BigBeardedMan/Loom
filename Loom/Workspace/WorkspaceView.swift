@@ -382,8 +382,8 @@ struct WorkspaceView: View {
     private func blockContent(for block: WorkspaceBlock) -> some View {
         switch block.kind {
         case .terminal:
-            if let session = block.terminalSession {
-                TerminalPaneView(session: session)
+            if !block.terminalSessions.isEmpty {
+                TerminalPaneView(block: block)
             } else {
                 Color.black
             }
