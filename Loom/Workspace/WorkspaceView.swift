@@ -7,6 +7,7 @@ struct WorkspaceView: View {
     @Environment(WorkspaceContext.self) private var workspaceContext
     @Environment(\.openURL) private var openURL
     @Query(sort: \Workspace.createdAt) private var workspaces: [Workspace]
+    @State private var showCommandPalette: Bool = false
     @State private var deckSize: CGSize = CGSize(width: 1400, height: 800)
     @State private var draggingBlockID: UUID?
     @State private var dragTranslation: CGSize = .zero
@@ -128,6 +129,12 @@ struct WorkspaceView: View {
         .padding(.horizontal, 4)
         .padding(.vertical, 4)
         .animation(.easeInOut(duration: 0.18), value: updates.available)
+        .sheet(isPresented: $showCommandPalette) {
+            CommandPalette(isPresented: $showCommandPalette)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .loomOpenPalette)) { _ in
+            showCommandPalette = true
+        }
     }
 
     private var updatePill: some View {

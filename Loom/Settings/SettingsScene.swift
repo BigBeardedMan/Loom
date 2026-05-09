@@ -19,6 +19,10 @@ struct SettingsView: View {
                 .tabItem { Label("MCP", systemImage: "powerplug") }
                 .padding(20)
 
+            ShellSettings()
+                .tabItem { Label("Shell", systemImage: "terminal") }
+                .padding(20)
+
             AdvancedSettings()
                 .tabItem { Label("Advanced", systemImage: "gearshape.2") }
                 .padding(20)
@@ -409,6 +413,52 @@ private struct EndpointEditor: View {
         } catch {
             return .failure(error.localizedDescription)
         }
+    }
+}
+
+// MARK: - Shell
+
+private struct ShellSettings: View {
+    @AppStorage("loom.shellIntegration") private var integrationEnabled: Bool = true
+
+    var body: some View {
+        Form {
+            Section("Shell Integration") {
+                Toggle("Capture commands from Loom terminals", isOn: $integrationEnabled)
+
+                Text("Loom installs a small zsh shim that sources your normal config, then logs every command (start, end, exit, cwd) to a JSONL file the Commands panel reads. Turn this off to launch terminals with stock `$ZDOTDIR`; existing entries in the log stay put either way.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Text("Applies to terminals opened after the change. Currently-running terminals keep whichever mode they started with.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+
+            Section("Files") {
+                LabeledContent("Shim") {
+                    Text(ShellIntegration.shimURL.path)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                LabeledContent("History log") {
+                    Text(ShellIntegration.historyLogURL.path)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Button("Reveal in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([
+                        ShellIntegration.shimURL,
+                        ShellIntegration.historyLogURL
+                    ])
+                }
+            }
+        }
+        .formStyle(.grouped)
     }
 }
 

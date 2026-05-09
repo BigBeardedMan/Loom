@@ -97,10 +97,30 @@ user-defined local LLM endpoints, and the in-app web preview.
 ### Status
 
 Current shipping version: see `project.yml` `MARKETING_VERSION`. Loom 1.x
-covers the four-pane cockpit, multi-vendor agent integration (Claude Code,
-Anthropic API, Ollama, OpenAI compatible), the live agent tasks mirror, the
-SwiftData kanban with handoff, the rolling Usage dashboard, stable local
-codesigning, and SHA-256 verified over-the-air updates.
+shipped the four-pane cockpit, multi-vendor agent integration (Claude
+Code, Anthropic API, Ollama, OpenAI compatible), the live agent tasks
+mirror, the SwiftData kanban with handoff, the rolling Usage dashboard,
+stable local codesigning, and SHA-256 verified over-the-air updates.
+
+Loom 2.x extends the cockpit. Highlights:
+
+- **Multi-pane terminal splits**: a single Terminal block can host 1 to 4
+  PTY sessions arranged side by side, stacked, or as a 2x2 quad with
+  draggable dividers. Per-pane cwd persists across launches.
+- **Settings → MCP**: a first-class management surface for Claude Code's
+  MCP server registry. Loom shells out to `claude mcp` for every read and
+  write so Claude Code stays the source of truth.
+- **Command history**: a Loom-managed zsh shim (sourced via `ZDOTDIR`)
+  appends a JSON record per command to `history.jsonl`. The new Commands
+  panel renders the last 500, newest first.
+- **Settings → Shell**: a toggle to opt out of the shell integration
+  without uninstalling the shim.
+- **⌘K command palette**: workspace switcher, recent-command rerun, and
+  Add-Block actions in one fuzzy-search overlay.
+- **Help menu** opens `GUIDE.md` (⌘?) and the hosted MkDocs site directly.
+- **Clickable banner** opens the GitHub repo in the user's default browser.
+- **Custom About panel** with version, build, and inline links to the
+  repo, GUIDE, and MkDocs site.
 
 ---
 
@@ -143,7 +163,8 @@ Subsequent launches behave normally. macOS remembers the override.
 
 Drag `/Applications/Loom.app` to the Trash. Loom-owned data lives in:
 
-- `~/Library/Application Support/Loom/` (staging directory and update manifest)
+- `~/Library/Application Support/Loom/` (staging directory, update
+  manifest, layout JSON, and the shell integration shim + history log)
 - `~/Library/Application Support/com.chasesims.Loom/` (SwiftData store)
 - `~/Library/Preferences/com.chasesims.Loom.plist` (UserDefaults)
 - macOS Keychain, service `com.chasesims.Loom` (Anthropic key, local endpoint
@@ -462,12 +483,41 @@ There is no "restart shell" button. Close the pane (the **x** in its title
 bar) and re-add it to get a fresh shell that respawns in the workspace
 folder. The previous shell's scrollback is lost.
 
+#### Multi-pane splits (v1.9.0+)
+
+A single Terminal block can host 1 to 4 PTY sessions arranged side by
+side, stacked top-to-bottom, or as a 2x2 quad. Each pane runs its own
+login shell; the cwd of the pane you split *from* seeds the cwd of the
+new pane.
+
+Pane header buttons (right side):
+
+- **Split** (`+ rectangle on rectangle`) adds a new pane to this block,
+  capped at four. Hidden when the block already has four panes.
+- **Axis toggle** (`rectangle.split.1x2` / `2x1`) at 2 or 3 panes flips
+  between left-right and top-bottom arrangement. Hidden at 1 pane (no
+  split) and 4 panes (always rendered as 2x2 quad).
+- **Close pane** (`xmark.circle`) removes that pane and cleans up its
+  PTY. Hidden when only one pane remains.
+- **Send Ctrl-C** (`stop.circle`) sends an interrupt to the foreground
+  process of *this* pane only.
+
+Splits use SwiftUI's native `HSplitView` / `VSplitView`, so the divider
+between panes is draggable. Layouts persist across launches: every pane's
+cwd is recorded in `LayoutPersistence` and restored on next open. PTYs
+themselves don't survive relaunch; each restored pane spawns a fresh
+shell in its saved cwd.
+
+Live-agent counts walk every session in every terminal block, so each
+pane that has a CLI agent (claude / codex / gemini) in the foreground
+counts toward the workspace badge.
+
 #### Roadmap items
 
-- Command-block history. Every shell command becomes its own scrollable,
-  copyable card with exit code and timing metadata.
-- Multi-pane terminal layouts (split panes inside one Terminal pane).
-- Built-in MCP server bridging.
+- Inline command-block cards rendered alongside scrollback (today's cards
+  live in the separate Commands panel; see [§6.7](#67-commands)).
+- Output capture for command history.
+- CodeEdit integration as a richer editor surface.
 
 ### 6.2. Editor
 
@@ -755,6 +805,42 @@ The snapshot layer is `WorkspaceContext.snapshot()` in
 `AgentPaneView.formatContextBlock(_:)`. Notes panes publish the active
 body + sibling summaries via closures so the agent reads the freshest copy
 without a custom `ModelContext` dependency.
+
+### 6.7. Commands
+
+The Commands panel renders the JSONL log written by the Loom shell
+integration (see §18). Every command run inside a Loom terminal pane
+becomes a row: command text, cwd, started timestamp, duration, and an
+exit-status badge. Available in **Prompt** workspaces; add it the same
+way you'd add a Terminal or Editor block.
+
+#### Header
+
+- Title with the workspace folder name (when filtering is on).
+- **Workspace only** checkbox (default on): hides commands whose `cwd`
+  isn't inside the workspace's folder. Off shows every command across
+  every Loom terminal you've ever opened.
+- **Refresh** button forces an immediate re-read.
+
+#### Per-row actions
+
+- **Status badge**: green checkmark for exit 0, orange × for non-zero.
+- **Copy** copies the command text to the macOS pasteboard.
+- **Send** (when a Terminal block exists in the active workspace)
+  submits the command to the first terminal session as if you'd typed
+  it. Useful for re-running something from earlier without retyping.
+
+#### Polling
+
+Two-second poll via `CommandHistoryService`. The service short-circuits
+when the file's size hasn't changed since the previous tick, so an idle
+panel costs one `stat()` call per cycle. Records are capped at 500 newest
+to keep `LazyVStack` rendering fast.
+
+#### Privacy
+
+Loom only reads files under `~/Library/Application Support/Loom/shell/`.
+Nothing leaves your machine.
 
 ---
 
@@ -1403,7 +1489,62 @@ Test does not save the endpoint; you still have to click **Save**.
 Saving (or removing) an endpoint triggers `AgentRegistry.refresh(...)`. The
 Agent pane picker updates without an app restart.
 
-### 11.4. Advanced
+### 11.4. MCP
+
+Manages Claude Code's MCP (Model Context Protocol) server registry. Loom
+doesn't speak MCP directly; every read and write goes through the
+`claude mcp` CLI, so the source of truth stays inside Claude Code.
+
+The list shows every server `claude mcp list` reports, with:
+
+- **Status dot**: green for connected, orange for needs-authentication,
+  red for failed, gray for unknown.
+- **Transport label**: `stdio`, `HTTP`, or `SSE` (lifted from the CLI's
+  parenthesized hint).
+- **Target**: the URL or stdio command Claude Code uses to reach the
+  server.
+- **Status line**: the raw text from the CLI.
+
+#### Adding a server
+
+Click **Add**, fill in:
+
+- **Name**: a short identifier; this becomes the lookup key.
+- **Command**: the executable to run (`npx`, `uvx`, `python`, an absolute
+  path, etc.).
+- **Args**: space-separated arguments. Empty is fine.
+
+Loom invokes `claude mcp add <name> <command> -- <args...>`. The `--`
+separator stops the CLI from interpreting your server's flags as its
+own.
+
+#### Removing a server
+
+The trash button on each row runs `claude mcp remove <name>`.
+
+#### When `claude` isn't installed
+
+The tab surfaces an error if `claude` isn't on disk at any of the
+standard locations (`/usr/local/bin/claude`, `/opt/homebrew/bin/claude`,
+`~/.local/bin/claude`). Install Claude Code first.
+
+### 11.5. Shell
+
+Toggles Loom's zsh shell integration on or off. The integration shim
+lives at `~/Library/Application Support/Loom/shell/.zshrc` and is
+sourced via `ZDOTDIR` when each terminal session spawns.
+
+| Field | Storage | Purpose |
+| ----- | ------- | ------- |
+| Capture commands from Loom terminals | UserDefaults `loom.shellIntegration` | Default true. When false, terminals launch with the user's normal `$ZDOTDIR` and no command logging happens. |
+
+The tab also shows the on-disk paths to the shim and the history JSONL
+log, plus a **Reveal in Finder** button.
+
+Toggling applies to terminals opened *after* the change. Currently
+running terminals keep whichever mode they started with.
+
+### 11.6. Advanced
 
 | Field | Storage | Purpose |
 | ----- | ------- | ------- |
@@ -1515,6 +1656,7 @@ shows up in the menu bar.
 | Shortcut | Action |
 | -------- | ------ |
 | `Command N` | New workspace (focuses sidebar) |
+| `Command K` | Open command palette (workspaces, recent commands, add-block) |
 | `Command Shift O` | Switch to previous workspace |
 
 ### Adding panes
@@ -1553,7 +1695,13 @@ These act on the focused (first) pane.
 
 | Shortcut | Action |
 | -------- | ------ |
+| `Command ?` | Open `GUIDE.md` on GitHub |
+| `Help -> Loom Help` | Open `GUIDE.md` on GitHub |
+| `Help -> Loom Documentation Site` | Open the hosted MkDocs build |
 | `Help -> Check for Updates...` | Force a remote release check now |
+
+Clicking the **Loom banner** in the top-left of the window also opens the
+GitHub repo in the default browser.
 
 ### Build & Run (Xcode)
 
@@ -1723,6 +1871,76 @@ All `ModelContext` access is `@MainActor`. The schema is on the main actor.
 There is no fan-out to background contexts; the data volume does not
 warrant it.
 
+### 14.4. Shell Integration
+
+Loom captures shell-command metadata by sourcing a small zsh shim into
+every Loom-spawned terminal session, then writing one JSON line per
+command to `history.jsonl`.
+
+#### Layout on disk
+
+```
+~/Library/Application Support/Loom/shell/
+├── .zshrc           # the shim, written on every Loom launch
+└── history.jsonl    # append-only command log, one record per line
+```
+
+`ShellIntegration.install()` runs at app launch (after a single
+idempotency check on the file's contents) and ensures `.zshrc` matches
+the current canonical payload.
+
+#### How it gets sourced
+
+`TerminalSession.makeEnvironment()` exports `ZDOTDIR=<shell-support-dir>`
+and `LOOM_SESSION_ID=<uuid>` when the user has not opted out (Settings →
+Shell). zsh sees `ZDOTDIR` and reads `<dir>/.zshrc` instead of
+`~/.zshrc`. The shim's first job is to source the user's normal config
+files in order:
+
+1. `~/.zshenv`
+2. `~/.zprofile`
+3. `~/.zshrc`
+4. `~/.zlogin`
+
+so behavior matches a stock login shell. Then it registers `preexec`
+and `precmd` hooks that capture the timing and exit code of each
+command.
+
+#### Record format
+
+```json
+{"started":1778302670,"ended":1778302675,"exit":0,"cwd":"/Users/me/code","command":"git pull","session":"7E3..."}
+```
+
+- `started` / `ended`: Unix epoch seconds.
+- `exit`: integer exit code.
+- `cwd`: current directory at command start.
+- `command`: raw command text, JSON-escaped by the shim's
+  `__loom_json_escape` helper.
+- `session`: the `LOOM_SESSION_ID` of the terminal session that ran it.
+
+#### Polling
+
+`CommandHistoryService` polls the file every 2 seconds with a cheap
+size-only short-circuit: if the file's reported size hasn't changed
+since the last poll, the read is skipped entirely. Records are capped
+at the 500 most-recent.
+
+#### Privacy
+
+The shim writes only to the Loom-owned support directory. Nothing
+leaves the machine. Output is not captured (output capture without
+breaking interactive TUIs requires a `script`-style PTY tee, which is
+a future expansion).
+
+#### Opting out
+
+`Settings → Shell` flips `loom.shellIntegration` in UserDefaults to
+`false`. Subsequent terminals launch without the `ZDOTDIR` override and
+nothing is logged. Currently running terminals keep their existing
+mode. The shim file stays on disk; delete it manually if you want it
+removed entirely.
+
 ---
 
 ## 15. Security Model
@@ -1791,7 +2009,9 @@ Adjacent precautions:
 | `~/Library/Application Support/Loom/staging/Loom.app` | Newly downloaded build, waiting for Update click |
 | `~/Library/Application Support/Loom/staging/manifest.json` | `{ version, build, stagedAt }` for the staged build |
 | `~/Library/Application Support/Loom/staging/last-apply.log` | Helper-script log from the last apply |
-| `~/Library/Application Support/Loom/layout.json` | Per-kind block list (custom titles, pins, span flags, terminal cwds) |
+| `~/Library/Application Support/Loom/layout.json` | Per-kind block list (custom titles, pins, span flags, terminal cwds, multi-pane split axis) |
+| `~/Library/Application Support/Loom/shell/.zshrc` | Shell-integration shim sourced via `ZDOTDIR` |
+| `~/Library/Application Support/Loom/shell/history.jsonl` | Append-only command-log written by the shim |
 | `~/Library/Application Support/com.chasesims.Loom/default.store` | SwiftData store (workspaces, kanban, notes) |
 | `~/Library/Preferences/com.chasesims.Loom.plist` | UserDefaults |
 
@@ -1877,6 +2097,7 @@ security dump-keychain | awk -F\" '/svce.*com.chasesims.Loom/{getline; print $4}
 | `loom.appearance` | String | Theme picker value |
 | `loom.tasks.staleHours` | Double | Live tasks stale window (hours) |
 | `loom.localEndpoints` | Data | JSON-encoded `[LocalEndpoint]` |
+| `loom.shellIntegration` | Bool | Settings → Shell toggle. Default true; false skips the `ZDOTDIR` override and command logging |
 | `loom.workspaceSeed.v0_8` | Bool | One-time migration flag |
 | `loom.workspaceSeed.v0_9` | Bool | One-time migration flag |
 | `loom.workspaceSeed.v0_10` | Bool | One-time migration flag |

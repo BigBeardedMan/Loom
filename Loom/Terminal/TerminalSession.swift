@@ -161,10 +161,22 @@ final class TerminalSession: Identifiable {
         env["TERM_PROGRAM_VERSION"] = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
         // Loom shell integration: point zsh at the shim dir so each command
         // lands in history.jsonl. The shim sources the user's normal config
-        // first, so behavior matches a stock login shell.
-        env["ZDOTDIR"] = ShellIntegration.supportDirectory.path
-        env["LOOM_SESSION_ID"] = id.uuidString
+        // first, so behavior matches a stock login shell. Honors the
+        // Settings → Shell toggle: when off, we don't override ZDOTDIR or
+        // export the session id.
+        if Self.shellIntegrationEnabled {
+            env["ZDOTDIR"] = ShellIntegration.supportDirectory.path
+            env["LOOM_SESSION_ID"] = id.uuidString
+        }
         return env.map { "\($0.key)=\($0.value)" }
+    }
+
+    /// Reads the user's shell-integration preference. Treats a missing key
+    /// as enabled so existing installs keep capturing history without an
+    /// explicit opt-in toggle. Settings → Shell flips
+    /// `loom.shellIntegration` to `false` to disable.
+    static var shellIntegrationEnabled: Bool {
+        UserDefaults.standard.object(forKey: "loom.shellIntegration") as? Bool ?? true
     }
 
     /// Heuristic match for "this env var probably holds a secret." Conservative

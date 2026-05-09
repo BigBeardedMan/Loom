@@ -55,6 +55,9 @@ struct LoomApp: App {
         .modelContainer(container)
         .windowStyle(.hiddenTitleBar)
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About Loom") { showAboutPanel() }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("New Workspace…") { /* surfaced via sidebar */ }
                     .keyboardShortcut("n", modifiers: [.command])
@@ -84,6 +87,11 @@ struct LoomApp: App {
                     .keyboardShortcut("u", modifiers: [.command, .option])
             }
             CommandMenu("Navigate") {
+                Button("Command Palette…") {
+                    NotificationCenter.default.post(name: .loomOpenPalette, object: nil)
+                }
+                .keyboardShortcut("k", modifiers: [.command])
+                Divider()
                 Button("Switch to Previous Workspace") {
                     quickFlipWorkspace()
                 }
@@ -145,6 +153,58 @@ struct LoomApp: App {
     private func quickFlipWorkspace() {
         guard let prev = layout.previousWorkspaceID else { return }
         layout.selectedWorkspaceID = prev
+    }
+
+    @MainActor
+    private func showAboutPanel() {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let version = info["CFBundleShortVersionString"] as? String ?? "0.0.0"
+        let build = info["CFBundleVersion"] as? String ?? "0"
+        let copyright = info["NSHumanReadableCopyright"] as? String ?? ""
+
+        let credits = NSMutableAttributedString()
+        let baseFont = NSFont.systemFont(ofSize: 11)
+        let secondaryColor = NSColor.secondaryLabelColor
+
+        let header = NSAttributedString(
+            string: "Native macOS workspace app for terminals, editor, AI agents, and task state.\n\n",
+            attributes: [
+                .font: baseFont,
+                .foregroundColor: secondaryColor
+            ]
+        )
+        credits.append(header)
+
+        let linkAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11, weight: .medium),
+            .foregroundColor: NSColor.linkColor
+        ]
+        let pairs: [(label: String, url: String)] = [
+            ("GitHub", "https://github.com/BigBeardedMan/Loom"),
+            ("Guide", "https://github.com/BigBeardedMan/Loom/blob/main/GUIDE.md"),
+            ("Documentation", "https://bigbeardedman.github.io/Loom/")
+        ]
+        for (i, pair) in pairs.enumerated() {
+            let link = NSMutableAttributedString(string: pair.label, attributes: linkAttrs)
+            link.addAttribute(.link, value: pair.url, range: NSRange(location: 0, length: link.length))
+            credits.append(link)
+            if i < pairs.count - 1 {
+                credits.append(NSAttributedString(
+                    string: "   ·   ",
+                    attributes: [.font: baseFont, .foregroundColor: secondaryColor]
+                ))
+            }
+        }
+
+        let options: [NSApplication.AboutPanelOptionKey: Any] = [
+            .applicationName: "Loom",
+            .applicationVersion: version,
+            .version: build,
+            .credits: credits,
+            NSApplication.AboutPanelOptionKey(rawValue: "Copyright"): copyright
+        ]
+        NSApplication.shared.orderFrontStandardAboutPanel(options: options)
+        NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
     @MainActor
