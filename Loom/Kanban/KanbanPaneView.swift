@@ -87,6 +87,7 @@ struct KanbanPaneView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .pointingHandCursor()
                 .help("Clear this session's task files")
             }
         }

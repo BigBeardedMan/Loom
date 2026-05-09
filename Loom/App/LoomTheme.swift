@@ -78,3 +78,20 @@ enum LoomTheme {
         })
     }
 }
+
+extension View {
+    /// Flip the cursor to a pointing hand while hovering, back to arrow on
+    /// exit. Use for clickable elements that don't carry obvious button
+    /// chrome (banner image, capsule pills, custom controls). Uses
+    /// `NSCursor.set()` rather than push/pop so rapid hover transitions
+    /// don't leak items onto the cursor stack.
+    func pointingHandCursor() -> some View {
+        onHover { inside in
+            if inside {
+                NSCursor.pointingHand.set()
+            } else {
+                NSCursor.arrow.set()
+            }
+        }
+    }
+}

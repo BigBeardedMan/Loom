@@ -109,9 +109,7 @@ struct WorkspaceView: View {
                     }
             }
             .buttonStyle(.plain)
-            .onHover { hovering in
-                if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
-            }
+            .pointingHandCursor()
             .help("Open Loom on GitHub")
             .accessibilityLabel("Loom, open on GitHub")
 
@@ -156,6 +154,7 @@ struct WorkspaceView: View {
             .shadow(color: LoomTheme.green.opacity(0.5), radius: 8, x: 0, y: 2)
         }
         .buttonStyle(.plain)
+        .pointingHandCursor()
         .disabled(updates.isApplying)
         .help("Restart Loom with the staged build")
     }
@@ -188,6 +187,7 @@ struct WorkspaceView: View {
             .clipShape(Capsule())
         }
         .buttonStyle(.plain)
+        .pointingHandCursor()
         .help(isSelected ? "Click a workspace to return" : "Open \(label) dashboard")
     }
 
@@ -225,6 +225,7 @@ struct WorkspaceView: View {
             .clipShape(Capsule())
         }
         .buttonStyle(.plain)
+        .pointingHandCursor()
         .disabled(!canAddBlock)
         .help(canAddBlock ? "Add \(panel.label) block" : "Block limit reached for this window size")
     }
