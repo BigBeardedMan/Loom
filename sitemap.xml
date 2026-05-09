@@ -2,142 +2,142 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://bigbeardedman.github.io/Loom/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/guide/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/agents/anthropic-api/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/agents/claude-code/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/agents/custom-providers/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/agents/local-llms/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/agents/overview/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/architecture/source-layout/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/architecture/storage/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/architecture/swift-concurrency/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/editor/overview/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/getting-started/first-run/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/getting-started/install/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/getting-started/keyboard-shortcuts/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/reference/file-paths/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/reference/keychain-keys/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/releasing/cutting-a-release/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/releasing/project-yml/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/settings/advanced/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/settings/appearance/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/settings/providers/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/settings/tasks/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/tasks/handoff/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/tasks/live-agent-tasks/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/tasks/overview/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/terminal/cli-detection/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/terminal/command-injection/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/terminal/overview/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/updates/auto-update/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/updates/manual-check/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/workspaces/ideas/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/workspaces/layouts/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/workspaces/overview/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/workspaces/prompt/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
     <url>
          <loc>https://bigbeardedman.github.io/Loom/workspaces/review/</loc>
-         <lastmod>2026-05-03</lastmod>
+         <lastmod>2026-05-09</lastmod>
     </url>
 </urlset>

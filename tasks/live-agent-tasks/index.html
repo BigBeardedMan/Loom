@@ -1127,6 +1127,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#codex-caveat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Codex caveat
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2175,6 +2186,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#codex-caveat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Codex caveat
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2203,10 +2225,16 @@
 <h1 id="live-agent-tasks">Live agent tasks<a class="headerlink" href="#live-agent-tasks" title="Permanent link">&para;</a></h1>
 <p>When a CLI agent runs in your Terminal pane, Loom mirrors its task list into the Tasks pane in real time.</p>
 <h2 id="where-the-data-comes-from">Where the data comes from<a class="headerlink" href="#where-the-data-comes-from" title="Permanent link">&para;</a></h2>
-<p>Claude Code (and other compatible CLIs) write per-session task state to:</p>
+<p><strong>Claude Code</strong> writes per-session task state to:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>~/.claude/tasks/&lt;session-id&gt;/&lt;task-id&gt;.json
 </span></code></pre></div>
-<p>Each JSON file describes one task — id, title, status (<code>pending</code>, <code>in_progress</code>, <code>complete</code>), parent session, timestamps. Loom polls this directory every <strong>2 seconds</strong> via <code>LiveAgentTasksService</code> and surfaces the active tasks grouped by session id.</p>
+<p>Each JSON file describes one task: id, title, status (<code>pending</code>, <code>in_progress</code>, <code>complete</code>), parent session, timestamps.</p>
+<p><strong>Codex</strong> records its plan inside the rollout JSONL it writes for each session:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>~/.codex/sessions/YYYY/MM/DD/rollout-&lt;ts&gt;-&lt;uuid&gt;.jsonl
+</span></code></pre></div>
+<p>Loom scans the rollout for <code>update_plan</code> function calls and surfaces the most recent plan from each rollout that's been touched inside the active window. Status maps directly: <code>pending</code>, <code>in_progress</code>, <code>completed</code>.</p>
+<p><strong>Gemini CLI</strong> does not currently write plan state to disk in any format Loom can read; Gemini terminals show in the agent picker but won't appear in the Tasks pane until the CLI emits a structured plan log.</p>
+<p>Loom polls every <strong>2 seconds</strong> via <code>LiveAgentTasksService</code> and groups results by source + session id.</p>
 <h2 id="what-you-see">What you see<a class="headerlink" href="#what-you-see" title="Permanent link">&para;</a></h2>
 <p>In a Prompt workspace's Tasks pane, live agent tasks appear in their own section above the kanban columns:</p>
 <ul>
@@ -2255,7 +2283,9 @@
 </table>
 <p>The poll keeps running regardless of the window — it's purely a display filter.</p>
 <h2 id="privacy">Privacy<a class="headerlink" href="#privacy" title="Permanent link">&para;</a></h2>
-<p>Loom only reads files under <code>~/.claude/tasks/</code>. Nothing leaves your machine. The polling service uses standard FileManager calls and does not watch via FSEvents (which would require a separate privacy entitlement).</p>
+<p>Loom only reads files under <code>~/.claude/tasks/</code> and <code>~/.codex/sessions/</code>. Nothing leaves your machine. The polling service uses standard FileManager calls and does not watch via FSEvents (which would require a separate privacy entitlement).</p>
+<h2 id="codex-caveat">Codex caveat<a class="headerlink" href="#codex-caveat" title="Permanent link">&para;</a></h2>
+<p>Codex's plan lives inside the same rollout JSONL as the rest of the conversation, so the per-session × button is hidden for Codex groups. "Clear all" only deletes Claude task files, never Codex rollouts.</p>
 
 
 
