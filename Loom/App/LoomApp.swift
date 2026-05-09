@@ -10,6 +10,7 @@ struct LoomApp: App {
     @State private var updateService = UpdateService()
     @State private var localEndpoints = LocalEndpointStore()
     @State private var workspaceContext = WorkspaceContext()
+    @State private var mcpService = MCPService()
 
     let container: ModelContainer = {
         let schema = Schema([
@@ -116,6 +117,7 @@ struct LoomApp: App {
             SettingsView()
                 .environment(localEndpoints)
                 .environment(agentRegistry)
+                .environment(mcpService)
         }
     }
 

@@ -15,6 +15,10 @@ struct SettingsView: View {
                 .tabItem { Label("Providers", systemImage: "server.rack") }
                 .padding(20)
 
+            MCPSettings()
+                .tabItem { Label("MCP", systemImage: "powerplug") }
+                .padding(20)
+
             AdvancedSettings()
                 .tabItem { Label("Advanced", systemImage: "gearshape.2") }
                 .padding(20)
@@ -405,6 +409,234 @@ private struct EndpointEditor: View {
         } catch {
             return .failure(error.localizedDescription)
         }
+    }
+}
+
+// MARK: - MCP
+
+private struct MCPSettings: View {
+    @Environment(MCPService.self) private var service
+    @State private var presentEditor: Bool = false
+    @State private var draftName: String = ""
+    @State private var draftCommand: String = ""
+    @State private var draftArgs: String = ""
+    @State private var saveError: String?
+    @State private var isSaving: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("MCP Servers")
+                    .font(.headline)
+                if service.isRefreshing {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.7)
+                        .frame(width: 14, height: 14)
+                }
+                Spacer()
+                Button {
+                    Task { await service.refresh() }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .disabled(service.isRefreshing)
+                Button {
+                    resetDraft()
+                    presentEditor = true
+                } label: {
+                    Label("Add", systemImage: "plus")
+                }
+            }
+
+            if service.servers.isEmpty {
+                emptyState
+            } else {
+                List {
+                    ForEach(service.servers) { server in
+                        serverRow(server)
+                    }
+                }
+                .listStyle(.bordered)
+            }
+
+            if let error = service.lastError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
+            Text("Loom reads this list from `claude mcp list`. Adds and removes call the same CLI, so the source of truth stays inside Claude Code's own registry.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .task {
+            if service.servers.isEmpty {
+                await service.refresh()
+            }
+        }
+        .sheet(isPresented: $presentEditor) {
+            editorSheet
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 6) {
+            Image(systemName: "powerplug")
+                .font(.system(size: 28, weight: .light))
+                .foregroundStyle(.secondary)
+            Text("No MCP servers configured.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            Text("Click Add to register a stdio command, or run `claude mcp add` from a terminal.")
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(24)
+        .background(Color.gray.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func serverRow(_ server: MCPServer) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            statusDot(for: server.status)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(server.name)
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(server.transportLabel)
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Color.secondary.opacity(0.12))
+                        .clipShape(Capsule())
+                }
+                Text(server.target)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                statusLabel(for: server.status)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button(role: .destructive) {
+                Task { await service.remove(name: server.name) }
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .help("Remove server (`claude mcp remove`)")
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func statusDot(for status: MCPServer.Status) -> some View {
+        Circle()
+            .fill(statusTint(for: status))
+            .frame(width: 8, height: 8)
+    }
+
+    @ViewBuilder
+    private func statusLabel(for status: MCPServer.Status) -> some View {
+        switch status {
+        case .connected:
+            Text("Connected")
+        case .needsAuth:
+            Text("Needs authentication")
+        case .failed(let raw):
+            Text(raw)
+        case .unknown:
+            Text("Status unknown")
+        }
+    }
+
+    private func statusTint(for status: MCPServer.Status) -> Color {
+        switch status {
+        case .connected: return .green
+        case .needsAuth: return .orange
+        case .failed:    return .red
+        case .unknown:   return .gray
+        }
+    }
+
+    private var editorSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Add MCP Server")
+                .font(.headline)
+
+            Form {
+                TextField("Name", text: $draftName, prompt: Text("filesystem"))
+                    .textFieldStyle(.roundedBorder)
+                TextField("Command", text: $draftCommand, prompt: Text("npx"))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                TextField("Args (space-separated)", text: $draftArgs, prompt: Text("-y @modelcontextprotocol/server-filesystem ~/projects"))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+            }
+            .formStyle(.grouped)
+
+            if let error = saveError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    presentEditor = false
+                    saveError = nil
+                }
+                .keyboardShortcut(.cancelAction)
+                Button {
+                    Task { await save() }
+                } label: {
+                    if isSaving {
+                        ProgressView()
+                            .controlSize(.small)
+                            .scaleEffect(0.7)
+                            .frame(width: 14, height: 14)
+                    } else {
+                        Text("Add")
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(isSaving || draftName.isEmpty || draftCommand.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 480)
+    }
+
+    private func save() async {
+        let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let command = draftCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        let args = draftArgs
+            .split(separator: " ", omittingEmptySubsequences: true)
+            .map(String.init)
+        isSaving = true
+        let ok = await service.add(name: name, command: command, args: args)
+        isSaving = false
+        if ok {
+            presentEditor = false
+            resetDraft()
+        } else {
+            saveError = service.lastError ?? "Failed to add server"
+        }
+    }
+
+    private func resetDraft() {
+        draftName = ""
+        draftCommand = ""
+        draftArgs = ""
+        saveError = nil
     }
 }
 
