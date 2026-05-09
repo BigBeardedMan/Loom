@@ -1073,16 +1073,33 @@ mirrors its in-progress task list in real time.
 
 ### Where the data comes from
 
-Claude Code (and other compatible CLIs) write per-session task state to:
+**Claude Code** writes per-session task state to:
 
 ```
 ~/.claude/tasks/<session-id>/<task-id>.json
 ```
 
 Each JSON file describes one task: id, subject, description, activeForm,
-status. Loom polls this directory every 2 seconds via
-`LiveAgentTasksService` (off-main-thread JSON decode) and surfaces the
-active tasks grouped by session id.
+status.
+
+**Codex** records its plan inside its rollout JSONL:
+
+```
+~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl
+```
+
+Loom scans the rollout for `update_plan` function calls and surfaces the
+most recent plan from each rollout that's been touched inside the active
+window. Codex steps map onto the same statuses as Claude (`pending`,
+`in_progress`, `completed`).
+
+**Gemini CLI** does not currently write plan state to disk in any format
+Loom can read. Gemini terminals show in the agent picker, but their
+in-flight plan won't appear in the Tasks pane until the CLI emits a
+structured plan log.
+
+Loom polls every 2 seconds via `LiveAgentTasksService` (off-main-thread
+JSON decode) and surfaces active tasks grouped by source plus session id.
 
 ### Task statuses
 
@@ -1142,15 +1159,19 @@ forever. Only `.json` task-file mtimes count.
 
 ### Privacy
 
-Loom only reads files under `~/.claude/tasks/`. Nothing leaves your
-machine. The polling service uses standard `FileManager` calls and does not
-watch via FSEvents (which would require a separate privacy entitlement).
+Loom only reads files under `~/.claude/tasks/` and `~/.codex/sessions/`.
+Nothing leaves your machine. The polling service uses standard
+`FileManager` calls and does not watch via FSEvents (which would require a
+separate privacy entitlement).
 
 ### Clearing
 
-The trash icon next to a session's header deletes that session's `.json`
-files. Live CLI sessions will rewrite them on the next turn, so this only
-"sticks" for crashed or zombie sessions.
+The × icon next to a Claude session header deletes that session's `.json`
+task files. Live Claude sessions will rewrite them on the next turn, so
+this only "sticks" for crashed or zombie sessions. Codex groups don't
+expose the × button: Codex stores its plan inside the rollout JSONL
+alongside the rest of the conversation, so there's no safe per-session
+delete. "Clear all" applies to Claude sessions only.
 
 The "Clear all" button in the pane header opens a confirmation, then deletes
 every visible session's task files.

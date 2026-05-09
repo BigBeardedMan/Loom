@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI
 
 enum AgentSource: String, Codable, Hashable {
     case claude
@@ -11,6 +12,22 @@ enum AgentSource: String, Codable, Hashable {
         case .claude: return "Claude Code"
         case .codex:  return "Codex"
         case .gemini: return "Gemini"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .claude: return "sparkles"
+        case .codex:  return "chevron.left.forwardslash.chevron.right"
+        case .gemini: return "diamond"
+        }
+    }
+
+    var brandColor: Color {
+        switch self {
+        case .claude: return Color(red: 0.95, green: 0.39, blue: 0.18)
+        case .codex:  return Color(red: 0.23, green: 0.86, blue: 0.46)
+        case .gemini: return Color(red: 0.18, green: 0.50, blue: 0.96)
         }
     }
 }
@@ -77,16 +94,20 @@ struct LiveAgentTaskGroup: Identifiable, Hashable {
     }
 }
 
-/// Watches per-CLI on-disk task state. Today only Claude Code has a
-/// well-known format we can read (`~/.claude/tasks/<session>/<id>.json`).
-/// Codex and Gemini are stubbed — wire them up once their format is verified.
+/// Watches per-CLI on-disk task state.
+///
+/// Claude Code writes per-task JSON files at `~/.claude/tasks/<session>/<id>.json`.
+/// Codex emits an `update_plan` function call inside its rollout JSONL at
+/// `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`; we surface the
+/// latest plan from each active rollout. Gemini CLI does not currently log
+/// plan or task state to disk in any format we can read.
 @Observable
 @MainActor
 final class LiveAgentTasksService {
     var groups: [LiveAgentTaskGroup] = []
     var lastError: String?
 
-    /// Flat list of every task across all groups — kept for callers that just
+    /// Flat list of every task across all groups, kept for callers that just
     /// want a quick "is there anything to show?" check.
     var tasks: [LiveAgentTask] { groups.flatMap(\.tasks) }
     /// Most-recent session id. Compatibility shim for the old single-session
@@ -98,6 +119,10 @@ final class LiveAgentTasksService {
     private let claudeTasksRoot: URL = {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/tasks", isDirectory: true)
+    }()
+    private let codexSessionsRoot: URL = {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/sessions", isDirectory: true)
     }()
     private var refreshInFlight: Bool = false
 
@@ -125,19 +150,20 @@ final class LiveAgentTasksService {
         timer = nil
     }
 
-    /// Force a refresh — used after the user types a new prompt so the live
-    /// view feels responsive without waiting for the next tick. The walk +
+    /// Force a refresh, used after the user types a new prompt so the live
+    /// view feels responsive without waiting for the next tick. The walk and
     /// JSON decode runs off the main actor; only the final assignment hops
     /// back. Skips when a refresh is already in flight so a slow disk doesn't
     /// stack up duplicate work.
     func refresh() {
         guard !refreshInFlight else { return }
         refreshInFlight = true
-        let root = claudeTasksRoot
+        let claudeRoot = claudeTasksRoot
+        let codexRoot = codexSessionsRoot
         let cutoff = Date().addingTimeInterval(-activeWindow)
         Task { [weak self] in
             let sorted = await Task.detached(priority: .utility) {
-                Self.collectClaudeGroups(root: root, cutoff: cutoff)
+                Self.collectAllGroups(claudeRoot: claudeRoot, codexRoot: codexRoot, cutoff: cutoff)
             }.value
             guard let self else { return }
             self.refreshInFlight = false
@@ -145,9 +171,12 @@ final class LiveAgentTasksService {
         }
     }
 
-    /// Delete the on-disk task files for every visible session and refresh.
-    /// Live CLI sessions will rewrite their files on the next turn, so this
-    /// only "sticks" for crashed/zombie sessions.
+    /// Delete the on-disk task files for every visible Claude session and
+    /// refresh. Live Claude sessions will rewrite their files on the next
+    /// turn, so this only "sticks" for crashed/zombie sessions. Codex
+    /// sessions are skipped: their plan lives inside the same JSONL as the
+    /// rest of the conversation, so deleting it would also delete the
+    /// session history.
     func clearAll() {
         for group in groups {
             deleteTaskFiles(for: group)
@@ -155,8 +184,9 @@ final class LiveAgentTasksService {
         refresh()
     }
 
-    /// Wipe a single session's task files (the dir stays so the lock file is
-    /// undisturbed). Used by per-row × buttons in the pane header.
+    /// Wipe a single Claude session's task files (the dir stays so the lock
+    /// file is undisturbed). For Codex this is a no-op; the UI hides the
+    /// per-row × on Codex groups.
     func clear(group: LiveAgentTaskGroup) {
         deleteTaskFiles(for: group)
         refresh()
@@ -172,6 +202,23 @@ final class LiveAgentTasksService {
         }
     }
 
+    // MARK: - Combined collector
+
+    /// Walk every supported on-disk source and assemble the merged set of
+    /// session groups, newest activity first. `nonisolated` so the 2-second
+    /// poll can run it on a utility-priority detached task instead of
+    /// blocking the main thread on disk I/O and JSON decoding.
+    nonisolated static func collectAllGroups(
+        claudeRoot: URL,
+        codexRoot: URL,
+        cutoff: Date
+    ) -> [LiveAgentTaskGroup] {
+        var collected: [LiveAgentTaskGroup] = []
+        collected.append(contentsOf: collectClaudeGroups(root: claudeRoot, cutoff: cutoff))
+        collected.append(contentsOf: collectCodexGroups(root: codexRoot, cutoff: cutoff))
+        return collected.sorted { $0.lastActivity > $1.lastActivity }
+    }
+
     // MARK: - Claude
 
     private struct ClaudeSessionRef: Hashable, Sendable {
@@ -180,9 +227,6 @@ final class LiveAgentTasksService {
         let mostRecentMtime: Date
     }
 
-    /// Walk the Claude tasks tree and assemble groups. `nonisolated` so the
-    /// 2-second poll can run it on a utility-priority detached task instead
-    /// of blocking the main thread on disk I/O and JSON decoding.
     nonisolated static func collectClaudeGroups(root: URL, cutoff: Date) -> [LiveAgentTaskGroup] {
         var collected: [LiveAgentTaskGroup] = []
         for session in activeClaudeSessions(root: root, cutoff: cutoff) {
@@ -195,8 +239,7 @@ final class LiveAgentTasksService {
                 tasks: tasks
             ))
         }
-        // TODO: wire Codex (~/.codex/sessions/...) and Gemini once formats are confirmed.
-        return collected.sorted { $0.lastActivity > $1.lastActivity }
+        return collected
     }
 
     /// All Claude sessions whose latest *task* activity is within the
@@ -278,6 +321,127 @@ final class LiveAgentTasksService {
                 return lhs.status.sortPriority < rhs.status.sortPriority
             }
             return lhs.updatedAt > rhs.updatedAt
+        }
+    }
+
+    // MARK: - Codex
+
+    /// Walk `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` and surface the
+    /// most recent `update_plan` from each rollout that's been touched
+    /// inside the active window.
+    nonisolated static func collectCodexGroups(root: URL, cutoff: Date) -> [LiveAgentTaskGroup] {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: root.path) else { return [] }
+        guard let enumerator = fm.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        var collected: [LiveAgentTaskGroup] = []
+        for case let url as URL in enumerator {
+            guard url.pathExtension == "jsonl" else { continue }
+            guard let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate else { continue }
+            guard mtime >= cutoff else { continue }
+
+            let sessionID = codexSessionID(from: url)
+            guard let plan = readLatestCodexPlan(at: url), !plan.isEmpty else { continue }
+
+            let tasks: [LiveAgentTask] = plan.enumerated().map { index, step in
+                let status = mapCodexStatus(step.status)
+                return LiveAgentTask(
+                    id: "codex:\(sessionID):\(index)",
+                    source: .codex,
+                    sessionID: sessionID,
+                    taskID: String(index),
+                    subject: step.step,
+                    description: "",
+                    activeForm: step.step,
+                    status: status,
+                    updatedAt: mtime
+                )
+            }
+            collected.append(LiveAgentTaskGroup(
+                sessionID: sessionID,
+                source: .codex,
+                lastActivity: mtime,
+                tasks: tasks
+            ))
+        }
+        return collected
+    }
+
+    /// Codex rollout filenames look like
+    /// `rollout-2026-05-01T18-19-31-019de5a0-286c-7ce0-9585-a33e69923a3c.jsonl`.
+    /// The trailing 36 chars before `.jsonl` are the session UUID. Falls
+    /// back to the full base name when the pattern doesn't match so we
+    /// still produce a stable id rather than an empty string.
+    nonisolated private static func codexSessionID(from url: URL) -> String {
+        let base = url.deletingPathExtension().lastPathComponent
+        if base.count >= 36 {
+            let candidate = String(base.suffix(36))
+            // Lightweight UUID shape check: 8-4-4-4-12.
+            let parts = candidate.split(separator: "-")
+            if parts.count == 5,
+               parts[0].count == 8, parts[1].count == 4, parts[2].count == 4,
+               parts[3].count == 4, parts[4].count == 12 {
+                return candidate
+            }
+        }
+        return base
+    }
+
+    private struct CodexPlanLine: Decodable {
+        struct Payload: Decodable {
+            let type: String?
+            let name: String?
+            let arguments: String?
+        }
+        let payload: Payload?
+    }
+
+    private struct CodexPlanArguments: Decodable {
+        let plan: [CodexPlanStep]
+    }
+
+    private struct CodexPlanStep: Decodable {
+        let step: String
+        let status: String
+    }
+
+    /// Scan a rollout JSONL for `function_call` lines whose `name` is
+    /// `update_plan`. Returns the most recent plan, or nil if the rollout
+    /// never emitted one.
+    nonisolated private static func readLatestCodexPlan(at url: URL) -> [CodexPlanStep]? {
+        guard let data = try? Data(contentsOf: url),
+              let text = String(data: data, encoding: .utf8) else { return nil }
+
+        let decoder = JSONDecoder()
+        var latest: [CodexPlanStep]?
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            // Cheap byte-level filter so 99% of lines never touch the JSON
+            // decoder. Codex flushes every event in the conversation here,
+            // and a long session can be thousands of lines.
+            guard line.contains("\"update_plan\"") else { continue }
+            guard let lineData = String(line).data(using: .utf8) else { continue }
+            guard let parsed = try? decoder.decode(CodexPlanLine.self, from: lineData) else { continue }
+            guard parsed.payload?.type == "function_call",
+                  parsed.payload?.name == "update_plan",
+                  let args = parsed.payload?.arguments,
+                  let argsData = args.data(using: .utf8) else { continue }
+            guard let envelope = try? decoder.decode(CodexPlanArguments.self, from: argsData) else { continue }
+            latest = envelope.plan
+        }
+        return latest
+    }
+
+    nonisolated private static func mapCodexStatus(_ raw: String) -> LiveAgentTaskStatus {
+        switch raw {
+        case "in_progress": return .inProgress
+        case "completed":   return .completed
+        case "cancelled":   return .cancelled
+        default:            return .pending
         }
     }
 }

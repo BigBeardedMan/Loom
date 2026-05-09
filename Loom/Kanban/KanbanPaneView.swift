@@ -42,15 +42,15 @@ struct KanbanPaneView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Deletes the on-disk task files for every CLI session shown here. Live sessions rewrite theirs on the next turn — only crashed/zombie sessions will stay gone.")
+            Text("Deletes the on-disk task files for every Claude Code session shown here. Live sessions rewrite theirs on the next turn, so only crashed or zombie sessions stay gone. Codex sessions keep their plan inside the rollout log and are left untouched.")
         }
     }
 
     private func sessionHeader(_ group: LiveAgentTaskGroup) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: "sparkles")
+            Image(systemName: group.source.systemImage)
                 .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(LoomTheme.orange)
+                .foregroundStyle(group.source.brandColor)
             Text(group.source.label)
                 .font(.system(size: 10, weight: .semibold))
             Text(group.sessionID.prefix(8))
@@ -73,17 +73,22 @@ struct KanbanPaneView: View {
                 .padding(.vertical, 1)
                 .background(Color.white.opacity(0.05))
                 .clipShape(Capsule())
-            Button {
-                liveAgentTasks.clear(group: group)
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.secondary)
-                    .padding(3)
-                    .contentShape(Rectangle())
+            // Codex stores its plan inside the rollout JSONL alongside the
+            // rest of the conversation, so there's no safe per-session
+            // delete; only Claude groups get the × button.
+            if group.source == .claude {
+                Button {
+                    liveAgentTasks.clear(group: group)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .padding(3)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Clear this session's task files")
             }
-            .buttonStyle(.plain)
-            .help("Clear this session's task files")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)

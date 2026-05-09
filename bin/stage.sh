@@ -2,13 +2,13 @@
 # Build Release and stage it for Loom's in-app Update button.
 #
 # Run this anytime you want to ship a change to the user's running Loom:
-#   ~/Documents/Xcode/Loom/bin/stage.sh
+#   bin/stage.sh                  # run from the repo root
 #
 # It builds to Xcode's default DerivedData (outside iCloud, so iCloud doesn't
 # rename the output dirs mid-build), copies the bundle into
 # ~/Library/Application Support/Loom/staging/Loom.app, and writes manifest.json
 # with the version + build pulled from the bundle's Info.plist. The running
-# Loom polls the manifest and lights up its Update button — clicking it
+# Loom polls the manifest and lights up its Update button. Clicking it
 # performs the swap into /Applications/Loom.app and relaunches.
 #
 # DO NOT cp -R Release/Loom.app over /Applications/Loom.app while Loom is
@@ -16,7 +16,9 @@
 
 set -euo pipefail
 
-PROJECT_ROOT="${PROJECT_ROOT:-/Users/chasesims/Documents/Xcode/Loom}"
+# Resolve the repo root from the script location so this works regardless of
+# where it lives on disk. Override with PROJECT_ROOT=... when needed.
+PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 DERIVED_BASE="${HOME}/Library/Developer/Xcode/DerivedData"
 STAGING_DIR="${HOME}/Library/Application Support/Loom/staging"
 

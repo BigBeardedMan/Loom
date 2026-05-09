@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Build Release, package a .dmg, tag the commit, and publish a GitHub release.
 #
-#   ~/Documents/Xcode/Loom/bin/release.sh
+#   bin/release.sh                # run from the repo root
 #
 # The version is read from project.yml (MARKETING_VERSION). Bump that, run
 # this, and the running Loom on any user's Mac picks the new release up via
@@ -15,7 +15,9 @@
 
 set -euo pipefail
 
-PROJECT_ROOT="${PROJECT_ROOT:-/Users/chasesims/Documents/Xcode/Loom}"
+# Resolve the repo root from the script location so this works regardless of
+# where it lives on disk. Override with PROJECT_ROOT=... when needed.
+PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 DERIVED_BASE="${HOME}/Library/Developer/Xcode/DerivedData"
 RELEASE_DIR="${PROJECT_ROOT}/build/release"
 REPO="BigBeardedMan/Loom"

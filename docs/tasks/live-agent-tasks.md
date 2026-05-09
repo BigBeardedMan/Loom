@@ -4,13 +4,25 @@ When a CLI agent runs in your Terminal pane, Loom mirrors its task list into the
 
 ## Where the data comes from
 
-Claude Code (and other compatible CLIs) write per-session task state to:
+**Claude Code** writes per-session task state to:
 
 ```
 ~/.claude/tasks/<session-id>/<task-id>.json
 ```
 
-Each JSON file describes one task — id, title, status (`pending`, `in_progress`, `complete`), parent session, timestamps. Loom polls this directory every **2 seconds** via `LiveAgentTasksService` and surfaces the active tasks grouped by session id.
+Each JSON file describes one task: id, title, status (`pending`, `in_progress`, `complete`), parent session, timestamps.
+
+**Codex** records its plan inside the rollout JSONL it writes for each session:
+
+```
+~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl
+```
+
+Loom scans the rollout for `update_plan` function calls and surfaces the most recent plan from each rollout that's been touched inside the active window. Status maps directly: `pending`, `in_progress`, `completed`.
+
+**Gemini CLI** does not currently write plan state to disk in any format Loom can read; Gemini terminals show in the agent picker but won't appear in the Tasks pane until the CLI emits a structured plan log.
+
+Loom polls every **2 seconds** via `LiveAgentTasksService` and groups results by source + session id.
 
 ## What you see
 
@@ -43,4 +55,8 @@ The poll keeps running regardless of the window — it's purely a display filter
 
 ## Privacy
 
-Loom only reads files under `~/.claude/tasks/`. Nothing leaves your machine. The polling service uses standard FileManager calls and does not watch via FSEvents (which would require a separate privacy entitlement).
+Loom only reads files under `~/.claude/tasks/` and `~/.codex/sessions/`. Nothing leaves your machine. The polling service uses standard FileManager calls and does not watch via FSEvents (which would require a separate privacy entitlement).
+
+## Codex caveat
+
+Codex's plan lives inside the same rollout JSONL as the rest of the conversation, so the per-session × button is hidden for Codex groups. "Clear all" only deletes Claude task files, never Codex rollouts.
