@@ -121,6 +121,10 @@ Loom 2.x extends the cockpit. Highlights:
 - **Clickable banner** opens the GitHub repo in the user's default browser.
 - **Custom About panel** with version, build, and inline links to the
   repo, GUIDE, and MkDocs site.
+- **Inline command cards in the terminal pane**: a per-pane toggle in
+  the pane header flips between the live PTY and a stack of cards
+  (filtered by `LOOM_SESSION_ID`) so the user can skim a structured
+  history of just that pane without scrolling raw output.
 
 ---
 
@@ -512,11 +516,32 @@ Live-agent counts walk every session in every terminal block, so each
 pane that has a CLI agent (claude / codex / gemini) in the foreground
 counts toward the workspace badge.
 
+#### Inline command cards (v2.1.0+)
+
+Each pane's header carries a **list/terminal toggle**
+(`list.bullet.rectangle` to enter card mode, `terminal` to return to
+live). In card mode the live PTY view is replaced by a vertical stack
+of cards rendered from the JSONL log, filtered to *this pane's*
+`LOOM_SESSION_ID` so other panes' commands stay out of the way. Cards
+show command, status badge (green for exit 0, orange × otherwise), cwd,
+relative timestamp, and duration when at least 1s.
+
+Per-card actions:
+
+- **Copy** copies the command to the pasteboard.
+- **Rerun** sends the command to the workspace's first terminal
+  session (so a card from a closed pane can be re-issued in the active
+  one).
+
+Card mode is per-pane local state. Toggling does not persist across
+launches; the live PTY itself keeps running underneath either way, so
+flipping back is free.
+
 #### Roadmap items
 
-- Inline command-block cards rendered alongside scrollback (today's cards
-  live in the separate Commands panel; see [§6.7](#67-commands)).
-- Output capture for command history.
+- Output capture for command history (currently command + exit + cwd
+  only; no captured stdout/stderr).
+- Inline cards rendered *alongside* scrollback rather than replacing it.
 - CodeEdit integration as a richer editor surface.
 
 ### 6.2. Editor

@@ -11,8 +11,14 @@ Loom's Terminal pane is a real terminal, backed by [SwiftTerm](https://github.co
 
 ## What it doesn't have (yet)
 
-- **Inline command-block history inside the terminal pane**: today, command history shows up in a separate **Commands** panel (see [Command history](./command-history.md)). Inline cards rendered alongside scrollback are a future expansion.
+- **Inline cards rendered alongside scrollback**: today the per-pane card view *replaces* the live PTY (toggle in pane header). Cards interleaved with raw output is a future expansion.
 - **Built-in SSH session manager**: out of scope. Use `ssh` like normal.
+
+## Card view
+
+Every pane's header has a toggle (`list.bullet.rectangle`) that flips between the live PTY and a vertical stack of cards. The cards are rendered from the JSONL log, filtered to that pane's `LOOM_SESSION_ID`, so each pane shows only the commands it ran.
+
+Per-card actions: copy command to pasteboard, rerun in the workspace's first terminal session. The status badge is green for exit 0 and orange `×` for non-zero. Mode is per-pane and not persisted across launches.
 
 ## Multi-pane splits
 
