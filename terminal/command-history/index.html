@@ -2048,6 +2048,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#output-capture-v220" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output capture (v2.2.0+)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#whats-not-captured-yet" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2125,9 +2136,14 @@
 <li><strong>Copy</strong> copies the command text to the macOS pasteboard.</li>
 <li><strong>Send</strong> (when at least one Terminal block exists in the active workspace) submits the command to the first terminal session as if you'd typed it. Useful for re-running something from an earlier session without retyping.</li>
 </ul>
+<h2 id="output-capture-v220">Output capture (v2.2.0+)<a class="headerlink" href="#output-capture-v220" title="Permanent link">&para;</a></h2>
+<p>Commands submitted through Loom's UI (Commands panel <strong>Send</strong>, inline card <strong>Rerun</strong>, ⌘K palette rerun) are wrapped in the shim's <code>__loom_capture</code> helper, which tees their stdout+stderr into a per-command file under <code>~/Library/Application Support/Loom/shell/output/</code>. The matching JSONL record carries an extra <code>output</code> field with the full path.</p>
+<p>Hand-typed commands skip this wrapping entirely so interactive TUIs (vim, top, ssh, tmux) keep working unchanged. If you want capture for a hand-typed command, prefix it with <code>__loom_capture '...'</code> yourself.</p>
+<p>Cards in both the Commands panel and the inline-card terminal view show a chevron when their record has captured output. Click to expand an inline reader (capped at 1 MB, with a truncation notice if exceeded; selectable text for copy-paste).</p>
+<p>Exit codes are preserved across the <code>tee</code> pipeline via zsh's <code>pipefail</code> and <code>${pipestatus[1]}</code>.</p>
 <h2 id="whats-not-captured-yet">What's not captured (yet)<a class="headerlink" href="#whats-not-captured-yet" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Output</strong> is not captured. Output capture without breaking interactive TUIs (vim, top, ssh) needs a <code>script</code>-style PTY tee, which is a future expansion.</li>
+<li><strong>Output for hand-typed commands</strong> stays uncaptured by design (TUIs would break). Prefix manually with <code>__loom_capture '...'</code> if you want it.</li>
 <li><strong>Non-zsh shells</strong> are not supported. The shim is zsh-specific. If your <code>$SHELL</code> is <code>bash</code> or <code>fish</code>, the shell still runs normally; nothing breaks, but no commands appear in the panel.</li>
 <li><strong>Commands run before Loom started writing the shim</strong> (i.e. older zsh sessions or terminals from outside Loom) are not in the log.</li>
 </ul>
