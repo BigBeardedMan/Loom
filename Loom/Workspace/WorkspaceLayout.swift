@@ -8,6 +8,7 @@ enum PanelKind: String, CaseIterable, Identifiable, Codable, Hashable {
     case agent
     case notes
     case preview
+    case commands
 
     var id: String { rawValue }
 
@@ -19,6 +20,7 @@ enum PanelKind: String, CaseIterable, Identifiable, Codable, Hashable {
         case .agent:    return "Agent"
         case .notes:    return "Notes"
         case .preview:  return "Preview"
+        case .commands: return "Commands"
         }
     }
 
@@ -30,6 +32,7 @@ enum PanelKind: String, CaseIterable, Identifiable, Codable, Hashable {
         case .agent:    return "sparkles"
         case .notes:    return "note.text"
         case .preview:  return "globe"
+        case .commands: return "list.bullet.rectangle"
         }
     }
 }

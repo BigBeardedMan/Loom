@@ -159,6 +159,11 @@ final class TerminalSession: Identifiable {
         if env["LANG"] == nil { env["LANG"] = "en_US.UTF-8" }
         env["TERM_PROGRAM"] = "Loom"
         env["TERM_PROGRAM_VERSION"] = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
+        // Loom shell integration: point zsh at the shim dir so each command
+        // lands in history.jsonl. The shim sources the user's normal config
+        // first, so behavior matches a stock login shell.
+        env["ZDOTDIR"] = ShellIntegration.supportDirectory.path
+        env["LOOM_SESSION_ID"] = id.uuidString
         return env.map { "\($0.key)=\($0.value)" }
     }
 

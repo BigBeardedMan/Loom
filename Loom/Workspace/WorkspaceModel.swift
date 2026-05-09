@@ -44,7 +44,7 @@ enum WorkspaceKind: String, CaseIterable, Codable, Identifiable {
 
     var availablePanels: [PanelKind] {
         switch self {
-        case .code:   return [.terminal, .editor, .tasks, .agent]
+        case .code:   return [.terminal, .editor, .tasks, .agent, .commands]
         case .ideas:  return [.notes, .agent]
         case .review: return [.preview, .agent]
         }

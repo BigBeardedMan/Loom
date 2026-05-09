@@ -11,6 +11,7 @@ struct LoomApp: App {
     @State private var localEndpoints = LocalEndpointStore()
     @State private var workspaceContext = WorkspaceContext()
     @State private var mcpService = MCPService()
+    @State private var commandHistory = CommandHistoryService()
 
     let container: ModelContainer = {
         let schema = Schema([
@@ -39,11 +40,14 @@ struct LoomApp: App {
                 .environment(updateService)
                 .environment(localEndpoints)
                 .environment(workspaceContext)
+                .environment(commandHistory)
                 .task {
+                    ShellIntegration.install()
                     layout.prefetchAllKinds()
                     liveAgentTasks.start()
                     usageService.start()
                     updateService.start()
+                    commandHistory.start()
                     layout.startLiveAgentPolling()
                     await agentRegistry.refresh(localEndpoints: localEndpoints.endpoints)
                 }

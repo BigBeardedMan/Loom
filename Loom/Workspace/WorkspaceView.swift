@@ -397,6 +397,8 @@ struct WorkspaceView: View {
             NotesPaneView(workspaceID: layout.selectedWorkspaceID)
         case .preview:
             PreviewPaneView(block: block)
+        case .commands:
+            CommandHistoryPaneView()
         }
     }
 

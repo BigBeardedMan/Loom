@@ -11,7 +11,7 @@ Loom's Terminal pane is a real terminal, backed by [SwiftTerm](https://github.co
 
 ## What it doesn't have (yet)
 
-- **Command-block history**: every shell command becomes its own scrollable, copyable card. On the roadmap; today the pane is a flat scrollback like a normal terminal.
+- **Inline command-block history inside the terminal pane**: today, command history shows up in a separate **Commands** panel (see [Command history](./command-history.md)). Inline cards rendered alongside scrollback are a future expansion.
 - **Built-in SSH session manager**: out of scope. Use `ssh` like normal.
 
 ## Multi-pane splits
