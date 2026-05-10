@@ -116,7 +116,9 @@ Loom 2.x extends the cockpit. Highlights:
 - **Settings → Shell**: a toggle to opt out of the shell integration
   without uninstalling the shim.
 - **⌘K command palette**: workspace switcher, recent-command rerun, and
-  Add-Block actions in one fuzzy-search overlay.
+  Add-Block actions in one fuzzy-search overlay. Press **↑** in the
+  search field to walk back through the last 50 commands (deduped),
+  **↓** to walk forward, just like a shell prompt.
 - **Help menu** opens `GUIDE.md` (⌘?) and the hosted MkDocs site directly.
 - **Clickable banner** opens the GitHub repo in the user's default browser.
 - **Custom About panel** with version, build, and inline links to the

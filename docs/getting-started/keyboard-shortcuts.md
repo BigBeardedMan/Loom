@@ -10,6 +10,8 @@ Loom is keyboard-first. Every shortcut below is wired in `Loom/App/LoomApp.swift
 | ⌘K | Open command palette |
 | ⌘⇧O | Switch to previous workspace |
 
+Inside the ⌘K palette, **↑** walks back through the last 50 distinct commands (newest first) and **↓** walks forward, just like a shell prompt. Press ↩ on a populated entry to rerun it in the active terminal.
+
 ## Adding panes
 
 The number maps to the panel order for the current workspace kind. In a **Prompt** workspace the order is Terminal, Editor, Tasks, Agent — so ⌘⇧1 adds a terminal, ⌘⇧4 adds an agent. In an **Ideas** workspace ⌘⇧1 adds Notes, ⌘⇧2 adds Agent.

@@ -22,6 +22,10 @@ struct CommandPalette: View {
     @State private var query: String = ""
     @State private var selectedID: String?
 
+    @State private var historyIndex: Int? = nil
+    @State private var historyDraft: String = ""
+    @State private var suppressHistoryReset: Bool = false
+
     var body: some View {
         VStack(spacing: 0) {
             searchField
@@ -41,6 +45,8 @@ struct CommandPalette: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 16))
                 .onSubmit { runSelected() }
+                .onKeyPress(.upArrow) { stepHistory(direction: -1) }
+                .onKeyPress(.downArrow) { stepHistory(direction: 1) }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -66,6 +72,12 @@ struct CommandPalette: View {
                 selectedID = filteredSections.first?.items.first?.id
                 if let id = selectedID {
                     proxy.scrollTo(id, anchor: .top)
+                }
+                if suppressHistoryReset {
+                    suppressHistoryReset = false
+                } else {
+                    historyIndex = nil
+                    historyDraft = ""
                 }
             }
             .onAppear {
@@ -224,6 +236,50 @@ struct CommandPalette: View {
                 action: .openURL("https://github.com/BigBeardedMan/Loom")
             )
         ])
+    }
+
+    /// Last 50 distinct commands, newest first. Dedup-by-first-occurrence
+    /// matches zsh `HIST_IGNORE_ALL_DUPS` so ↑ doesn't crawl past five
+    /// repeats of the same `git status`.
+    private var recentCommandStrings: [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for record in history.records {
+            let cmd = record.command
+            if seen.insert(cmd).inserted { out.append(cmd) }
+            if out.count == 50 { break }
+        }
+        return out
+    }
+
+    /// Shell-style ↑/↓ navigation through `recentCommandStrings`. -1 walks
+    /// older, +1 walks newer. Returns `.handled` so the caret stays put.
+    private func stepHistory(direction: Int) -> KeyPress.Result {
+        let recents = recentCommandStrings
+        guard !recents.isEmpty else { return .handled }
+
+        if direction < 0 {
+            let next = (historyIndex ?? -1) + 1
+            guard next < recents.count else { return .handled }
+            if historyIndex == nil { historyDraft = query }
+            historyIndex = next
+            suppressHistoryReset = true
+            query = recents[next]
+        } else {
+            guard let current = historyIndex else { return .handled }
+            if current == 0 {
+                historyIndex = nil
+                suppressHistoryReset = true
+                query = historyDraft
+                historyDraft = ""
+            } else {
+                let next = current - 1
+                historyIndex = next
+                suppressHistoryReset = true
+                query = recents[next]
+            }
+        }
+        return .handled
     }
 
     private func runSelected() {
