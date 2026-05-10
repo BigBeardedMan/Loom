@@ -505,6 +505,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#edit-terminal-text-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Edit (terminal &amp; text fields)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#adding-panes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2132,6 +2143,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#edit-terminal-text-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Edit (terminal &amp; text fields)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#adding-panes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2226,6 +2248,39 @@
 </tbody>
 </table>
 <p>Inside the ⌘K palette, <strong>↑</strong> walks back through the last 50 distinct commands (newest first) and <strong>↓</strong> walks forward, just like a shell prompt. Press ↩ on a populated entry to rerun it in the active terminal.</p>
+<h2 id="edit-terminal-text-fields">Edit (terminal &amp; text fields)<a class="headerlink" href="#edit-terminal-text-fields" title="Permanent link">&para;</a></h2>
+<p>Standard macOS pasteboard items, routed through the responder chain so they target whatever has focus — a terminal pane, the ⌘K palette field, an <code>NSTextField</code>, etc.</p>
+<table>
+<thead>
+<tr>
+<th>Shortcut</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>⌘C</td>
+<td>Copy the current selection (terminal selection or text-field selection)</td>
+</tr>
+<tr>
+<td>⌘V</td>
+<td>Paste from the clipboard into the focused view</td>
+</tr>
+<tr>
+<td>⇧⌘V</td>
+<td>Paste as plain text (terminal: bypass bracketed-paste wrapping)</td>
+</tr>
+<tr>
+<td>⌘X</td>
+<td>Cut (text fields only — disabled when a terminal pane is focused)</td>
+</tr>
+<tr>
+<td>⌘A</td>
+<td>Select All</td>
+</tr>
+</tbody>
+</table>
+<p>Settings → Shell has an <strong>Always paste as plain text</strong> toggle that makes ⌘V skip the bracketed-paste wrapper too, so you don't have to reach for ⇧⌘V every time.</p>
 <h2 id="adding-panes">Adding panes<a class="headerlink" href="#adding-panes" title="Permanent link">&para;</a></h2>
 <p>The number maps to the panel order for the current workspace kind. In a <strong>Prompt</strong> workspace the order is Terminal, Editor, Tasks, Agent — so ⌘⇧1 adds a terminal, ⌘⇧4 adds an agent. In an <strong>Ideas</strong> workspace ⌘⇧1 adds Notes, ⌘⇧2 adds Agent.</p>
 <table>
