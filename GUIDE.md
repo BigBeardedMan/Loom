@@ -1691,6 +1691,21 @@ shows up in the menu bar.
 | `Command K` | Open command palette (workspaces, recent commands, add-block) |
 | `Command Shift O` | Switch to previous workspace |
 
+### Edit (terminal & text fields)
+
+| Shortcut | Action |
+| -------- | ------ |
+| `Command C` | Copy current selection (SwiftTerm selection or text-field selection) |
+| `Command V` | Paste from the clipboard into the focused view |
+| `Command Shift V` | Paste as Plain Text (terminal: bypass bracketed-paste wrapping) |
+| `Command X` | Cut (text fields only; disabled when a terminal pane is focused) |
+| `Command A` | Select All |
+
+Settings → Shell has an **Always paste as plain text** toggle that
+makes `Command V` skip the bracketed-paste wrapper too — useful when
+pasting large multi-line snippets into shells whose prompt rendering
+gets confused by `CSI 200~/201~` markers.
+
 ### Adding panes
 
 The number maps to the panel order for the current workspace kind. In a

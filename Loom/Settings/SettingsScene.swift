@@ -420,6 +420,7 @@ private struct EndpointEditor: View {
 
 private struct ShellSettings: View {
     @AppStorage("loom.shellIntegration") private var integrationEnabled: Bool = true
+    @AppStorage("loom.terminal.pasteAsPlainText") private var pasteAsPlainText: Bool = false
 
     var body: some View {
         Form {
@@ -433,6 +434,14 @@ private struct ShellSettings: View {
                 Text("Applies to terminals opened after the change. Currently-running terminals keep whichever mode they started with.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+            }
+
+            Section("Pasting") {
+                Toggle("Always paste as plain text", isOn: $pasteAsPlainText)
+
+                Text("⌘V skips SwiftTerm's bracketed-paste wrapping (CSI 200~/201~) and sends the clipboard string straight to the PTY. Use Edit → Paste as Plain Text (⇧⌘V) to do this once without flipping the toggle.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Files") {

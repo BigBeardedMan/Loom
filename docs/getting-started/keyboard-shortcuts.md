@@ -12,6 +12,20 @@ Loom is keyboard-first. Every shortcut below is wired in `Loom/App/LoomApp.swift
 
 Inside the ⌘K palette, **↑** walks back through the last 50 distinct commands (newest first) and **↓** walks forward, just like a shell prompt. Press ↩ on a populated entry to rerun it in the active terminal.
 
+## Edit (terminal & text fields)
+
+Standard macOS pasteboard items, routed through the responder chain so they target whatever has focus — a terminal pane, the ⌘K palette field, an `NSTextField`, etc.
+
+| Shortcut | Action |
+| -------- | ------ |
+| ⌘C | Copy the current selection (terminal selection or text-field selection) |
+| ⌘V | Paste from the clipboard into the focused view |
+| ⇧⌘V | Paste as plain text (terminal: bypass bracketed-paste wrapping) |
+| ⌘X | Cut (text fields only — disabled when a terminal pane is focused) |
+| ⌘A | Select All |
+
+Settings → Shell has an **Always paste as plain text** toggle that makes ⌘V skip the bracketed-paste wrapper too, so you don't have to reach for ⇧⌘V every time.
+
 ## Adding panes
 
 The number maps to the panel order for the current workspace kind. In a **Prompt** workspace the order is Terminal, Editor, Tasks, Agent — so ⌘⇧1 adds a terminal, ⌘⇧4 adds an agent. In an **Ideas** workspace ⌘⇧1 adds Notes, ⌘⇧2 adds Agent.

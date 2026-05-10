@@ -62,6 +62,41 @@ struct LoomApp: App {
                 Button("New Workspace…") { /* surfaced via sidebar */ }
                     .keyboardShortcut("n", modifiers: [.command])
             }
+            // Standard Edit-menu pasteboard items. These go through the
+            // responder chain via NSApp.sendAction(_, to: nil, …) so the
+            // active first responder handles them — SwiftTerm's
+            // LoomTerminalView for terminal panes, NSTextField for the
+            // command palette, etc. Paste as Plain Text (⇧⌘V) targets
+            // LoomTerminalView's pasteAsPlainText(_:) which bypasses
+            // bracketed-paste wrapping.
+            CommandGroup(replacing: .pasteboard) {
+                Button("Cut") {
+                    NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut("x", modifiers: [.command])
+
+                Button("Copy") {
+                    NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut("c", modifiers: [.command])
+
+                Button("Paste") {
+                    NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut("v", modifiers: [.command])
+
+                Button("Paste as Plain Text") {
+                    NSApp.sendAction(#selector(LoomTerminalView.pasteAsPlainText(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut("v", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button("Select All") {
+                    NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut("a", modifiers: [.command])
+            }
             CommandMenu("Add Block") {
                 ForEach(layout.currentKind.availablePanels) { panel in
                     Button("Add \(panel.label)") {

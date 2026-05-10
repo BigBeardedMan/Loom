@@ -252,6 +252,37 @@ final class LoomTerminalView: LocalProcessTerminalView {
         super.setFrameSize(newSize)
     }
 
+    // MARK: - Pasteboard
+
+    /// Send the clipboard's string contents straight into the PTY without
+    /// SwiftTerm's bracketed-paste wrapping. Wired to the Edit menu's
+    /// **Paste as Plain Text** (⇧⌘V) and reused by `paste(_:)` when the
+    /// "Always paste as plain text" toggle is on. Bracketed paste tells
+    /// readline-aware shells "this is one paste event"; bypassing it
+    /// avoids the CSI 200~/201~ markers that some apps render literally
+    /// when they don't recognize the sequence.
+    @objc func pasteAsPlainText(_ sender: Any) {
+        guard let text = NSPasteboard.general.string(forType: .string) else { return }
+        send(txt: text)
+    }
+
+    override func paste(_ sender: Any) {
+        if UserDefaults.standard.bool(forKey: "loom.terminal.pasteAsPlainText") {
+            pasteAsPlainText(sender)
+        } else {
+            super.paste(sender)
+        }
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(pasteAsPlainText(_:)) {
+            return NSPasteboard.general.string(forType: .string) != nil
+        }
+        return super.validateUserInterfaceItem(item)
+    }
+
+    // MARK: - Click-to-position
+
     private func installClickToPosition() {
         let recognizer = NSClickGestureRecognizer(
             target: self,
