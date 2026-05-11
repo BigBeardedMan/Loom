@@ -13,11 +13,13 @@ const statusTint: Record<string, string> = {
 type Props = {
   card: KanbanCardData;
   onDelete: () => void;
+  onEdit?: () => void;
 };
 
 // Mirrors KanbanCardView in Loom/Kanban/KanbanPaneView.swift.
 // Rounded card with status stripe + drag handle, 12/9 padding, hairline border.
-export function KanbanCard({ card, onDelete }: Props) {
+// Double-click opens the edit modal.
+export function KanbanCard({ card, onDelete, onEdit }: Props) {
   const tint = statusTint[card.statusRaw] ?? statusTint.todo;
   const completed = card.statusRaw === "complete";
   const cancelled = card.statusRaw === "cancelled";
@@ -29,6 +31,7 @@ export function KanbanCard({ card, onDelete }: Props) {
         e.dataTransfer.setData("loom/card-id", card.id);
         e.dataTransfer.effectAllowed = "move";
       }}
+      onDoubleClick={onEdit}
       className="group cursor-grab active:cursor-grabbing flex flex-col gap-1"
       style={{
         padding: "9px 12px",

@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { Icons } from "../../lib/icons";
-import { PaneTitleBar } from "../../components/PaneTitleBar";
+import { useApp } from "../../lib/store";
 import { ipc, type Workspace } from "../../lib/ipc";
 
+type Props = { workspace: Workspace; blockId?: string };
+
 // Mirrors Loom/Build/PreviewPaneView.swift.
-// Inky surface with PaneTitleBar; URL bar in body with refresh + go controls.
-export function PreviewPane({ workspace }: { workspace: Workspace }) {
+// URL bar with back/forward/refresh; iframe with white background.
+export function PreviewPane({ workspace, blockId }: Props) {
+  const setBlockStatus = useApp((s) => s.setBlockStatus);
   const [url, setUrl] = useState(workspace.previewUrl || "http://localhost:3000");
   const [draft, setDraft] = useState(url);
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -21,15 +24,13 @@ export function PreviewPane({ workspace }: { workspace: Workspace }) {
     await ipc.workspace.update(workspace.id, { previewUrl: next });
   };
 
+  useEffect(() => {
+    if (!blockId) return;
+    setBlockStatus(blockId, "idle");
+  }, [blockId, setBlockStatus]);
+
   return (
     <div className="flex h-full flex-col" style={{ background: "#050608" }}>
-      <PaneTitleBar
-        variant="dark"
-        icon={<Icons.eye size={11} strokeWidth={2} color="var(--color-ws-pink)" />}
-        title="Preview"
-        subtitle={url.replace(/^https?:\/\//, "")}
-      />
-
       <div
         className="flex items-center gap-1.5 flex-none"
         style={{

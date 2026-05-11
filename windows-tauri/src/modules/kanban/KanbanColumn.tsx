@@ -2,18 +2,19 @@ import { useState, type ReactNode } from "react";
 import { Icons } from "../../lib/icons";
 import { surface, text, radius } from "../../lib/theme";
 import { KanbanCard } from "./KanbanCard";
-import type { KanbanColumn as KanbanColumnData } from "../../lib/ipc";
+import type { KanbanCard as KanbanCardData, KanbanColumn as KanbanColumnData } from "../../lib/ipc";
 
 type Props = {
   column: KanbanColumnData;
   onAdd: (title: string) => Promise<void>;
   onMove: (cardId: string) => void;
   onDelete: (cardId: string) => void;
+  onEditCard?: (card: KanbanCardData) => void;
 };
 
 // Mirrors KanbanColumnView in Loom/Kanban/KanbanPaneView.swift.
 // 14 px rounded panel, header with count badge, vertical card list, add affordance.
-export function KanbanColumn({ column, onAdd, onMove, onDelete }: Props) {
+export function KanbanColumn({ column, onAdd, onMove, onDelete, onEditCard }: Props) {
   const [adding, setAdding] = useState(false);
 
   return (
@@ -51,6 +52,7 @@ export function KanbanColumn({ column, onAdd, onMove, onDelete }: Props) {
             key={card.id}
             card={card}
             onDelete={() => onDelete(card.id)}
+            onEdit={onEditCard ? () => onEditCard(card) : undefined}
           />
         ))}
         {adding ? (

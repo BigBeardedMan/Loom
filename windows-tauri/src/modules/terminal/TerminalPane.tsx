@@ -4,7 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { ipc, on, type Workspace } from "../../lib/ipc";
 import { Icons } from "../../lib/icons";
-import { PaneTitleBar } from "../../components/PaneTitleBar";
+import { useApp } from "../../lib/store";
 import { surface, text } from "../../lib/theme";
 
 type Session = {
@@ -15,9 +15,12 @@ type Session = {
   unlistenExit?: () => void;
 };
 
+type Props = { workspace: Workspace; blockId?: string };
+
 // Mirrors Loom/Terminal/TerminalPaneView.swift.
-// Inky black background (#04050A), PaneTitleBar header, tab strip beneath.
-export function TerminalPane({ workspace }: { workspace: Workspace }) {
+// Inky black surface, tab strip, foreground-command polling for status.
+export function TerminalPane({ workspace, blockId }: Props) {
+  const setBlockStatus = useApp((s) => s.setBlockStatus);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const hostsRef = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -31,9 +34,32 @@ export function TerminalPane({ workspace }: { workspace: Workspace }) {
         ipc.terminal.kill(s.id).catch(() => {});
         s.term.dispose();
       });
+      if (blockId) setBlockStatus(blockId, "idle");
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace.id]);
+
+  useEffect(() => {
+    if (!blockId) return;
+    if (!activeId) {
+      setBlockStatus(blockId, "idle");
+      return;
+    }
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const cmd = await ipc.terminal.foregroundCommand(activeId);
+        if (cancelled) return;
+        setBlockStatus(blockId, cmd ? "active" : "idle");
+      } catch {}
+    };
+    tick();
+    const id = setInterval(tick, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [activeId, blockId, setBlockStatus]);
 
   const spawn = async () => {
     const term = new Terminal({
@@ -131,39 +157,8 @@ export function TerminalPane({ workspace }: { workspace: Workspace }) {
     return () => window.removeEventListener("resize", onResize);
   }, [sessions, activeId]);
 
-  const cwd = workspace.folderPath || "~";
-
   return (
-    <div
-      className="flex h-full flex-col"
-      style={{ background: surface.terminal }}
-    >
-      <PaneTitleBar
-        variant="dark"
-        icon={
-          <Icons.terminal
-            size={11}
-            strokeWidth={2.4}
-            color="var(--color-ws-green)"
-          />
-        }
-        title="Terminal"
-        subtitle={cwd}
-        right={
-          <button
-            onClick={spawn}
-            aria-label="New terminal"
-            style={{
-              color: "rgba(255, 255, 255, 0.55)",
-              padding: 4,
-              borderRadius: 4,
-            }}
-          >
-            <Icons.addPane size={12} strokeWidth={1.8} />
-          </button>
-        }
-      />
-
+    <div className="flex h-full flex-col" style={{ background: surface.terminal }}>
       <div
         className="flex flex-none"
         style={{
@@ -183,9 +178,7 @@ export function TerminalPane({ workspace }: { workspace: Workspace }) {
                   fontSize: 11,
                   fontWeight: 500,
                   background:
-                    activeId === s.id
-                      ? surface.terminal
-                      : "transparent",
+                    activeId === s.id ? surface.terminal : "transparent",
                   color:
                     activeId === s.id
                       ? "rgba(255, 255, 255, 0.94)"
@@ -217,6 +210,16 @@ export function TerminalPane({ workspace }: { workspace: Workspace }) {
             ))}
           </div>
         </div>
+        <button
+          onClick={spawn}
+          aria-label="New terminal"
+          style={{
+            padding: "5px 10px",
+            color: "rgba(255, 255, 255, 0.55)",
+          }}
+        >
+          <Icons.plus size={12} strokeWidth={2.2} />
+        </button>
       </div>
 
       <div className="relative flex-1 min-h-0">

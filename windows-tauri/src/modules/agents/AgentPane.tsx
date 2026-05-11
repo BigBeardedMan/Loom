@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Icons } from "../../lib/icons";
-import { PaneTitleBar } from "../../components/PaneTitleBar";
+import { useApp } from "../../lib/store";
 import { ipc, on, type Workspace } from "../../lib/ipc";
 
 type Vendor = "claude" | "codex" | "gemini" | "ollama" | "anthropic";
@@ -21,16 +21,38 @@ const VENDORS: { value: Vendor; label: string }[] = [
   { value: "anthropic", label: "Anthropic API" },
 ];
 
+type Props = { workspace: Workspace; blockId?: string };
+
 // Mirrors Loom/Agents/AgentPaneView.swift.
-// PaneTitleBar with sparkles icon, vendor picker, model field, transcript, input bar.
-export function AgentPane({ workspace }: { workspace: Workspace }) {
-  const [vendor, setVendor] = useState<Vendor>("claude");
-  const [model, setModel] = useState("claude-sonnet-4-6");
+// Vendor picker, model field, transcript, input bar. Block title bar lives in BlockTitleBar.
+export function AgentPane({ workspace, blockId }: Props) {
+  const setBlockStatus = useApp((s) => s.setBlockStatus);
+  const [vendor, setVendor] = useState<Vendor>(
+    () => (localStorage.getItem(`loom.agent.vendor.${workspace.id}`) as Vendor) || "claude"
+  );
+  const [model, setModel] = useState(
+    () =>
+      localStorage.getItem(`loom.agent.model.${workspace.id}`) ||
+      "claude-sonnet-4-6"
+  );
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const cleanupRef = useRef<(() => void) | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    localStorage.setItem(`loom.agent.vendor.${workspace.id}`, vendor);
+  }, [vendor, workspace.id]);
+
+  useEffect(() => {
+    localStorage.setItem(`loom.agent.model.${workspace.id}`, model);
+  }, [model, workspace.id]);
+
+  useEffect(() => {
+    if (!blockId) return;
+    setBlockStatus(blockId, busy ? "active" : "idle");
+  }, [busy, blockId, setBlockStatus]);
 
   useEffect(() => () => cleanupRef.current?.(), []);
 
@@ -141,53 +163,52 @@ export function AgentPane({ workspace }: { workspace: Workspace }) {
 
   return (
     <div className="flex h-full flex-col" style={{ background: "#04050A" }}>
-      <PaneTitleBar
-        variant="dark"
-        icon={<Icons.sparkles size={11} strokeWidth={2} color="var(--color-ws-orange)" />}
-        title="Agent"
-        right={
-          <>
-            <select
-              data-no-drag
-              value={vendor}
-              onChange={(e) => setVendor(e.target.value as Vendor)}
-              className="focus:outline-none"
-              style={{
-                background: "rgba(255, 255, 255, 0.06)",
-                border: "1px solid rgba(255, 255, 255, 0.10)",
-                borderRadius: 4,
-                padding: "2px 6px",
-                fontSize: 11,
-                color: "rgba(255, 255, 255, 0.9)",
-              }}
-            >
-              {VENDORS.map((v) => (
-                <option key={v.value} value={v.value}>
-                  {v.label}
-                </option>
-              ))}
-            </select>
-            {vendor === "anthropic" && (
-              <input
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder="model"
-                className="focus:outline-none"
-                style={{
-                  background: "rgba(255, 255, 255, 0.06)",
-                  border: "1px solid rgba(255, 255, 255, 0.10)",
-                  borderRadius: 4,
-                  padding: "2px 6px",
-                  fontSize: 11,
-                  width: 130,
-                  color: "rgba(255, 255, 255, 0.9)",
-                  fontFamily: "var(--font-mono)",
-                }}
-              />
-            )}
-          </>
-        }
-      />
+      <div
+        className="flex items-center gap-2 flex-none"
+        style={{
+          padding: "6px 12px",
+          background: "rgba(0, 0, 0, 0.25)",
+          borderBottom: "1px solid rgba(255, 255, 255, 0.10)",
+        }}
+      >
+        <select
+          value={vendor}
+          onChange={(e) => setVendor(e.target.value as Vendor)}
+          className="focus:outline-none"
+          style={{
+            background: "rgba(255, 255, 255, 0.06)",
+            border: "1px solid rgba(255, 255, 255, 0.10)",
+            borderRadius: 4,
+            padding: "3px 8px",
+            fontSize: 11,
+            color: "rgba(255, 255, 255, 0.9)",
+          }}
+        >
+          {VENDORS.map((v) => (
+            <option key={v.value} value={v.value}>
+              {v.label}
+            </option>
+          ))}
+        </select>
+        {vendor === "anthropic" && (
+          <input
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder="model"
+            className="focus:outline-none"
+            style={{
+              background: "rgba(255, 255, 255, 0.06)",
+              border: "1px solid rgba(255, 255, 255, 0.10)",
+              borderRadius: 4,
+              padding: "3px 8px",
+              fontSize: 11,
+              width: 160,
+              color: "rgba(255, 255, 255, 0.9)",
+              fontFamily: "var(--font-mono)",
+            }}
+          />
+        )}
+      </div>
 
       <div
         ref={scrollRef}

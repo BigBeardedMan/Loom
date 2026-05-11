@@ -136,35 +136,3 @@ body {
   background: transparent !important;
 }
 
-.titlebar {
-  height: 38px;
-  -webkit-app-region: drag;
-}
-.titlebar button,
-.titlebar a,
-.titlebar [data-no-drag] {
-  -webkit-app-region: no-drag;
-}
-
-.window-control {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  cursor: pointer;
-  padding: 0;
-  transition: filter 120ms ease-out;
-}
-.window-control:hover {
-  filter: brightness(1.15);
-}
-.window-control svg {
-  opacity: 0;
-  transition: opacity 80ms ease-out;
-}
-.window-control:hover svg {
-  opacity: 0.6;
-}

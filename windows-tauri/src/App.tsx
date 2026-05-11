@@ -1,6 +1,6 @@
 import { useEffect } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useApp } from "./lib/store";
+import { useGlobalKeymap } from "./lib/keymap";
 import { WorkspaceSidebar } from "./modules/workspace/WorkspaceSidebar";
 import { WorkspaceView } from "./modules/workspace/WorkspaceView";
 import { CommandPalette } from "./modules/workspace/CommandPalette";
@@ -11,33 +11,15 @@ import { ipc } from "./lib/ipc";
 function App() {
   const loadWorkspaces = useApp((s) => s.loadWorkspaces);
   const setUpdatePill = useApp((s) => s.setUpdatePill);
-  const openPalette = useApp((s) => s.openPalette);
-  const closePalette = useApp((s) => s.closePalette);
-  const isPaletteOpen = useApp((s) => s.isPaletteOpen);
+
+  useGlobalKeymap();
 
   useEffect(() => {
     loadWorkspaces();
-    // Force native chrome off at runtime in case tauri.conf.json
-    // decorations:false didn't take effect on Windows ARM.
-    getCurrentWindow().setDecorations(false).catch(() => {});
+    const saved = localStorage.getItem("loom.theme");
+    if (saved === "light" || saved === "dark")
+      document.documentElement.setAttribute("data-theme", saved);
   }, [loadWorkspaces]);
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      const isMod = e.ctrlKey || e.metaKey;
-      if (isMod && (e.key === "k" || e.key === "K")) {
-        e.preventDefault();
-        if (isPaletteOpen) closePalette();
-        else openPalette();
-      }
-      if (e.key === "Escape" && isPaletteOpen) {
-        e.preventDefault();
-        closePalette();
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [openPalette, closePalette, isPaletteOpen]);
 
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | null = null;

@@ -3,11 +3,15 @@ import CodeMirror from "@uiw/react-codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import { EditorView } from "@codemirror/view";
 import { Icons } from "../../lib/icons";
+import { useApp } from "../../lib/store";
 import { ipc, type IdeaNote, type Workspace } from "../../lib/ipc";
+
+type Props = { workspace: Workspace; blockId?: string };
 
 // Mirrors Loom/Notes/NotesPaneView.swift.
 // Tab strip at top, editor below. Inky background, yellow lightbulb on active tab.
-export function NotesPane({ workspace }: { workspace: Workspace }) {
+export function NotesPane({ workspace, blockId }: Props) {
+  const setBlockStatus = useApp((s) => s.setBlockStatus);
   const [notes, setNotes] = useState<IdeaNote[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -50,6 +54,7 @@ export function NotesPane({ workspace }: { workspace: Workspace }) {
 
   const updateBody = async (body: string) => {
     if (!selected) return;
+    if (blockId) setBlockStatus(blockId, "active");
     const updated = await ipc.notes.upsert({
       id: selected.id,
       workspaceId: workspace.id,
@@ -57,6 +62,8 @@ export function NotesPane({ workspace }: { workspace: Workspace }) {
       body,
     });
     setNotes((prev) => prev.map((n) => (n.id === updated.id ? updated : n)));
+    if (blockId)
+      setTimeout(() => setBlockStatus(blockId, "idle"), 600);
   };
 
   const removeNote = async (id: string) => {

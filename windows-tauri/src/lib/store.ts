@@ -1,5 +1,13 @@
 import { create } from "zustand";
 import { ipc, type Workspace } from "./ipc";
+import {
+  loadLayout,
+  saveLayout,
+  newBlock,
+  type Block,
+  type Layout,
+  defaultLayout,
+} from "../modules/workspace/LayoutPersistence";
 
 export type Panel =
   | "terminal"
@@ -10,13 +18,20 @@ export type Panel =
   | "preview"
   | "commands";
 
+type UsageTool = "claude" | "codex" | "gemini" | null;
+
+type Theme = "system" | "light" | "dark";
+
 type AppState = {
   workspaces: Workspace[];
   selectedWorkspaceId: string | null;
-  activePanels: Panel[];
+  layout: Layout | null;
   isPaletteOpen: boolean;
   isSettingsOpen: boolean;
+  selectedUsageTool: UsageTool;
   updatePill: { version: string } | null;
+  blockStatus: Record<string, "idle" | "active" | "warning">;
+  theme: Theme;
 
   loadWorkspaces: () => Promise<void>;
   selectWorkspace: (id: string | null) => void;
@@ -27,47 +42,65 @@ type AppState = {
     kind: Workspace["kindRaw"]
   ) => Promise<Workspace>;
   deleteWorkspace: (id: string) => Promise<void>;
-  setActivePanels: (panels: Panel[]) => void;
+  addBlock: (kind: Panel) => Promise<void>;
+  removeBlock: (id: string) => Promise<void>;
+  reorderBlocks: (newOrder: Block[]) => Promise<void>;
+  resetLayout: () => Promise<void>;
+  setBlockStatus: (id: string, status: "idle" | "active" | "warning") => void;
   openPalette: () => void;
   closePalette: () => void;
   openSettings: () => void;
   closeSettings: () => void;
+  setUsageTool: (t: UsageTool) => void;
   setUpdatePill: (info: { version: string } | null) => void;
+  setTheme: (t: Theme) => void;
 };
 
-const KIND_PANELS: Record<Workspace["kindRaw"], Panel[]> = {
-  code: ["terminal", "editor", "tasks", "agent", "commands"],
-  ideas: ["notes", "agent"],
-  review: ["preview", "agent"],
-  build: ["preview", "agent"],
-};
+const SELECTED_WS_KEY = "loom.selectedWorkspaceId";
 
 export const useApp = create<AppState>((set, get) => ({
   workspaces: [],
-  selectedWorkspaceId: null,
-  activePanels: ["terminal", "editor", "tasks", "agent"],
+  selectedWorkspaceId: localStorage.getItem(SELECTED_WS_KEY),
+  layout: null,
   isPaletteOpen: false,
   isSettingsOpen: false,
+  selectedUsageTool: null,
   updatePill: null,
+  blockStatus: {},
+  theme: (localStorage.getItem("loom.theme") as Theme) || "system",
 
   loadWorkspaces: async () => {
     const list = await ipc.workspace.list();
     set({ workspaces: list });
-    if (!get().selectedWorkspaceId && list.length > 0) {
-      set({
-        selectedWorkspaceId: list[0].id,
-        activePanels: KIND_PANELS[list[0].kindRaw] ?? KIND_PANELS.code,
-      });
+    const current = get().selectedWorkspaceId;
+    const valid = list.find((w) => w.id === current);
+    const target = valid?.id ?? list[0]?.id ?? null;
+    if (target) {
+      const ws = list.find((w) => w.id === target)!;
+      const layout = await loadLayout(ws.id, ws.kindRaw);
+      set({ selectedWorkspaceId: target, layout });
+      if (target) localStorage.setItem(SELECTED_WS_KEY, target);
+    } else {
+      set({ selectedWorkspaceId: null, layout: null });
     }
   },
-  selectWorkspace: (id) => {
-    const ws = get().workspaces.find((w) => w.id === id);
-    set({
-      selectedWorkspaceId: id,
-      activePanels: ws ? KIND_PANELS[ws.kindRaw] ?? KIND_PANELS.code : [],
-    });
-    if (id) ipc.workspace.touchLastOpened(id).catch(() => {});
+
+  selectWorkspace: async (id) => {
+    set({ selectedWorkspaceId: id });
+    if (id) {
+      localStorage.setItem(SELECTED_WS_KEY, id);
+      ipc.workspace.touchLastOpened(id).catch(() => {});
+      const ws = get().workspaces.find((w) => w.id === id);
+      if (ws) {
+        const layout = await loadLayout(ws.id, ws.kindRaw);
+        set({ layout });
+      }
+    } else {
+      localStorage.removeItem(SELECTED_WS_KEY);
+      set({ layout: null });
+    }
   },
+
   createWorkspace: async (name, folderPath, colorName, kindRaw) => {
     const ws = await ipc.workspace.create({
       name,
@@ -75,13 +108,17 @@ export const useApp = create<AppState>((set, get) => ({
       colorName,
       kindRaw,
     });
+    const layout = defaultLayout(kindRaw);
+    await saveLayout(ws.id, layout);
     set((s) => ({
       workspaces: [ws, ...s.workspaces],
       selectedWorkspaceId: ws.id,
-      activePanels: KIND_PANELS[ws.kindRaw] ?? KIND_PANELS.code,
+      layout,
     }));
+    localStorage.setItem(SELECTED_WS_KEY, ws.id);
     return ws;
   },
+
   deleteWorkspace: async (id) => {
     await ipc.workspace.delete(id);
     set((s) => {
@@ -90,22 +127,76 @@ export const useApp = create<AppState>((set, get) => ({
         s.selectedWorkspaceId === id
           ? remaining[0]?.id ?? null
           : s.selectedWorkspaceId;
-      const nextWs = remaining.find((w) => w.id === nextId);
+      if (nextId) localStorage.setItem(SELECTED_WS_KEY, nextId);
+      else localStorage.removeItem(SELECTED_WS_KEY);
       return {
         workspaces: remaining,
         selectedWorkspaceId: nextId,
-        activePanels: nextWs
-          ? KIND_PANELS[nextWs.kindRaw] ?? KIND_PANELS.code
-          : [],
+        layout: null,
       };
     });
+    const next = get().selectedWorkspaceId;
+    if (next) {
+      const ws = get().workspaces.find((w) => w.id === next);
+      if (ws) {
+        const layout = await loadLayout(ws.id, ws.kindRaw);
+        set({ layout });
+      }
+    }
   },
-  setActivePanels: (panels) => set({ activePanels: panels }),
+
+  addBlock: async (kind) => {
+    const wsId = get().selectedWorkspaceId;
+    const current = get().layout;
+    if (!wsId || !current) return;
+    const next: Layout = { blocks: [...current.blocks, newBlock(kind)] };
+    set({ layout: next });
+    await saveLayout(wsId, next);
+  },
+
+  removeBlock: async (id) => {
+    const wsId = get().selectedWorkspaceId;
+    const current = get().layout;
+    if (!wsId || !current) return;
+    const next: Layout = {
+      blocks: current.blocks.filter((b) => b.id !== id),
+    };
+    set({ layout: next });
+    await saveLayout(wsId, next);
+  },
+
+  reorderBlocks: async (newOrder) => {
+    const wsId = get().selectedWorkspaceId;
+    if (!wsId) return;
+    const next: Layout = { blocks: newOrder };
+    set({ layout: next });
+    await saveLayout(wsId, next);
+  },
+
+  resetLayout: async () => {
+    const wsId = get().selectedWorkspaceId;
+    const ws = get().workspaces.find((w) => w.id === wsId);
+    if (!wsId || !ws) return;
+    const layout = defaultLayout(ws.kindRaw);
+    set({ layout });
+    await saveLayout(wsId, layout);
+  },
+
+  setBlockStatus: (id, status) =>
+    set((s) => ({ blockStatus: { ...s.blockStatus, [id]: status } })),
+
   openPalette: () => set({ isPaletteOpen: true }),
   closePalette: () => set({ isPaletteOpen: false }),
   openSettings: () => set({ isSettingsOpen: true }),
   closeSettings: () => set({ isSettingsOpen: false }),
+  setUsageTool: (t) => set({ selectedUsageTool: t }),
   setUpdatePill: (info) => set({ updatePill: info }),
+  setTheme: (t) => {
+    localStorage.setItem("loom.theme", t);
+    if (t === "system") document.documentElement.removeAttribute("data-theme");
+    else document.documentElement.setAttribute("data-theme", t);
+    set({ theme: t });
+  },
 }));
 
 export const workspaceColorClass: Record<Workspace["colorName"], string> = {

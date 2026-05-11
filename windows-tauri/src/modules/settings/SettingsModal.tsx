@@ -4,7 +4,7 @@ import { useApp } from "../../lib/store";
 import { ipc, type McpServer } from "../../lib/ipc";
 import { modal, radius, surface, text } from "../../lib/theme";
 
-type Tab = "appearance" | "providers" | "mcp" | "shell" | "about";
+type Tab = "appearance" | "providers" | "mcp" | "shell" | "tasks" | "advanced" | "about";
 
 // Mirrors Loom/Settings/SettingsScene.swift.
 // 620x460 sheet, blurred backdrop, tab rail at 140px on the left.
@@ -66,6 +66,8 @@ export function SettingsModal() {
               ["providers", "AI Providers"],
               ["mcp", "MCP Servers"],
               ["shell", "Shell"],
+              ["tasks", "Tasks"],
+              ["advanced", "Advanced"],
               ["about", "About"],
             ] as [Tab, string][]
           ).map(([id, label]) => (
@@ -94,6 +96,8 @@ export function SettingsModal() {
           {tab === "providers" && <ProvidersPanel />}
           {tab === "mcp" && <McpPanel />}
           {tab === "shell" && <ShellPanel />}
+          {tab === "tasks" && <TasksPanel />}
+          {tab === "advanced" && <AdvancedPanel />}
           {tab === "about" && <AboutPanel />}
         </main>
       </div>
@@ -125,21 +129,8 @@ function Hint({ children }: { children: React.ReactNode }) {
 }
 
 function AppearancePanel() {
-  const [mode, setMode] = useState<"system" | "light" | "dark">(() => {
-    const saved = localStorage.getItem("loom.theme");
-    if (saved === "light" || saved === "dark" || saved === "system") return saved;
-    return "system";
-  });
-
-  useEffect(() => {
-    localStorage.setItem("loom.theme", mode);
-    const root = document.documentElement;
-    if (mode === "system") {
-      root.removeAttribute("data-theme");
-    } else {
-      root.setAttribute("data-theme", mode);
-    }
-  }, [mode]);
+  const mode = useApp((s) => s.theme);
+  const setMode = useApp((s) => s.setTheme);
 
   const opts: { value: typeof mode; label: string; icon: keyof typeof Icons }[] = [
     { value: "system", label: "System", icon: "appearanceSystem" },
@@ -377,6 +368,105 @@ function ShellPanel() {
           Wrote to <code style={{ fontFamily: "var(--font-mono)" }}>{path}</code>
         </div>
       )}
+    </div>
+  );
+}
+
+function TasksPanel() {
+  const [defaultAgent, setDefaultAgent] = useState(() =>
+    localStorage.getItem("loom.tasks.defaultAgent") || "Loom Agent"
+  );
+  const [saved, setSaved] = useState(false);
+
+  const save = () => {
+    localStorage.setItem("loom.tasks.defaultAgent", defaultAgent);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1400);
+  };
+
+  return (
+    <div>
+      <H2>Tasks</H2>
+      <Hint>
+        Defaults applied to new Kanban cards. Per-card overrides still win.
+      </Hint>
+      <label style={{ fontSize: 11, color: text.muted, display: "block", marginBottom: 6 }}>
+        Default agent
+      </label>
+      <input
+        value={defaultAgent}
+        onChange={(e) => setDefaultAgent(e.target.value)}
+        className="w-full focus:outline-none"
+        style={{
+          background: "var(--color-loom-bg-from)",
+          border: `1px solid ${surface.hairline}`,
+          borderRadius: 8,
+          padding: "8px 12px",
+          fontSize: 13,
+          color: text.primary,
+          marginBottom: 12,
+        }}
+      />
+      <button
+        onClick={save}
+        className="flex items-center gap-1.5"
+        style={{
+          background: "var(--color-loom-accent)",
+          color: "white",
+          borderRadius: 8,
+          padding: "6px 14px",
+          fontSize: 12,
+          fontWeight: 500,
+          border: "none",
+        }}
+      >
+        {saved && <Icons.check size={12} strokeWidth={2.4} />}
+        {saved ? "Saved" : "Save"}
+      </button>
+    </div>
+  );
+}
+
+function AdvancedPanel() {
+  const [confirming, setConfirming] = useState(false);
+
+  const resetAll = async () => {
+    if (!confirming) {
+      setConfirming(true);
+      setTimeout(() => setConfirming(false), 3500);
+      return;
+    }
+    // Clear localStorage keys; SQLite data lives in %APPDATA%\Loom\loom.db
+    // which a clean uninstall removes. Frontend prefs are localStorage.
+    const keysToKeep = ["loom.theme"];
+    const all = Object.keys(localStorage);
+    for (const k of all) {
+      if (!keysToKeep.includes(k)) localStorage.removeItem(k);
+    }
+    location.reload();
+  };
+
+  return (
+    <div>
+      <H2>Advanced</H2>
+      <Hint>
+        Data lives in <code style={{ fontFamily: "var(--font-mono)" }}>%APPDATA%\Loom\loom.db</code> (SQLite) and Windows
+        Credential Manager (API keys). Logs in <code style={{ fontFamily: "var(--font-mono)" }}>%APPDATA%\Loom\logs\</code>.
+      </Hint>
+      <button
+        onClick={resetAll}
+        style={{
+          background: confirming ? "var(--color-ws-orange)" : "transparent",
+          color: confirming ? "#fff" : text.muted,
+          border: `1px solid ${confirming ? "var(--color-ws-orange)" : surface.hairline}`,
+          borderRadius: 8,
+          padding: "6px 14px",
+          fontSize: 12,
+          fontWeight: 500,
+        }}
+      >
+        {confirming ? "Click again to confirm: clears local UI state" : "Reset local UI state"}
+      </button>
     </div>
   );
 }
