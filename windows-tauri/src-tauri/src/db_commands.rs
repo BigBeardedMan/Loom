@@ -1,4 +1,4 @@
-use crate::db::{kanban, notes, workspace};
+use crate::db::{endpoints, kanban, notes, workspace};
 use crate::state::AppState;
 use tauri::State;
 
@@ -123,4 +123,89 @@ pub async fn note_delete(
     id: String,
 ) -> Result<(), String> {
     notes::delete(&state.db, &id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn endpoint_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<endpoints::LocalEndpoint>, String> {
+    endpoints::list(&state.db).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn endpoint_upsert(
+    state: State<'_, AppState>,
+    input: endpoints::EndpointInput,
+) -> Result<endpoints::LocalEndpoint, String> {
+    endpoints::upsert(&state.db, input).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn endpoint_delete(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    endpoints::delete(&state.db, &id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn endpoint_test(
+    state: State<'_, AppState>,
+    id: String,
+    auth_token: Option<String>,
+) -> Result<EndpointTestResult, String> {
+    let endpoint = endpoints::get(&state.db, &id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("endpoint {id} not found"))?;
+    let probe_path = match endpoint.kind.as_str() {
+        "ollama" => "/api/tags",
+        _ => "/v1/models",
+    };
+    let url = format!(
+        "{}{}",
+        endpoint.base_url.trim_end_matches('/'),
+        probe_path
+    );
+    let client = reqwest::Client::builder()
+        .user_agent(format!("Loom/{}", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut req = client.get(&url);
+    if endpoint.requires_auth {
+        if let Some(token) = auth_token.as_deref().filter(|s| !s.is_empty()) {
+            req = req.bearer_auth(token);
+        }
+    }
+    match req.send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            if status.is_success() {
+                Ok(EndpointTestResult {
+                    ok: true,
+                    status: status.as_u16(),
+                    message: "OK".to_string(),
+                })
+            } else {
+                Ok(EndpointTestResult {
+                    ok: false,
+                    status: status.as_u16(),
+                    message: format!("HTTP {status}"),
+                })
+            }
+        }
+        Err(e) => Ok(EndpointTestResult {
+            ok: false,
+            status: 0,
+            message: e.to_string(),
+        }),
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EndpointTestResult {
+    pub ok: bool,
+    pub status: u16,
+    pub message: String,
 }

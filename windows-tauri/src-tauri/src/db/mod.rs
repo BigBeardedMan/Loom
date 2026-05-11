@@ -1,3 +1,4 @@
+pub mod endpoints;
 pub mod kanban;
 pub mod notes;
 pub mod workspace;
@@ -36,6 +37,7 @@ impl Db {
         let migrations = Migrations::new(vec![
             M::up(include_str!("../../migrations/001_init.sql")),
             M::up(include_str!("../../migrations/002_command_history.sql")),
+            M::up(include_str!("../../migrations/003_local_endpoints.sql")),
         ]);
         let mut conn = pool.get()?;
         migrations.to_latest(&mut conn).context("apply migrations")?;

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Icons } from "../../lib/icons";
 import { useApp } from "../../lib/store";
-import { ipc, type McpServer } from "../../lib/ipc";
+import { ipc, type LocalEndpoint, type McpServer } from "../../lib/ipc";
 import { modal, radius, surface, text } from "../../lib/theme";
 
 type Tab = "appearance" | "providers" | "mcp" | "shell" | "tasks" | "advanced" | "about";
@@ -184,6 +184,10 @@ function ProvidersPanel() {
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [endpoints, setEndpoints] = useState<LocalEndpoint[]>([]);
+  const [editing, setEditing] = useState<EndpointDraft | null>(null);
+
+  const refresh = () => ipc.endpoints.list().then(setEndpoints).catch(() => {});
 
   useEffect(() => {
     ipc.keychain
@@ -193,6 +197,7 @@ function ProvidersPanel() {
         setLoaded(true);
       })
       .catch(() => setLoaded(true));
+    refresh();
   }, []);
 
   const save = async () => {
@@ -207,53 +212,500 @@ function ProvidersPanel() {
     }
   };
 
+  const deleteEndpoint = async (id: string, name: string) => {
+    if (!confirm(`Delete endpoint "${name}"?`)) return;
+    await ipc.endpoints.delete(id);
+    await ipc.keychain.delete("loom.endpoint", id).catch(() => {});
+    refresh();
+  };
+
   if (!loaded) return <div style={{ fontSize: 12, color: text.muted }}>Loading…</div>;
 
   return (
-    <div>
-      <H2>AI Providers</H2>
-      <Hint>
-        Keys stored in Windows Credential Manager. Empty value removes the entry.
-      </Hint>
-      <label style={{ fontSize: 11, color: text.muted, display: "block", marginBottom: 6 }}>
-        Anthropic API key
-      </label>
-      <input
-        type="password"
-        value={anthropic}
-        onChange={(e) => setAnthropic(e.target.value)}
-        placeholder="sk-ant-…"
-        className="w-full focus:outline-none"
+    <div className="flex flex-col gap-5">
+      <section>
+        <H2>Anthropic API</H2>
+        <Hint>Stored in Windows Credential Manager. Empty value removes the entry.</Hint>
+        <label style={{ fontSize: 11, color: text.muted, display: "block", marginBottom: 6 }}>
+          API key
+        </label>
+        <input
+          type="password"
+          value={anthropic}
+          onChange={(e) => setAnthropic(e.target.value)}
+          placeholder="sk-ant-…"
+          className="w-full focus:outline-none"
+          style={{
+            background: "var(--color-loom-bg-from)",
+            border: `1px solid ${surface.hairline}`,
+            borderRadius: 8,
+            padding: "8px 12px",
+            fontSize: 13,
+            color: text.primary,
+            fontFamily: "var(--font-mono)",
+            marginBottom: 10,
+          }}
+        />
+        <button
+          onClick={save}
+          disabled={saving}
+          className="flex items-center gap-1.5"
+          style={{
+            background: "var(--color-loom-accent)",
+            color: "white",
+            borderRadius: 8,
+            padding: "6px 14px",
+            fontSize: 12,
+            fontWeight: 500,
+            border: "none",
+            opacity: saving ? 0.5 : 1,
+          }}
+        >
+          {saving && <Icons.spinner size={12} className="animate-spin" />}
+          {saved && <Icons.check size={12} strokeWidth={2.4} />}
+          {saved ? "Saved" : "Save"}
+        </button>
+      </section>
+
+      <section>
+        <div className="flex items-center gap-2" style={{ marginBottom: 4 }}>
+          <H2>Local endpoints</H2>
+          <button
+            onClick={() =>
+              setEditing({
+                name: "",
+                baseUrl: "",
+                kind: "ollama",
+                defaultModel: "",
+                requiresAuth: false,
+                authToken: "",
+              })
+            }
+            style={{
+              marginLeft: "auto",
+              padding: "4px 10px",
+              fontSize: 11,
+              borderRadius: 6,
+              background: "var(--color-loom-accent)",
+              color: "white",
+              border: 0,
+            }}
+          >
+            + Add endpoint
+          </button>
+        </div>
+        <Hint>
+          Add an Ollama (<code>http://localhost:11434</code>) or any OpenAI-compatible base URL.
+          Auth tokens (if any) live in Credential Manager.
+        </Hint>
+        {endpoints.length === 0 ? (
+          <div
+            style={{
+              padding: "10px 12px",
+              border: `1px dashed ${surface.hairline}`,
+              borderRadius: 8,
+              fontSize: 12,
+              color: text.muted,
+              textAlign: "center",
+            }}
+          >
+            No endpoints yet.
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {endpoints.map((e) => (
+              <EndpointRow
+                key={e.id}
+                endpoint={e}
+                onEdit={() =>
+                  setEditing({
+                    id: e.id,
+                    name: e.name,
+                    baseUrl: e.baseUrl,
+                    kind: e.kind,
+                    defaultModel: e.defaultModel,
+                    requiresAuth: e.requiresAuth,
+                    authToken: "",
+                  })
+                }
+                onDelete={() => deleteEndpoint(e.id, e.name)}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {editing && (
+        <EndpointEditor
+          draft={editing}
+          onCancel={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            refresh();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+type EndpointDraft = {
+  id?: string;
+  name: string;
+  baseUrl: string;
+  kind: "ollama" | "openai-compat";
+  defaultModel: string;
+  requiresAuth: boolean;
+  authToken: string;
+};
+
+function EndpointRow({
+  endpoint,
+  onEdit,
+  onDelete,
+}: {
+  endpoint: LocalEndpoint;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const test = async () => {
+    setTesting(true);
+    setResult(null);
+    try {
+      const token = endpoint.requiresAuth
+        ? (await ipc.keychain.get("loom.endpoint", endpoint.id).catch(() => null)) ?? undefined
+        : undefined;
+      const r = await ipc.endpoints.test(endpoint.id, token);
+      setResult({ ok: r.ok, message: r.message });
+    } catch (e) {
+      setResult({ ok: false, message: String(e) });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        padding: "10px 12px",
+        background: "rgba(255,255,255,0.04)",
+        border: `1px solid ${surface.hairline}`,
+        borderRadius: 8,
+      }}
+    >
+      <div className="flex items-center gap-2">
+        <span style={{ fontSize: 12, fontWeight: 600, color: text.primary }}>{endpoint.name}</span>
+        <span
+          style={{
+            fontSize: 10,
+            padding: "1px 6px",
+            borderRadius: 999,
+            background: surface.softPanel,
+            color: text.muted,
+            textTransform: "uppercase",
+            letterSpacing: 0.4,
+            fontWeight: 600,
+          }}
+        >
+          {endpoint.kind}
+        </span>
+        <button
+          onClick={test}
+          disabled={testing}
+          className="ml-auto"
+          style={{
+            padding: "3px 8px",
+            fontSize: 10,
+            borderRadius: 6,
+            background: "rgba(255,255,255,0.06)",
+            border: `1px solid ${surface.hairline}`,
+            color: text.primary,
+            opacity: testing ? 0.5 : 1,
+          }}
+        >
+          {testing ? "Testing…" : "Test"}
+        </button>
+        <button
+          onClick={onEdit}
+          style={{
+            padding: "3px 8px",
+            fontSize: 10,
+            borderRadius: 6,
+            background: "rgba(255,255,255,0.06)",
+            border: `1px solid ${surface.hairline}`,
+            color: text.primary,
+          }}
+        >
+          Edit
+        </button>
+        <button
+          onClick={onDelete}
+          aria-label="Delete endpoint"
+          style={{
+            padding: 4,
+            borderRadius: 6,
+            color: text.tertiary,
+          }}
+        >
+          <Icons.trash size={11} strokeWidth={2} />
+        </button>
+      </div>
+      <div
         style={{
-          background: "var(--color-loom-bg-from)",
-          border: `1px solid ${surface.hairline}`,
-          borderRadius: 8,
-          padding: "8px 12px",
-          fontSize: 13,
-          color: text.primary,
+          fontSize: 11,
+          color: text.muted,
           fontFamily: "var(--font-mono)",
-          marginBottom: 12,
-        }}
-      />
-      <button
-        onClick={save}
-        disabled={saving}
-        className="flex items-center gap-1.5"
-        style={{
-          background: "var(--color-loom-accent)",
-          color: "white",
-          borderRadius: 8,
-          padding: "6px 14px",
-          fontSize: 12,
-          fontWeight: 500,
-          border: "none",
-          opacity: saving ? 0.5 : 1,
+          marginTop: 4,
+          wordBreak: "break-all",
         }}
       >
-        {saving && <Icons.spinner size={12} className="animate-spin" />}
-        {saved && <Icons.check size={12} strokeWidth={2.4} />}
-        {saved ? "Saved" : "Save"}
-      </button>
+        {endpoint.baseUrl}
+        {endpoint.defaultModel && ` · ${endpoint.defaultModel}`}
+      </div>
+      {result && (
+        <div
+          style={{
+            marginTop: 6,
+            fontSize: 11,
+            color: result.ok ? "var(--color-ws-green)" : "rgb(242,99,46)",
+          }}
+        >
+          {result.ok ? "✓ " : "✕ "}
+          {result.message}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EndpointEditor({
+  draft,
+  onCancel,
+  onSaved,
+}: {
+  draft: EndpointDraft;
+  onCancel: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(draft.name);
+  const [baseUrl, setBaseUrl] = useState(draft.baseUrl);
+  const [kind, setKind] = useState<"ollama" | "openai-compat">(draft.kind);
+  const [defaultModel, setDefaultModel] = useState(draft.defaultModel);
+  const [requiresAuth, setRequiresAuth] = useState(draft.requiresAuth);
+  const [authToken, setAuthToken] = useState(draft.authToken);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async () => {
+    if (!name.trim() || !baseUrl.trim()) {
+      setError("Name and base URL are required.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const saved = await ipc.endpoints.upsert({
+        id: draft.id,
+        name: name.trim(),
+        baseUrl: baseUrl.trim(),
+        kind,
+        defaultModel: defaultModel.trim(),
+        requiresAuth,
+      });
+      if (requiresAuth && authToken) {
+        await ipc.keychain.set("loom.endpoint", saved.id, authToken);
+      } else if (!requiresAuth) {
+        await ipc.keychain.delete("loom.endpoint", saved.id).catch(() => {});
+      }
+      onSaved();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 flex items-center justify-center"
+      style={{ background: "rgba(0,0,0,0.45)", zIndex: 80 }}
+      onClick={onCancel}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 420,
+          background: "var(--color-loom-panel)",
+          color: "var(--color-loom-text)",
+          border: `1px solid ${surface.hairline}`,
+          borderRadius: 14,
+          padding: 18,
+          boxShadow: "0 20px 50px rgba(0,0,0,0.45)",
+        }}
+      >
+        <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>
+          {draft.id ? "Edit endpoint" : "New endpoint"}
+        </h3>
+        <div className="flex flex-col gap-2.5">
+          <Field label="Name">
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Local Ollama"
+              style={fieldStyle}
+            />
+          </Field>
+          <Field label="Kind">
+            <div className="flex gap-1.5">
+              {(["ollama", "openai-compat"] as const).map((k) => (
+                <button
+                  key={k}
+                  onClick={() => setKind(k)}
+                  style={{
+                    flex: 1,
+                    padding: "5px 8px",
+                    fontSize: 11,
+                    borderRadius: 6,
+                    border: `1px solid ${
+                      k === kind ? "var(--color-loom-accent)" : surface.hairline
+                    }`,
+                    background:
+                      k === kind
+                        ? "color-mix(in srgb, var(--color-loom-accent) 12%, transparent)"
+                        : "transparent",
+                    color: k === kind ? text.primary : text.muted,
+                  }}
+                >
+                  {k === "ollama" ? "Ollama" : "OpenAI-compatible"}
+                </button>
+              ))}
+            </div>
+          </Field>
+          <Field label="Base URL">
+            <input
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder={
+                kind === "ollama" ? "http://localhost:11434" : "https://api.example.com"
+              }
+              style={fieldStyle}
+            />
+          </Field>
+          <Field label="Default model (optional)">
+            <input
+              value={defaultModel}
+              onChange={(e) => setDefaultModel(e.target.value)}
+              placeholder={kind === "ollama" ? "llama3.2" : "gpt-4o-mini"}
+              style={fieldStyle}
+            />
+          </Field>
+          <label className="flex items-center gap-2" style={{ fontSize: 12, color: text.primary }}>
+            <input
+              type="checkbox"
+              checked={requiresAuth}
+              onChange={(e) => setRequiresAuth(e.target.checked)}
+              style={{ accentColor: "var(--color-loom-accent)" }}
+            />
+            Requires bearer token
+          </label>
+          {requiresAuth && (
+            <Field label="Token">
+              <input
+                type="password"
+                value={authToken}
+                onChange={(e) => setAuthToken(e.target.value)}
+                placeholder="sk-…"
+                style={{ ...fieldStyle, fontFamily: "var(--font-mono)" }}
+              />
+              {draft.id && (
+                <div style={{ fontSize: 10, color: text.tertiary, marginTop: 4 }}>
+                  Leave blank to keep the existing token.
+                </div>
+              )}
+            </Field>
+          )}
+          {error && (
+            <div
+              style={{
+                padding: "6px 10px",
+                background: "rgba(242,70,32,0.15)",
+                border: "1px solid rgba(242,70,32,0.4)",
+                borderRadius: 6,
+                fontSize: 11,
+                color: "rgba(255,160,140,0.9)",
+              }}
+            >
+              {error}
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end gap-2" style={{ marginTop: 12 }}>
+          <button
+            onClick={onCancel}
+            style={{
+              padding: "6px 14px",
+              fontSize: 12,
+              borderRadius: 8,
+              background: "rgba(255,255,255,0.06)",
+              border: `1px solid ${surface.hairline}`,
+              color: text.primary,
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={save}
+            disabled={busy}
+            style={{
+              padding: "6px 14px",
+              fontSize: 12,
+              fontWeight: 600,
+              borderRadius: 8,
+              background: "var(--color-loom-accent)",
+              color: "white",
+              border: 0,
+              opacity: busy ? 0.5 : 1,
+            }}
+          >
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const fieldStyle: React.CSSProperties = {
+  width: "100%",
+  background: "var(--color-loom-bg-from)",
+  border: `1px solid var(--color-loom-hairline)`,
+  borderRadius: 6,
+  padding: "5px 8px",
+  fontSize: 12,
+  color: "var(--color-loom-text)",
+  outline: "none",
+};
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label
+        style={{
+          fontSize: 11,
+          color: "var(--color-loom-text-muted, rgba(255,255,255,0.5))",
+          display: "block",
+          marginBottom: 4,
+        }}
+      >
+        {label}
+      </label>
+      {children}
     </div>
   );
 }

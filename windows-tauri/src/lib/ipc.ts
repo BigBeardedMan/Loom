@@ -251,6 +251,15 @@ export const ipc = {
       invoke<string>("command_history_read_output", { path }),
   },
 
+  endpoints: {
+    list: () => invoke<LocalEndpoint[]>("endpoint_list"),
+    upsert: (input: EndpointInput) =>
+      invoke<LocalEndpoint>("endpoint_upsert", { input }),
+    delete: (id: string) => invoke<void>("endpoint_delete", { id }),
+    test: (id: string, authToken?: string) =>
+      invoke<EndpointTestResult>("endpoint_test", { id, authToken }),
+  },
+
   usage: {
     read: (tool: "claude" | "codex" | "gemini", timeframe: "day" | "week" | "month" | "year") =>
       invoke<CliToolUsage>("usage_read", { tool, timeframe }),
@@ -296,6 +305,32 @@ export type CommandRecord = {
   endedAt: number;
   durationMs: number;
   outputPath: string | null;
+};
+
+export type LocalEndpoint = {
+  id: string;
+  name: string;
+  baseUrl: string;
+  kind: "ollama" | "openai-compat";
+  defaultModel: string;
+  requiresAuth: boolean;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type EndpointInput = {
+  id?: string;
+  name: string;
+  baseUrl: string;
+  kind: "ollama" | "openai-compat";
+  defaultModel?: string;
+  requiresAuth?: boolean;
+};
+
+export type EndpointTestResult = {
+  ok: boolean;
+  status: number;
+  message: string;
 };
 
 export type UsageBucket = {
