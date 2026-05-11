@@ -53,15 +53,16 @@ export function WorkspaceView() {
   const usageTool = useApp((s) => s.selectedUsageTool);
   const workspace = workspaces.find((w) => w.id === selectedId);
 
-  if (usageTool) {
-    return <UsageView tool={usageTool} />;
-  }
-
+  // All hooks must run on every render — keep these above the early returns
+  // so React's hook-order invariant holds when the usage dashboard toggles.
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
   );
-
   const blockIds = useMemo(() => layout?.blocks.map((b) => b.id) ?? [], [layout]);
+
+  if (usageTool) {
+    return <UsageView tool={usageTool} />;
+  }
 
   if (!workspace) {
     return (
