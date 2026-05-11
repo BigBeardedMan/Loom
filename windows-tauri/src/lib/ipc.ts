@@ -244,6 +244,13 @@ export const ipc = {
     installIntegration: () => invoke<string>("shell_integration_install"),
   },
 
+  commandHistory: {
+    list: (workspacePath?: string) =>
+      invoke<CommandRecord[]>("command_history_list", { workspacePath }),
+    readOutput: (path: string) =>
+      invoke<string>("command_history_read_output", { path }),
+  },
+
   usage: {
     read: (tool: "claude" | "codex" | "gemini", timeframe: "day" | "week" | "month" | "year") =>
       invoke<CliToolUsage>("usage_read", { tool, timeframe }),
@@ -277,6 +284,18 @@ export type CrashReport = {
   arch: string;
   timestamp: string;
   body: string;
+};
+
+export type CommandRecord = {
+  id: string;
+  command: string;
+  cwd: string;
+  shell: string;
+  exitCode: number;
+  startedAt: number;
+  endedAt: number;
+  durationMs: number;
+  outputPath: string | null;
 };
 
 export type UsageBucket = {

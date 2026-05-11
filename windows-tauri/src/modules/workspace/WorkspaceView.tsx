@@ -28,6 +28,7 @@ import { cockpit, text } from "../../lib/theme";
 import type { Block } from "./LayoutPersistence";
 import type { Workspace } from "../../lib/ipc";
 import { UsageView } from "../usage/UsageView";
+import { CommandsPane } from "../commands/CommandsPane";
 
 const PANEL_LABEL: Record<Panel, string> = {
   terminal: "Terminal",
@@ -230,14 +231,7 @@ function BlockContent({
     case "preview":
       return <PreviewPane workspace={workspace} blockId={blockId} />;
     case "commands":
-      return (
-        <div
-          className="flex h-full items-center justify-center"
-          style={{ color: text.tertiary, fontSize: 12, padding: 24 }}
-        >
-          Commands pane coming soon.
-        </div>
-      );
+      return <CommandsPane workspace={workspace} blockId={blockId} />;
     default:
       return null;
   }

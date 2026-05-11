@@ -86,6 +86,8 @@ pub fn run() {
             terminal::commands::terminal_list,
             terminal::commands::terminal_set_cwd,
             terminal::commands::terminal_foreground_command,
+            terminal::command_history::command_history_list,
+            terminal::command_history::command_history_read_output,
             fs_walk::fs_walk_tree,
             fs_walk::fs_read_file,
             fs_walk::fs_write_file,
