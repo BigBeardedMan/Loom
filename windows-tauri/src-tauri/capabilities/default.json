@@ -1,0 +1,69 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Loom main window capability set",
+  "windows": ["main", "settings", "about", "preview-*"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:default",
+    "core:webview:default",
+    "core:app:allow-version",
+    "core:app:allow-name",
+    "core:path:default",
+
+    "shell:default",
+    "shell:allow-open",
+
+    "dialog:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "dialog:allow-message",
+    "dialog:allow-ask",
+    "dialog:allow-confirm",
+
+    "fs:default",
+    "fs:allow-home-read-recursive",
+    "fs:allow-home-write-recursive",
+    "fs:allow-appdata-read-recursive",
+    "fs:allow-appdata-write-recursive",
+    "fs:allow-appconfig-read-recursive",
+    "fs:allow-appconfig-write-recursive",
+
+    "os:default",
+    "os:allow-platform",
+    "os:allow-version",
+    "os:allow-os-type",
+    "os:allow-arch",
+    "os:allow-locale",
+
+    "process:default",
+    "process:allow-exit",
+    "process:allow-restart",
+
+    "clipboard-manager:default",
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text",
+
+    "http:default",
+    {
+      "identifier": "http:allow-fetch",
+      "allow": [
+        { "url": "https://api.anthropic.com/*" },
+        { "url": "https://api.openai.com/*" },
+        { "url": "https://generativelanguage.googleapis.com/*" },
+        { "url": "https://api.github.com/*" },
+        { "url": "https://github.com/*" },
+        { "url": "https://objects.githubusercontent.com/*" },
+        { "url": "http://localhost:*" },
+        { "url": "https://localhost:*" }
+      ]
+    },
+
+    "window-state:default",
+
+    "deep-link:default",
+
+    "updater:default"
+  ]
+}

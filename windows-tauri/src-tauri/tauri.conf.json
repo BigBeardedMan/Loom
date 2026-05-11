@@ -1,0 +1,79 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Loom",
+  "version": "0.1.0",
+  "identifier": "com.chasesims.Loom",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Loom",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 960,
+        "minHeight": 600,
+        "decorations": true,
+        "transparent": false,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "visible": true,
+        "skipTaskbar": false,
+        "titleBarStyle": "Visible"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' ipc: http://ipc.localhost ws://localhost:* http://localhost:* https://api.anthropic.com https://api.openai.com https://generativelanguage.googleapis.com https://api.github.com https://github.com https://objects.githubusercontent.com http://localhost:11434; font-src 'self' data:; frame-src 'self' http://localhost:* https://localhost:*; worker-src 'self' blob:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "nsis", "app", "dmg"],
+    "publisher": "BigBeardedMan",
+    "category": "DeveloperTool",
+    "shortDescription": "Loom workspace cockpit",
+    "longDescription": "Integrated workspace cockpit: terminal, code editor, AI agents (Claude, Codex, Gemini, Ollama, Anthropic API), kanban, notes, and build preview.",
+    "homepage": "https://github.com/BigBeardedMan/Loom",
+    "copyright": "BigBeardedMan",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [],
+    "windows": {
+      "webviewInstallMode": { "type": "embedBootstrapper" },
+      "wix": {
+        "language": ["en-US"],
+        "upgradeCode": "FD7C8B4A-1F2E-4D6B-9C1A-3E8F0B2C7D11"
+      },
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "installMode": "currentUser",
+        "displayLanguageSelector": false,
+        "languages": ["English"]
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://github.com/BigBeardedMan/Loom/releases/latest/download/latest-windows.json"
+      ],
+      "dialog": false,
+      "pubkey": ""
+    }
+  }
+}

@@ -15,3 +15,12 @@ site/
 *.cer
 *.crt
 *.mobileprovision
+
+# Windows port (Tauri)
+windows-tauri/node_modules/
+windows-tauri/dist/
+windows-tauri/src-tauri/target/
+windows-tauri/src-tauri/gen/schemas/
+windows-tauri/.tauri/
+windows-tauri/release-artifacts/
+.xwin-cache/
