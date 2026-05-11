@@ -106,12 +106,52 @@ windows-tauri/
     └── tauri.conf.json   bundle, window, plugin config
 ```
 
-## What is intentionally not ported yet
+## Feature parity with macOS
 
-The first cut covers core flows. These macOS Loom features will land in follow-ups:
+As of windows-v1.0.0 the port is 1:1 with macOS Loom across the features the
+audit found:
 
-- LiveAgentTasks (Codex/Claude rollout watcher)
-- Per-CLI usage scrapers (UsageService)
-- Multi-pane terminal splits inside a single tab (currently tab-based)
-- Custom DMG-style installer chrome (NSIS default ships)
-- Auto-update minisign keypair generation (run `tauri signer generate` and paste pubkey into `tauri.conf.json` before first release)
+- Workspace shell — sidebar with rename, kind icons, per-workspace session
+  count; cockpit with dynamic blocks, drag-to-reorder, block rename,
+  full-row span toggle (right-click), close, status dot.
+- Terminal pane — multi-pane splits (1 / 2-H / 2-V / 3-H / 3-V / 2×2 quad),
+  per-pane header with cwd + OSC title, Ctrl+C button, foreground command
+  polling, shell-integration history writer.
+- Editor pane — Monaco editor, file watcher with reload-from-disk prompt,
+  dirty status, Ctrl+S save, file tree.
+- Tasks pane — live mirror of Claude / Codex CLI agent task files.
+- Agent pane — Anthropic API (direct streaming), Claude CLI, Codex, Gemini,
+  Ollama, OpenAI-compat endpoints; per-workspace vendor/model persistence;
+  cancel-while-streaming.
+- Notes pane — multi-note tabs, CodeMirror markdown body, autosave.
+- Preview pane — URL bar with back/forward/refresh, iframe, load-failure
+  overlay.
+- Commands pane — surfaces the PowerShell shell-integration JSONL with copy
+  + send-to-terminal actions and a workspace-only filter.
+- Settings — Appearance, AI Providers (Anthropic key + local endpoint CRUD
+  with test-connection), MCP (add / remove / refresh), Shell, Tasks (stale
+  window picker), Advanced (reveal data folder, log viewer, reset UI
+  state), About.
+- Usage chips — Claude / Codex / Gemini chip → full dashboard with stat
+  grid, donuts, hour-of-day heatmap, recent prompts, top topics, top
+  projects; timeframe picker persists.
+- Updater — arch-aware (handles ARM64 emulation), downloads matching NSIS
+  installer to `%APPDATA%\com.chasesims.Loom\staging\` with live progress,
+  prompts, then hands off to the wizard.
+- Crash reporter — Rust panic hook + React ErrorBoundary surface a modal
+  on next launch with copy + "Report on GitHub" deep link.
+- Keyboard — Ctrl+K palette, Ctrl+T add terminal, Ctrl+W close, Ctrl+N
+  new workspace, Ctrl+Shift+L cycle theme, Ctrl+Shift+1..7 add by kind,
+  Ctrl+Shift+O previous workspace, Ctrl+Alt+F full-row, Ctrl+1..9 jump.
+- Command palette — workspaces, add-block actions, recent commands rerun,
+  Open Settings.
+
+Deferred to follow-ups:
+
+- Multi-window support
+- 8-edge drop targets + pin management for the cockpit grid
+- Notes Ctrl+F search
+- Auto-preview index per Preview block
+- Toast notifications, tray icon, jump lists
+- Update minisign keypair signing (current updater uses arch-detected
+  download + user confirmation in place of signature verification)

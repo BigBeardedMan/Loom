@@ -1082,8 +1082,6 @@ function AdvancedPanel() {
       setTimeout(() => setConfirming(false), 3500);
       return;
     }
-    // Clear localStorage keys; SQLite data lives in %APPDATA%\Loom\loom.db
-    // which a clean uninstall removes. Frontend prefs are localStorage.
     const keysToKeep = ["loom.theme"];
     const all = Object.keys(localStorage);
     for (const k of all) {
@@ -1092,28 +1090,190 @@ function AdvancedPanel() {
     location.reload();
   };
 
+  const revealData = async () => {
+    try {
+      const { open } = await import("@tauri-apps/plugin-shell");
+      const appdata = "%APPDATA%\\com.chasesims.Loom";
+      await open(appdata);
+    } catch {
+      // Fallback: open via env path encoding so Explorer expands the variable.
+      try {
+        const { open } = await import("@tauri-apps/plugin-shell");
+        await open("file:///%APPDATA%/com.chasesims.Loom");
+      } catch {}
+    }
+  };
+
   return (
-    <div>
-      <H2>Advanced</H2>
-      <Hint>
-        Data lives in <code style={{ fontFamily: "var(--font-mono)" }}>%APPDATA%\Loom\loom.db</code> (SQLite) and Windows
-        Credential Manager (API keys). Logs in <code style={{ fontFamily: "var(--font-mono)" }}>%APPDATA%\Loom\logs\</code>.
-      </Hint>
+    <div className="flex flex-col gap-4">
+      <section>
+        <H2>Advanced</H2>
+        <Hint>
+          Data lives in <code style={{ fontFamily: "var(--font-mono)" }}>%APPDATA%\com.chasesims.Loom\loom.db</code> (SQLite) and Windows
+          Credential Manager (API keys). Logs in <code style={{ fontFamily: "var(--font-mono)" }}>%APPDATA%\com.chasesims.Loom\logs\</code>.
+        </Hint>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={revealData}
+            style={{
+              background: "transparent",
+              color: text.primary,
+              border: `1px solid ${surface.hairline}`,
+              borderRadius: 8,
+              padding: "6px 14px",
+              fontSize: 12,
+              fontWeight: 500,
+            }}
+          >
+            Reveal data folder
+          </button>
+          <button
+            onClick={resetAll}
+            style={{
+              background: confirming ? "var(--color-ws-orange)" : "transparent",
+              color: confirming ? "#fff" : text.muted,
+              border: `1px solid ${confirming ? "var(--color-ws-orange)" : surface.hairline}`,
+              borderRadius: 8,
+              padding: "6px 14px",
+              fontSize: 12,
+              fontWeight: 500,
+            }}
+          >
+            {confirming ? "Click again to confirm: clears local UI state" : "Reset local UI state"}
+          </button>
+        </div>
+      </section>
+      <section>
+        <H2>Logs</H2>
+        <Hint>
+          Tracing output and crash dumps. Click to open the most recent log line-by-line.
+        </Hint>
+        <LogViewer />
+      </section>
+    </div>
+  );
+}
+
+function LogViewer() {
+  const [open, setOpen] = useState(false);
+  const [body, setBody] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = async () => {
+    setError(null);
+    try {
+      const { readDir, readTextFile, BaseDirectory } = await import(
+        "@tauri-apps/plugin-fs"
+      );
+      const entries = await readDir("logs", { baseDir: BaseDirectory.AppData });
+      const candidates = entries
+        .filter((e) => e.name && /\.log$/.test(e.name))
+        .sort((a, b) => (b.name ?? "").localeCompare(a.name ?? ""));
+      if (candidates.length === 0) {
+        setBody("(no log files yet)");
+        return;
+      }
+      const target = candidates[0].name as string;
+      const text = await readTextFile(`logs/${target}`, {
+        baseDir: BaseDirectory.AppData,
+      });
+      const tail = text.split(/\r?\n/).slice(-400).join("\n");
+      setBody(`${target}\n\n${tail}`);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  return (
+    <>
       <button
-        onClick={resetAll}
+        onClick={() => {
+          setOpen(true);
+          load();
+        }}
         style={{
-          background: confirming ? "var(--color-ws-orange)" : "transparent",
-          color: confirming ? "#fff" : text.muted,
-          border: `1px solid ${confirming ? "var(--color-ws-orange)" : surface.hairline}`,
+          background: "transparent",
+          color: text.primary,
+          border: `1px solid ${surface.hairline}`,
           borderRadius: 8,
           padding: "6px 14px",
           fontSize: 12,
           fontWeight: 500,
         }}
       >
-        {confirming ? "Click again to confirm: clears local UI state" : "Reset local UI state"}
+        Open log viewer
       </button>
-    </div>
+      {open && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 flex items-center justify-center"
+          style={{ background: "rgba(0,0,0,0.55)", zIndex: 80 }}
+          onClick={() => setOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 640,
+              maxHeight: "80vh",
+              display: "flex",
+              flexDirection: "column",
+              background: "var(--color-loom-panel)",
+              color: "var(--color-loom-text)",
+              border: `1px solid ${surface.hairline}`,
+              borderRadius: 14,
+              padding: 18,
+            }}
+          >
+            <header className="flex items-center gap-2" style={{ marginBottom: 8 }}>
+              <h3 style={{ fontSize: 14, fontWeight: 600 }}>Loom logs</h3>
+              <button
+                onClick={load}
+                style={{
+                  marginLeft: "auto",
+                  padding: 4,
+                  borderRadius: 6,
+                  color: text.muted,
+                }}
+                aria-label="Reload"
+              >
+                <Icons.refresh size={12} strokeWidth={2} />
+              </button>
+              <button
+                onClick={() => setOpen(false)}
+                style={{
+                  padding: 4,
+                  borderRadius: 6,
+                  color: text.muted,
+                }}
+                aria-label="Close"
+              >
+                <Icons.close size={13} strokeWidth={2.2} />
+              </button>
+            </header>
+            <pre
+              className="scrollbar-thin"
+              style={{
+                flex: 1,
+                overflow: "auto",
+                fontSize: 11,
+                fontFamily: "var(--font-mono)",
+                color: "rgba(255,255,255,0.85)",
+                background: "rgba(0,0,0,0.32)",
+                border: "1px solid rgba(255,255,255,0.06)",
+                borderRadius: 8,
+                padding: "8px 10px",
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {error
+                ? `Could not read log directory: ${error}`
+                : body ?? "Loading…"}
+            </pre>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
