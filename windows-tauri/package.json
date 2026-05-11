@@ -57,6 +57,9 @@
     "@radix-ui/react-slider": "^1.2.0",
     "zustand": "^5.0.0"
   },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  },
   "devDependencies": {
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
