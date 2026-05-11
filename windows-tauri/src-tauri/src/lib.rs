@@ -1,4 +1,5 @@
 mod agents;
+mod crash;
 mod db;
 mod db_commands;
 mod fs_walk;
@@ -25,6 +26,7 @@ pub fn run() {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,loom_lib=debug")))
         .with_target(false)
         .try_init();
+    crash::install_hook();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -46,6 +48,8 @@ pub fn run() {
 
             let logs_dir = data_dir.join("logs");
             std::fs::create_dir_all(&logs_dir).context("create logs dir")?;
+            crash::set_log_dir(logs_dir.clone());
+            crash::consume_prior_crash();
 
             let db_path = data_dir.join("loom.db");
             let db = db::Db::open(&db_path).context("open sqlite")?;
@@ -107,6 +111,8 @@ pub fn run() {
             updater::update_get_arch,
             updater::update_download_and_stage,
             updater::update_run_installer,
+            crash::crash_get_last,
+            crash::crash_record_frontend,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

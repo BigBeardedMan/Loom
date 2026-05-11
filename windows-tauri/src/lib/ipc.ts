@@ -264,6 +264,19 @@ export const ipc = {
     runInstaller: (installerPath: string, exitApp: boolean) =>
       invoke<void>("update_run_installer", { installerPath, exitApp }),
   },
+
+  crash: {
+    getLast: () => invoke<CrashReport | null>("crash_get_last"),
+    recordFrontend: (message: string) =>
+      invoke<void>("crash_record_frontend", { message }),
+  },
+};
+
+export type CrashReport = {
+  version: string;
+  arch: string;
+  timestamp: string;
+  body: string;
 };
 
 export type UsageBucket = {
