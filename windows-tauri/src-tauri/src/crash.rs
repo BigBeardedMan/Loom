@@ -8,12 +8,12 @@
 // with a "Report on GitHub" deep-link.
 
 use chrono::Local;
-use once_cell::sync::OnceLock;
 use parking_lot::Mutex;
 use serde::Serialize;
 use std::fmt::Write;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 static PANIC_LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 static PENDING_REPORT: Mutex<Option<CrashReport>> = Mutex::new(None);
