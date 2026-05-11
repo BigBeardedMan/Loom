@@ -54,6 +54,8 @@ pub fn run() {
 
             app.manage(AppState::new(db, data_dir.clone(), logs_dir.clone()));
             app.manage(watcher_registry);
+            app.manage(agents::live_tasks::LiveTasksState::default());
+            agents::live_tasks::start_poller(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -93,12 +95,18 @@ pub fn run() {
             agents::mcp::mcp_list,
             agents::mcp::mcp_add,
             agents::mcp::mcp_remove,
+            agents::usage_service::usage_read,
+            agents::live_tasks::live_tasks_list,
+            agents::live_tasks::live_tasks_set_staleness,
             keychain::keychain_get,
             keychain::keychain_set,
             keychain::keychain_delete,
             shell_integration::shell_integration_install,
             updater::update_check,
             updater::update_apply,
+            updater::update_get_arch,
+            updater::update_download_and_stage,
+            updater::update_run_installer,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -26,11 +26,8 @@ function App() {
     const tick = async () => {
       try {
         const info = await ipc.update.check();
-        if (info && typeof info === "object" && "version" in info) {
-          setUpdatePill({ version: (info as { version: string }).version });
-        } else {
-          setUpdatePill(null);
-        }
+        if (info) setUpdatePill({ version: info.version });
+        else setUpdatePill(null);
       } catch {}
     };
     tick();

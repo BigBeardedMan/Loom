@@ -1,48 +1,222 @@
+// Custom updater: detect arch → check GitHub Releases → download matching
+// NSIS installer → save under %APPDATA%\Loom\staging\ → prompt → run installer.
+// Replaces the tauri-plugin-updater flow (left registered but unused).
+
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
-use tauri_plugin_updater::UpdaterExt;
+use std::fs;
+use std::io::Write;
+use std::path::PathBuf;
+use std::process::Command;
+use tauri::{AppHandle, Emitter, Manager};
+
+const REPO_OWNER: &str = "BigBeardedMan";
+const REPO_NAME: &str = "Loom";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateInfo {
     pub version: String,
     pub current_version: String,
+    pub asset_name: String,
+    pub download_url: String,
+    pub size_bytes: u64,
+    pub release_notes_url: String,
     pub notes: Option<String>,
-    pub date: Option<String>,
+    pub published_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateProgress {
+    pub downloaded: u64,
+    pub total: u64,
 }
 
 #[tauri::command]
-pub async fn update_check(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
-    let updater = app
-        .updater()
-        .map_err(|e| e.to_string())?;
-    match updater.check().await {
-        Ok(Some(update)) => Ok(Some(UpdateInfo {
-            version: update.version.clone(),
-            current_version: update.current_version.clone(),
-            notes: update.body.clone(),
-            date: update.date.map(|d| d.to_string()),
-        })),
-        Ok(None) => Ok(None),
-        Err(tauri_plugin_updater::Error::EmptyEndpoints) => Ok(None),
-        Err(e) => Err(e.to_string()),
-    }
-}
-
-#[tauri::command]
-pub async fn update_apply(app: AppHandle) -> Result<(), String> {
-    let updater = app
-        .updater()
-        .map_err(|e| e.to_string())?;
-    match updater.check().await {
-        Ok(Some(update)) => {
-            update
-                .download_and_install(|_, _| {}, || {})
-                .await
-                .map_err(|e| e.to_string())?;
-            app.restart();
+pub fn update_get_arch() -> String {
+    // Compile-time default. On Windows, also probe GetNativeSystemInfo so an
+    // x64 binary running under ARM emulation picks the arm64 asset.
+    let compile_time = std::env::consts::ARCH;
+    #[cfg(windows)]
+    {
+        if let Some(native) = windows_native_arch() {
+            return native;
         }
-        Ok(None) => return Err("no update available".into()),
-        Err(e) => return Err(e.to_string()),
     }
+    match compile_time {
+        "x86_64" => "x86_64".to_string(),
+        "aarch64" => "aarch64".to_string(),
+        other => other.to_string(),
+    }
+}
+
+#[cfg(windows)]
+fn windows_native_arch() -> Option<String> {
+    use windows::Win32::System::SystemInformation::{
+        GetNativeSystemInfo, PROCESSOR_ARCHITECTURE_AMD64, PROCESSOR_ARCHITECTURE_ARM64,
+        SYSTEM_INFO,
+    };
+    let mut info: SYSTEM_INFO = unsafe { std::mem::zeroed() };
+    unsafe { GetNativeSystemInfo(&mut info) };
+    let arch = unsafe { info.Anonymous.Anonymous.wProcessorArchitecture };
+    if arch == PROCESSOR_ARCHITECTURE_ARM64 {
+        Some("aarch64".to_string())
+    } else if arch == PROCESSOR_ARCHITECTURE_AMD64 {
+        Some("x86_64".to_string())
+    } else {
+        None
+    }
+}
+
+#[derive(Deserialize)]
+struct GhAsset {
+    name: String,
+    browser_download_url: String,
+    size: u64,
+}
+
+#[derive(Deserialize)]
+struct GhRelease {
+    tag_name: String,
+    html_url: String,
+    body: Option<String>,
+    published_at: Option<String>,
+    assets: Vec<GhAsset>,
+}
+
+fn parse_semver(s: &str) -> (u32, u32, u32) {
+    let trimmed = s.trim_start_matches("v");
+    let parts: Vec<&str> = trimmed.split('.').collect();
+    let to_num = |p: Option<&&str>| -> u32 {
+        p.and_then(|s| s.split('-').next().unwrap_or("0").parse::<u32>().ok())
+            .unwrap_or(0)
+    };
+    (to_num(parts.first()), to_num(parts.get(1)), to_num(parts.get(2)))
+}
+
+fn is_newer(latest: &str, current: &str) -> bool {
+    parse_semver(latest) > parse_semver(current)
+}
+
+fn arch_token(arch: &str) -> &'static str {
+    match arch {
+        "aarch64" => "arm64",
+        _ => "x64",
+    }
+}
+
+#[tauri::command]
+pub async fn update_check() -> Result<Option<UpdateInfo>, String> {
+    let url = format!(
+        "https://api.github.com/repos/{}/{}/releases/latest",
+        REPO_OWNER, REPO_NAME
+    );
+    let client = reqwest::Client::builder()
+        .user_agent(format!("Loom/{}", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("GitHub API: HTTP {}", resp.status()));
+    }
+    let release: GhRelease = resp.json().await.map_err(|e| e.to_string())?;
+
+    let latest_ver = release
+        .tag_name
+        .strip_prefix("windows-v")
+        .or_else(|| release.tag_name.strip_prefix("v"))
+        .unwrap_or(&release.tag_name)
+        .to_string();
+    let current = env!("CARGO_PKG_VERSION");
+    if !is_newer(&latest_ver, current) {
+        return Ok(None);
+    }
+
+    let arch = update_get_arch();
+    let token = arch_token(&arch);
+    let asset = release
+        .assets
+        .into_iter()
+        .find(|a| a.name.contains(&format!("_{}-setup.exe", token)));
+    let asset = match asset {
+        Some(a) => a,
+        None => return Ok(None),
+    };
+
+    Ok(Some(UpdateInfo {
+        version: latest_ver,
+        current_version: current.to_string(),
+        asset_name: asset.name,
+        download_url: asset.browser_download_url,
+        size_bytes: asset.size,
+        release_notes_url: release.html_url,
+        notes: release.body,
+        published_at: release.published_at,
+    }))
+}
+
+fn staging_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let dir = data.join("staging");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+#[tauri::command]
+pub async fn update_download_and_stage(
+    app: AppHandle,
+    asset_url: String,
+    asset_name: String,
+) -> Result<String, String> {
+    let staging = staging_dir(&app)?;
+    let target = staging.join(&asset_name);
+
+    let client = reqwest::Client::builder()
+        .user_agent(format!("Loom/{}", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client.get(&asset_url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("download: HTTP {}", resp.status()));
+    }
+    let total = resp.content_length().unwrap_or(0);
+
+    let mut file = fs::File::create(&target).map_err(|e| e.to_string())?;
+    let mut downloaded: u64 = 0;
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk.map_err(|e| e.to_string())?;
+        file.write_all(&bytes).map_err(|e| e.to_string())?;
+        downloaded += bytes.len() as u64;
+        let _ = app.emit("update/progress", UpdateProgress { downloaded, total });
+    }
+    file.flush().map_err(|e| e.to_string())?;
+    Ok(target.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn update_run_installer(
+    app: AppHandle,
+    installer_path: String,
+    exit_app: bool,
+) -> Result<(), String> {
+    let path = PathBuf::from(&installer_path);
+    if !path.exists() {
+        return Err(format!("installer missing: {}", installer_path));
+    }
+    Command::new(&path)
+        .spawn()
+        .map_err(|e| format!("spawn installer: {e}"))?;
+    if exit_app {
+        app.exit(0);
+    }
+    Ok(())
+}
+
+// Kept for backwards compatibility with old callers; never resolves to a
+// working install path now that we drive download/install ourselves.
+#[tauri::command]
+pub async fn update_apply() -> Result<(), String> {
+    Err("update_apply is deprecated; use download_and_stage + run_installer".into())
 }

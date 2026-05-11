@@ -27,6 +27,7 @@ import { Icons } from "../../lib/icons";
 import { cockpit, text } from "../../lib/theme";
 import type { Block } from "./LayoutPersistence";
 import type { Workspace } from "../../lib/ipc";
+import { UsageView } from "../usage/UsageView";
 
 const PANEL_LABEL: Record<Panel, string> = {
   terminal: "Terminal",
@@ -49,7 +50,12 @@ export function WorkspaceView() {
   const removeBlock = useApp((s) => s.removeBlock);
   const reorderBlocks = useApp((s) => s.reorderBlocks);
   const resetLayout = useApp((s) => s.resetLayout);
+  const usageTool = useApp((s) => s.selectedUsageTool);
   const workspace = workspaces.find((w) => w.id === selectedId);
+
+  if (usageTool) {
+    return <UsageView tool={usageTool} />;
+  }
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } })

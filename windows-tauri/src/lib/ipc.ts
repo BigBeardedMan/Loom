@@ -244,10 +244,115 @@ export const ipc = {
     installIntegration: () => invoke<string>("shell_integration_install"),
   },
 
-  update: {
-    check: () => invoke<unknown | null>("update_check"),
-    apply: () => invoke<void>("update_apply"),
+  usage: {
+    read: (tool: "claude" | "codex" | "gemini", timeframe: "day" | "week" | "month" | "year") =>
+      invoke<CliToolUsage>("usage_read", { tool, timeframe }),
   },
+
+  liveTasks: {
+    list: (stalenessSecs?: number) =>
+      invoke<LiveAgentTaskGroup[]>("live_tasks_list", { stalenessSecs }),
+    setStaleness: (secs: number) =>
+      invoke<void>("live_tasks_set_staleness", { secs }),
+  },
+
+  update: {
+    getArch: () => invoke<string>("update_get_arch"),
+    check: () => invoke<UpdateInfo | null>("update_check"),
+    downloadAndStage: (assetUrl: string, assetName: string) =>
+      invoke<string>("update_download_and_stage", { assetUrl, assetName }),
+    runInstaller: (installerPath: string, exitApp: boolean) =>
+      invoke<void>("update_run_installer", { installerPath, exitApp }),
+  },
+};
+
+export type UsageBucket = {
+  start: string;
+  end: string;
+  tokens: number;
+  label: string;
+};
+
+export type ProjectUsage = {
+  displayName: string;
+  path: string;
+  sessions: number;
+  lastActivity: string;
+};
+
+export type ModelUsage = {
+  model: string;
+  tokens: number;
+};
+
+export type ProjectTokenSlice = {
+  displayName: string;
+  path: string;
+  tokens: number;
+};
+
+export type PromptTopic = {
+  keyword: string;
+  count: number;
+};
+
+export type PromptPreview = {
+  text: string;
+  timestamp: string;
+  project: string;
+};
+
+export type CliToolUsage = {
+  tool: "claude" | "codex" | "gemini";
+  isInstalled: boolean;
+  activeSessions: number;
+  sessionsToday: number;
+  sessionsTotal: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+  lastActivity: string | null;
+  models: string[];
+  chartBuckets: UsageBucket[];
+  topProjects: ProjectUsage[];
+  tokensByModel: ModelUsage[];
+  tokensByProject: ProjectTokenSlice[];
+  topTopics: PromptTopic[];
+  recentPrompts: PromptPreview[];
+  hourlyDistribution: number[];
+  promptCount: number;
+};
+
+export type LiveAgentTask = {
+  id: string;
+  source: "claude" | "codex" | "gemini";
+  sessionId: string;
+  taskId: string;
+  subject: string;
+  description: string;
+  activeForm: string;
+  status: "pending" | "in_progress" | "completed" | "cancelled" | "deleted";
+  updatedAt: string;
+};
+
+export type LiveAgentTaskGroup = {
+  id: string;
+  sessionId: string;
+  source: "claude" | "codex" | "gemini";
+  lastActivity: string;
+  headline: string | null;
+  tasks: LiveAgentTask[];
+};
+
+export type UpdateInfo = {
+  version: string;
+  currentVersion: string;
+  assetName: string;
+  downloadUrl: string;
+  sizeBytes: number;
+  releaseNotesUrl: string;
+  notes: string | null;
+  publishedAt: string | null;
 };
 
 export async function on<T = unknown>(

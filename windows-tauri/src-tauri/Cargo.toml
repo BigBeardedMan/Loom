@@ -1,6 +1,6 @@
 [package]
 name = "loom"
-version = "0.3.0"
+version = "0.4.0"
 description = "Loom for Windows: integrated workspace cockpit with terminal, editor, AI agents, kanban, and notes."
 authors = ["BigBeardedMan"]
 edition = "2021"
@@ -63,10 +63,12 @@ which = "6"
 url = "2"
 bytes = "1"
 base64 = "0.22"
+regex = "1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = [
   "Win32_Foundation",
+  "Win32_System_SystemInformation",
   "Win32_System_Threading",
   "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_ProcessStatus",

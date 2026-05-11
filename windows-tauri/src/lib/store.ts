@@ -19,6 +19,7 @@ export type Panel =
   | "commands";
 
 type UsageTool = "claude" | "codex" | "gemini" | null;
+type UsageTimeframe = "day" | "week" | "month" | "year";
 
 type Theme = "system" | "light" | "dark";
 
@@ -29,6 +30,7 @@ type AppState = {
   isPaletteOpen: boolean;
   isSettingsOpen: boolean;
   selectedUsageTool: UsageTool;
+  usageTimeframe: UsageTimeframe;
   updatePill: { version: string } | null;
   blockStatus: Record<string, "idle" | "active" | "warning">;
   theme: Theme;
@@ -52,6 +54,7 @@ type AppState = {
   openSettings: () => void;
   closeSettings: () => void;
   setUsageTool: (t: UsageTool) => void;
+  setUsageTimeframe: (tf: UsageTimeframe) => void;
   setUpdatePill: (info: { version: string } | null) => void;
   setTheme: (t: Theme) => void;
 };
@@ -65,6 +68,7 @@ export const useApp = create<AppState>((set, get) => ({
   isPaletteOpen: false,
   isSettingsOpen: false,
   selectedUsageTool: null,
+  usageTimeframe: (localStorage.getItem("loom.usage.timeframe") as UsageTimeframe) || "day",
   updatePill: null,
   blockStatus: {},
   theme: (localStorage.getItem("loom.theme") as Theme) || "system",
@@ -190,6 +194,10 @@ export const useApp = create<AppState>((set, get) => ({
   openSettings: () => set({ isSettingsOpen: true }),
   closeSettings: () => set({ isSettingsOpen: false }),
   setUsageTool: (t) => set({ selectedUsageTool: t }),
+  setUsageTimeframe: (tf) => {
+    localStorage.setItem("loom.usage.timeframe", tf);
+    set({ usageTimeframe: tf });
+  },
   setUpdatePill: (info) => set({ updatePill: info }),
   setTheme: (t) => {
     localStorage.setItem("loom.theme", t);
