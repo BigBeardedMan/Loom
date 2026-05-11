@@ -18,6 +18,12 @@ export type Block = {
   // 2H/2V/3H/3V (quad is forced at 4). Mirrors Loom/Workspace/WorkspaceLayout.swift.
   terminalCount?: number;
   terminalAxis?: "h" | "v";
+  // Preview blocks only: defaults the URL to localhost:300X where X is the
+  // 0-based index among Preview blocks. Mirrors autoPreviewIndex on Mac.
+  autoPreviewIndex?: number;
+  // Pin the block to a fixed grid cell. When any block has pinnedTo,
+  // the grid switches to fixed-track mode. 0-indexed row/col.
+  pinnedTo?: { row: number; col: number };
 };
 
 export type Layout = {

@@ -7,12 +7,20 @@ type Props = { workspace: Workspace; blockId?: string };
 
 const LOAD_TIMEOUT_MS = 8000;
 
+function defaultUrlFor(workspace: Workspace, autoIndex: number): string {
+  if (workspace.previewUrl) return workspace.previewUrl;
+  return `http://localhost:${3000 + autoIndex}`;
+}
+
 // Mirrors Loom/Build/PreviewPaneView.swift.
 // URL bar with back/forward/refresh; iframe with white background and a
 // load-failure overlay when navigation times out or the iframe errors.
 export function PreviewPane({ workspace, blockId }: Props) {
   const setBlockStatus = useApp((s) => s.setBlockStatus);
-  const [url, setUrl] = useState(workspace.previewUrl || "http://localhost:3000");
+  const layout = useApp((s) => s.layout);
+  const block = layout?.blocks.find((b) => b.id === blockId);
+  const autoIndex = block?.autoPreviewIndex ?? 0;
+  const [url, setUrl] = useState(defaultUrlFor(workspace, autoIndex));
   const [draft, setDraft] = useState(url);
   const [loadState, setLoadState] = useState<"loading" | "ok" | "error">("loading");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -20,10 +28,10 @@ export function PreviewPane({ workspace, blockId }: Props) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    const fresh = workspace.previewUrl || "http://localhost:3000";
+    const fresh = defaultUrlFor(workspace, autoIndex);
     setUrl(fresh);
     setDraft(fresh);
-  }, [workspace.id, workspace.previewUrl]);
+  }, [workspace.id, workspace.previewUrl, autoIndex]);
 
   useEffect(() => {
     setLoadState("loading");

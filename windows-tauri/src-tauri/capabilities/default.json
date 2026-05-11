@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Loom main window capability set",
-  "windows": ["main", "settings", "about", "preview-*"],
+  "windows": ["main", "settings", "about", "preview-*", "loom-*"],
   "permissions": [
     "core:default",
     "core:event:default",
@@ -63,6 +63,8 @@
     "window-state:default",
 
     "deep-link:default",
+
+    "notification:default",
 
     "updater:default"
   ]

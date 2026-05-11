@@ -3,6 +3,7 @@
 
 import { useEffect } from "react";
 import { useApp, type Panel } from "./store";
+import { ipc } from "./ipc";
 
 type Binding = {
   combo: string;
@@ -93,6 +94,13 @@ export function useGlobalKeymap() {
           }
           const prev = workspaces[(idx - 1 + workspaces.length) % workspaces.length];
           selectWorkspace(prev.id);
+        },
+      },
+      {
+        combo: "ctrl+shift+n",
+        description: "Open new Loom window",
+        run: () => {
+          ipc.window.open(selectedWorkspaceId ?? undefined).catch(() => {});
         },
       },
       {

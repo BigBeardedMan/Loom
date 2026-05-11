@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Icons } from "../../lib/icons";
 import { useApp } from "../../lib/store";
-import { ipc, on, type Workspace } from "../../lib/ipc";
+import { ipc, on, type LocalEndpoint, type Workspace } from "../../lib/ipc";
 
-type Vendor = "claude" | "codex" | "gemini" | "ollama" | "anthropic";
+type Vendor = "claude" | "codex" | "gemini" | "ollama" | "anthropic" | "openai-compat";
 
 type Turn = {
   id: string;
@@ -18,6 +18,7 @@ const VENDORS: { value: Vendor; label: string }[] = [
   { value: "codex", label: "Codex" },
   { value: "gemini", label: "Gemini" },
   { value: "ollama", label: "Ollama" },
+  { value: "openai-compat", label: "OpenAI-compatible" },
   { value: "anthropic", label: "Anthropic API" },
 ];
 
@@ -35,6 +36,10 @@ export function AgentPane({ workspace, blockId }: Props) {
       localStorage.getItem(`loom.agent.model.${workspace.id}`) ||
       "claude-sonnet-4-6"
   );
+  const [endpoints, setEndpoints] = useState<LocalEndpoint[]>([]);
+  const [endpointId, setEndpointId] = useState<string>(
+    () => localStorage.getItem(`loom.agent.endpoint.${workspace.id}`) || ""
+  );
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -48,6 +53,20 @@ export function AgentPane({ workspace, blockId }: Props) {
   useEffect(() => {
     localStorage.setItem(`loom.agent.model.${workspace.id}`, model);
   }, [model, workspace.id]);
+
+  useEffect(() => {
+    localStorage.setItem(`loom.agent.endpoint.${workspace.id}`, endpointId);
+  }, [endpointId, workspace.id]);
+
+  useEffect(() => {
+    ipc.endpoints.list().then(setEndpoints).catch(() => {});
+  }, []);
+
+  const matchingEndpoints = endpoints.filter((e) =>
+    vendor === "ollama" ? e.kind === "ollama" : vendor === "openai-compat" ? e.kind === "openai-compat" : false
+  );
+  const activeEndpoint =
+    matchingEndpoints.find((e) => e.id === endpointId) ?? matchingEndpoints[0];
 
   useEffect(() => {
     if (!blockId) return;
@@ -78,6 +97,8 @@ export function AgentPane({ workspace, blockId }: Props) {
 
     try {
       if (vendor === "anthropic") await runAnthropic(prompt, asstId);
+      else if (vendor === "openai-compat" || (vendor === "ollama" && activeEndpoint))
+        await runOpenAi(prompt, asstId);
       else await runCli(prompt, asstId);
     } catch (e) {
       setTurns((prev) =>
@@ -93,7 +114,7 @@ export function AgentPane({ workspace, blockId }: Props) {
 
   const runCli = async (prompt: string, asstId: string) => {
     const streamId = await ipc.agents.cliSend({
-      vendor: vendor as Exclude<Vendor, "anthropic">,
+      vendor: vendor as "claude" | "codex" | "gemini" | "ollama",
       prompt,
       cwd: workspace.folderPath || ".",
     });
@@ -107,6 +128,9 @@ export function AgentPane({ workspace, blockId }: Props) {
         prev.map((t) => (t.id === asstId ? { ...t, streaming: false } : t))
       );
       setBusy(false);
+      if (!document.hasFocus()) {
+        ipc.notify(`${vendor} agent done`, "Loom agent finished a response.");
+      }
       off1();
       off2();
       cleanupRef.current = null;
@@ -114,6 +138,57 @@ export function AgentPane({ workspace, blockId }: Props) {
     cleanupRef.current = () => {
       off1();
       off2();
+    };
+  };
+
+  const runOpenAi = async (prompt: string, asstId: string) => {
+    if (!activeEndpoint) {
+      throw new Error("No endpoint configured. Open Settings → AI Providers to add one.");
+    }
+    const messages = [{ role: "user", content: prompt }];
+    const streamId = await ipc.agents.openaiSend({
+      endpointId: activeEndpoint.id,
+      model: model || activeEndpoint.defaultModel || "",
+      messages,
+      maxTokens: 4096,
+    });
+    const off1 = await on<{ kind: string; data: unknown }>(
+      `agent://${streamId}/event`,
+      (ev) => {
+        if (ev.kind === "content_block_delta") {
+          const t = (ev.data as { delta?: { text?: string } }).delta?.text || "";
+          if (t)
+            setTurns((prev) =>
+              prev.map((x) => (x.id === asstId ? { ...x, text: x.text + t } : x))
+            );
+        }
+      }
+    );
+    const off2 = await on<number>(`agent://${streamId}/done`, () => {
+      setTurns((prev) =>
+        prev.map((t) => (t.id === asstId ? { ...t, streaming: false } : t))
+      );
+      setBusy(false);
+      if (!document.hasFocus()) {
+        ipc.notify(`${activeEndpoint?.name ?? "Agent"} done`, "Loom agent finished a response.");
+      }
+      off1();
+      off2();
+      cleanupRef.current = null;
+    });
+    const off3 = await on<string>(`agent://${streamId}/error`, (msg) => {
+      setTurns((prev) =>
+        prev.map((t) =>
+          t.id === asstId
+            ? { ...t, text: `${t.text}\n[error] ${msg}`, streaming: false }
+            : t
+        )
+      );
+    });
+    cleanupRef.current = () => {
+      off1();
+      off2();
+      off3();
     };
   };
 
@@ -144,6 +219,9 @@ export function AgentPane({ workspace, blockId }: Props) {
         prev.map((t) => (t.id === asstId ? { ...t, streaming: false } : t))
       );
       setBusy(false);
+      if (!document.hasFocus()) {
+        ipc.notify("Anthropic agent done", "Loom agent finished a response.");
+      }
       off1();
       off2();
       cleanupRef.current = null;
@@ -207,6 +285,54 @@ export function AgentPane({ workspace, blockId }: Props) {
               fontFamily: "var(--font-mono)",
             }}
           />
+        )}
+        {(vendor === "ollama" || vendor === "openai-compat") && (
+          <>
+            {matchingEndpoints.length > 0 ? (
+              <select
+                value={activeEndpoint?.id ?? ""}
+                onChange={(e) => setEndpointId(e.target.value)}
+                className="focus:outline-none"
+                style={{
+                  background: "rgba(255, 255, 255, 0.06)",
+                  border: "1px solid rgba(255, 255, 255, 0.10)",
+                  borderRadius: 4,
+                  padding: "3px 8px",
+                  fontSize: 11,
+                  color: "rgba(255, 255, 255, 0.9)",
+                  maxWidth: 200,
+                }}
+              >
+                {matchingEndpoints.map((e) => (
+                  <option key={e.id} value={e.id}>
+                    {e.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span style={{ fontSize: 10, color: "rgba(255,255,255,0.45)" }}>
+                Add one in Settings → AI Providers
+              </span>
+            )}
+            {(vendor === "openai-compat" || (vendor === "ollama" && activeEndpoint)) && (
+              <input
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder={activeEndpoint?.defaultModel || "model"}
+                className="focus:outline-none"
+                style={{
+                  background: "rgba(255, 255, 255, 0.06)",
+                  border: "1px solid rgba(255, 255, 255, 0.10)",
+                  borderRadius: 4,
+                  padding: "3px 8px",
+                  fontSize: 11,
+                  width: 140,
+                  color: "rgba(255, 255, 255, 0.9)",
+                  fontFamily: "var(--font-mono)",
+                }}
+              />
+            )}
+          </>
         )}
       </div>
 

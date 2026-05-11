@@ -9,13 +9,20 @@ import { Titlebar } from "./components/Titlebar";
 import { ipc, type CrashReport } from "./lib/ipc";
 import { ErrorBoundary } from "./modules/crash/ErrorBoundary";
 import { CrashModal } from "./modules/crash/CrashModal";
+import { OnboardingModal, shouldShowOnboarding } from "./modules/onboarding/OnboardingModal";
 
 function App() {
   const loadWorkspaces = useApp((s) => s.loadWorkspaces);
   const setUpdatePill = useApp((s) => s.setUpdatePill);
+  const workspaces = useApp((s) => s.workspaces);
   const [crash, setCrash] = useState<CrashReport | null>(null);
+  const [onboarding, setOnboarding] = useState(false);
 
   useGlobalKeymap();
+
+  useEffect(() => {
+    setOnboarding(shouldShowOnboarding(workspaces.length));
+  }, [workspaces.length]);
 
   useEffect(() => {
     loadWorkspaces();
@@ -83,6 +90,7 @@ function App() {
         <CommandPalette />
         <SettingsModal />
         {crash && <CrashModal report={crash} onClose={() => setCrash(null)} />}
+        {onboarding && <OnboardingModal onDone={() => setOnboarding(false)} />}
       </div>
     </ErrorBoundary>
   );

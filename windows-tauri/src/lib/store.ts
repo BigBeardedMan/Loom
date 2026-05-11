@@ -165,7 +165,11 @@ export const useApp = create<AppState>((set, get) => ({
     const wsId = get().selectedWorkspaceId;
     const current = get().layout;
     if (!wsId || !current) return;
-    const next: Layout = { blocks: [...current.blocks, newBlock(kind)] };
+    const block = newBlock(kind);
+    if (kind === "preview") {
+      block.autoPreviewIndex = current.blocks.filter((b) => b.kind === "preview").length;
+    }
+    const next: Layout = { blocks: [...current.blocks, block] };
     set({ layout: next });
     await saveLayout(wsId, next);
   },

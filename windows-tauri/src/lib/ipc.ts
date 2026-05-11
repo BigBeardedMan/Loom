@@ -1,6 +1,21 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+async function notify(title: string, body: string): Promise<void> {
+  try {
+    const mod = await import("@tauri-apps/plugin-notification");
+    const granted = await mod.isPermissionGranted();
+    if (!granted) {
+      const result = await mod.requestPermission();
+      if (result !== "granted") return;
+    }
+    await mod.sendNotification({ title, body });
+  } catch {
+    // Plugin or permission missing — silently skip; we don't want toast
+    // failures to bubble into the UI.
+  }
+}
+
 export type Workspace = {
   id: string;
   name: string;
@@ -225,6 +240,14 @@ export const ipc = {
       temperature?: number;
       anthropicBeta?: string[];
     }) => invoke<string>("agent_http_send", { args }),
+    openaiSend: (args: {
+      endpointId: string;
+      model: string;
+      messages: unknown[];
+      system?: string;
+      maxTokens?: number;
+      temperature?: number;
+    }) => invoke<string>("agent_openai_send", { args }),
     mcpList: () => invoke<McpServer[]>("mcp_list"),
     mcpAdd: (name: string, command: string, args: string[]) =>
       invoke<void>("mcp_add", { name, command, args }),
@@ -286,6 +309,13 @@ export const ipc = {
     recordFrontend: (message: string) =>
       invoke<void>("crash_record_frontend", { message }),
   },
+
+  window: {
+    open: (workspaceId?: string) =>
+      invoke<void>("window_open", { workspaceId }),
+  },
+
+  notify,
 };
 
 export type CrashReport = {

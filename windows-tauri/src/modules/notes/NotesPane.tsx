@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown } from "@codemirror/lang-markdown";
-import { EditorView } from "@codemirror/view";
+import { search, searchKeymap } from "@codemirror/search";
+import { EditorView, keymap } from "@codemirror/view";
 import { Icons } from "../../lib/icons";
 import { useApp } from "../../lib/store";
 import { ipc, type IdeaNote, type Workspace } from "../../lib/ipc";
@@ -126,7 +127,12 @@ export function NotesPane({ workspace, blockId }: Props) {
               <CodeMirror
                 value={selected.body}
                 onChange={updateBody}
-                extensions={[markdown(), notesEditorTheme]}
+                extensions={[
+                  markdown(),
+                  search({ top: true }),
+                  keymap.of(searchKeymap),
+                  notesEditorTheme,
+                ]}
                 theme="none"
                 height="100%"
                 style={{ height: "100%" }}
@@ -135,6 +141,7 @@ export function NotesPane({ workspace, blockId }: Props) {
                   foldGutter: false,
                   highlightActiveLine: false,
                   autocompletion: false,
+                  searchKeymap: false,
                 }}
               />
             </div>

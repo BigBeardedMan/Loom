@@ -231,6 +231,24 @@ export function CommandPalette() {
             style={{ padding: "10px 14px 4px" }}
           >
             <Command.Item
+              value="new window"
+              onSelect={() => {
+                ipc.window.open(selectedWorkspaceId ?? undefined).catch(() => {});
+                closePalette();
+              }}
+              className="flex cursor-pointer items-center gap-2"
+              style={{
+                padding: "7px 14px",
+                fontSize: 13,
+                fontWeight: 500,
+                color: text.muted,
+                borderRadius: 6,
+              }}
+            >
+              <Icons.plus size={12} strokeWidth={1.8} />
+              New Loom Window
+            </Command.Item>
+            <Command.Item
               value="settings"
               onSelect={() => {
                 openSettings();

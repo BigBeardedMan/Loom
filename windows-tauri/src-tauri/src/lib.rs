@@ -12,12 +12,98 @@ mod updater;
 use anyhow::Context;
 use state::AppState;
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tracing_subscriber::EnvFilter;
+
+fn install_tray(app: &AppHandle) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, "show", "Show Loom", true, None::<&str>)?;
+    let hide = MenuItem::with_id(app, "hide", "Hide Loom", true, None::<&str>)?;
+    let sep1 = PredefinedMenuItem::separator(app)?;
+    let settings = MenuItem::with_id(app, "settings", "Open Settings…", true, None::<&str>)?;
+    let sep2 = PredefinedMenuItem::separator(app)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &hide, &sep1, &settings, &sep2, &quit])?;
+
+    let icon = app
+        .default_window_icon()
+        .cloned()
+        .ok_or_else(|| tauri::Error::Anyhow(anyhow::anyhow!("default window icon missing")))?;
+
+    TrayIconBuilder::with_id("loom-tray")
+        .icon(icon)
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            }
+            "hide" => {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.hide();
+                }
+            }
+            "settings" => {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                    let _ = w.emit("loom://open-settings", ());
+                }
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let app = tray.app_handle();
+                if let Some(w) = app.get_webview_window("main") {
+                    match w.is_visible() {
+                        Ok(true) => {
+                            let _ = w.hide();
+                        }
+                        _ => {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                }
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
 
 #[tauri::command]
 fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+#[tauri::command]
+fn window_open(app: AppHandle, workspace_id: Option<String>) -> tauri::Result<()> {
+    let count = app.webview_windows().len();
+    let label = format!("loom-{count}");
+    let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
+        .title("Loom")
+        .inner_size(1280.0, 800.0)
+        .min_inner_size(900.0, 600.0)
+        .resizable(true);
+    if let Some(ws) = workspace_id {
+        builder = builder.initialization_script(&format!(
+            "window.localStorage.setItem('loom.selectedWorkspaceId', '{}');",
+            ws.replace('\'', "")
+        ));
+    }
+    builder.build()?;
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -38,6 +124,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let data_dir = app
@@ -60,10 +147,13 @@ pub fn run() {
             app.manage(watcher_registry);
             app.manage(agents::live_tasks::LiveTasksState::default());
             agents::live_tasks::start_poller(app.handle().clone());
+
+            install_tray(app.handle())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             app_version,
+            window_open,
             db_commands::workspace_list,
             db_commands::workspace_create,
             db_commands::workspace_update,
@@ -102,6 +192,7 @@ pub fn run() {
             agents::cli::agent_cli_send,
             agents::cli::agent_registry_refresh,
             agents::anthropic::agent_http_send,
+            agents::openai::agent_openai_send,
             agents::mcp::mcp_list,
             agents::mcp::mcp_add,
             agents::mcp::mcp_remove,
