@@ -44,6 +44,7 @@ export function WorkspaceSidebar() {
   const selectWorkspace = useApp((s) => s.selectWorkspace);
   const createWorkspace = useApp((s) => s.createWorkspace);
   const deleteWorkspace = useApp((s) => s.deleteWorkspace);
+  const renameWorkspace = useApp((s) => s.renameWorkspace);
   const [creating, setCreating] = useState(false);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
 
@@ -115,8 +116,10 @@ export function WorkspaceSidebar() {
               key={ws.id}
               workspace={ws}
               selected={ws.id === selectedId}
+              sessionCount={countSessions(sessions, ws.folderPath)}
               onSelect={() => selectWorkspace(ws.id)}
               onDelete={() => deleteWorkspace(ws.id)}
+              onRename={(name) => renameWorkspace(ws.id, name)}
             />
           ))}
         </div>
@@ -193,18 +196,46 @@ export function WorkspaceSidebar() {
 function WorkspaceRow({
   workspace,
   selected,
+  sessionCount,
   onSelect,
   onDelete,
+  onRename,
 }: {
   workspace: Workspace;
   selected: boolean;
+  sessionCount: number;
   onSelect: () => void;
   onDelete: () => void;
+  onRename: (name: string) => void;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(workspace.name);
+
+  useEffect(() => {
+    setDraft(workspace.name);
+  }, [workspace.name]);
+
+  const commit = () => {
+    setEditing(false);
+    const next = draft.trim();
+    if (next && next !== workspace.name) onRename(next);
+    else setDraft(workspace.name);
+  };
+  const cancel = () => {
+    setEditing(false);
+    setDraft(workspace.name);
+  };
+
+  const KindIcon = kindIconFor(workspace.kindRaw);
+
   return (
     <div
       className="group flex items-center gap-2 cursor-pointer transition-colors"
       onClick={onSelect}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        if (!editing) setEditing(true);
+      }}
       style={{
         padding: `${sidebar.rowPaddingV}px ${sidebar.rowPaddingH}px`,
         borderRadius: 6,
@@ -226,12 +257,57 @@ function WorkspaceRow({
       }}
     >
       <WorkspaceDot color={workspace.colorName as WorkspaceColor} />
-      <span
-        className="truncate flex-1"
-        style={{ fontSize: 12, fontWeight: 500 }}
-      >
-        {workspace.name}
-      </span>
+      <KindIcon
+        size={11}
+        strokeWidth={2}
+        style={{ color: text.tertiary, flex: "none" }}
+      />
+      {editing ? (
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            else if (e.key === "Escape") cancel();
+          }}
+          className="flex-1"
+          style={{
+            background: "var(--color-loom-bg-from)",
+            border: `1px solid ${surface.hairline}`,
+            borderRadius: 4,
+            padding: "2px 6px",
+            fontSize: 12,
+            fontWeight: 500,
+            color: text.primary,
+            outline: "none",
+          }}
+        />
+      ) : (
+        <span
+          className="truncate flex-1"
+          style={{ fontSize: 12, fontWeight: 500 }}
+        >
+          {workspace.name}
+        </span>
+      )}
+      {sessionCount > 0 && (
+        <span
+          className="flex items-center gap-0.5"
+          title={`${sessionCount} active session${sessionCount === 1 ? "" : "s"}`}
+          style={{
+            color: "var(--color-ws-green)",
+            fontSize: 10,
+            fontWeight: 600,
+            fontFamily: "var(--font-mono)",
+          }}
+        >
+          <Icons.terminal size={10} strokeWidth={2.2} />
+          {sessionCount}
+        </span>
+      )}
       {workspace.taskBadge > 0 && (
         <span
           className="font-mono"
@@ -260,6 +336,28 @@ function WorkspaceRow({
       </button>
     </div>
   );
+}
+
+function kindIconFor(kind: IpcKind): typeof Icons.textCursor {
+  switch (kind) {
+    case "ideas":
+      return Icons.lightbulb;
+    case "review":
+    case "build":
+      return Icons.eye;
+    case "code":
+    default:
+      return Icons.textCursor;
+  }
+}
+
+function countSessions(sessions: SessionInfo[], folderPath: string): number {
+  if (!folderPath) return 0;
+  const fp = folderPath.toLowerCase();
+  return sessions.filter((s) => {
+    const cwd = (s.cwd ?? "").toLowerCase();
+    return cwd === fp || cwd.startsWith(fp + "\\") || cwd.startsWith(fp + "/");
+  }).length;
 }
 
 function NewWorkspaceForm({

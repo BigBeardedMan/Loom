@@ -44,6 +44,7 @@ type AppState = {
     kind: Workspace["kindRaw"]
   ) => Promise<Workspace>;
   deleteWorkspace: (id: string) => Promise<void>;
+  renameWorkspace: (id: string, name: string) => Promise<void>;
   addBlock: (kind: Panel) => Promise<void>;
   removeBlock: (id: string) => Promise<void>;
   reorderBlocks: (newOrder: Block[]) => Promise<void>;
@@ -148,6 +149,16 @@ export const useApp = create<AppState>((set, get) => ({
         set({ layout });
       }
     }
+  },
+
+  renameWorkspace: async (id, name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const updated = await ipc.workspace.update(id, { name: trimmed }).catch(() => null);
+    if (!updated) return;
+    set((s) => ({
+      workspaces: s.workspaces.map((w) => (w.id === id ? updated : w)),
+    }));
   },
 
   addBlock: async (kind) => {

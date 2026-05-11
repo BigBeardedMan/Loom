@@ -176,6 +176,7 @@ function SortableBlock({
   onRemove: () => void;
 }) {
   const status = useApp((s) => s.blockStatus[block.id] ?? "idle");
+  const updateBlock = useApp((s) => s.updateBlock);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: block.id });
 
@@ -186,17 +187,31 @@ function SortableBlock({
     minHeight: 0,
     minWidth: 0,
     height: "100%",
+    gridColumn: block.fullRowSpan ? "1 / -1" : undefined,
   };
   const isDark = DARK_PANES.includes(block.kind);
+  const title = block.customTitle?.trim() || PANEL_LABEL[block.kind];
+
+  const toggleFullRow = () => {
+    updateBlock(block.id, { fullRowSpan: !block.fullRowSpan });
+  };
 
   return (
-    <div ref={setNodeRef} style={style}>
+    <div
+      ref={setNodeRef}
+      style={style}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        toggleFullRow();
+      }}
+    >
       <LoomPanel className="h-full" dragging={isDragging}>
         <BlockTitleBar
           kind={block.kind}
-          title={PANEL_LABEL[block.kind]}
+          title={title}
           status={status}
           variant={isDark ? "dark" : "light"}
+          onRename={(next) => updateBlock(block.id, { customTitle: next })}
           onClose={onRemove}
           dragHandleProps={{ ...attributes, ...listeners }}
         />

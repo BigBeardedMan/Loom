@@ -10,6 +10,10 @@ import type { WorkspaceKind } from "../../lib/ipc";
 export type Block = {
   id: string;
   kind: Panel;
+  // User-renamed title; falls back to the default per-kind label when absent.
+  customTitle?: string;
+  // Block spans the full grid row when true.
+  fullRowSpan?: boolean;
   // Terminal blocks only: persisted split layout. 1-4 panes, axis controls
   // 2H/2V/3H/3V (quad is forced at 4). Mirrors Loom/Workspace/WorkspaceLayout.swift.
   terminalCount?: number;

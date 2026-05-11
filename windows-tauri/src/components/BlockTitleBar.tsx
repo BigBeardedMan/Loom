@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Icons } from "../lib/icons";
 import { surface, text, workspaceColorVar } from "../lib/theme";
 import type { Panel } from "../lib/store";
@@ -11,6 +11,7 @@ type Props = {
   status?: Status;
   variant?: "light" | "dark";
   onClose?: () => void;
+  onRename?: (next: string) => void;
   dragHandleProps?: Record<string, unknown>;
   right?: ReactNode;
 };
@@ -36,12 +37,14 @@ const STATUS_COLOR: Record<Status, string> = {
 
 // Mirrors the SwiftUI block title bar in Loom/Workspace/WorkspaceView.swift
 // (lines 535-565): icon left + title + status dot + close (×) + drag handle.
+// Double-clicking the title opens an inline rename input.
 export function BlockTitleBar({
   kind,
   title,
   status = "idle",
   variant = "light",
   onClose,
+  onRename,
   dragHandleProps,
   right,
 }: Props) {
@@ -49,6 +52,22 @@ export function BlockTitleBar({
   const Icon = Icons[meta.icon];
   const bg = variant === "dark" ? "rgba(0, 0, 0, 0.32)" : "rgba(0, 0, 0, 0.16)";
   const border = variant === "dark" ? "rgba(255, 255, 255, 0.10)" : surface.hairline;
+
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(title);
+  useEffect(() => {
+    setDraft(title);
+  }, [title]);
+  const commit = () => {
+    setEditing(false);
+    const next = draft.trim();
+    if (next && next !== title && onRename) onRename(next);
+    else setDraft(title);
+  };
+  const cancel = () => {
+    setEditing(false);
+    setDraft(title);
+  };
 
   return (
     <div
@@ -60,16 +79,43 @@ export function BlockTitleBar({
       }}
     >
       <Icon size={11} strokeWidth={2.2} color={meta.color} />
-      <span
-        className="truncate"
-        style={{
-          fontSize: 12,
-          fontWeight: 600,
-          color: variant === "dark" ? "rgba(255,255,255,0.94)" : text.primary,
-        }}
-      >
-        {title}
-      </span>
+      {editing && onRename ? (
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            else if (e.key === "Escape") cancel();
+          }}
+          style={{
+            flex: 1,
+            background: "var(--color-loom-bg-from)",
+            border: `1px solid ${border}`,
+            borderRadius: 4,
+            padding: "2px 6px",
+            fontSize: 12,
+            fontWeight: 600,
+            color: variant === "dark" ? "rgba(255,255,255,0.94)" : text.primary,
+            outline: "none",
+          }}
+        />
+      ) : (
+        <span
+          className="truncate"
+          onDoubleClick={onRename ? () => setEditing(true) : undefined}
+          style={{
+            fontSize: 12,
+            fontWeight: 600,
+            color: variant === "dark" ? "rgba(255,255,255,0.94)" : text.primary,
+            cursor: onRename ? "text" : "default",
+          }}
+          title={onRename ? "Double-click to rename" : undefined}
+        >
+          {title}
+        </span>
+      )}
       <span
         style={{
           width: 7,
