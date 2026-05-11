@@ -24,6 +24,17 @@ function matches(e: KeyboardEvent, combo: string): boolean {
   return true;
 }
 
+// Order matches macOS LoomApp.swift add-block menu — Cmd+Shift+1..7.
+const ADD_BLOCK_ORDER: Panel[] = [
+  "terminal",
+  "editor",
+  "tasks",
+  "agent",
+  "notes",
+  "preview",
+  "commands",
+];
+
 export function useGlobalKeymap() {
   const openPalette = useApp((s) => s.openPalette);
   const closePalette = useApp((s) => s.closePalette);
@@ -32,11 +43,20 @@ export function useGlobalKeymap() {
   const removeBlock = useApp((s) => s.removeBlock);
   const layout = useApp((s) => s.layout);
   const workspaces = useApp((s) => s.workspaces);
+  const selectedWorkspaceId = useApp((s) => s.selectedWorkspaceId);
   const selectWorkspace = useApp((s) => s.selectWorkspace);
+  const updateBlock = useApp((s) => s.updateBlock);
   const setTheme = useApp((s) => s.setTheme);
   const theme = useApp((s) => s.theme);
 
   useEffect(() => {
+    const focusedBlockId = (() => {
+      // Cheap heuristic: rely on document.activeElement being inside a block
+      // when keystrokes fire. We pick the first block as a fallback so users
+      // can still toggle full-row span without focus tracking.
+      return layout?.blocks[0]?.id;
+    })();
+
     const bindings: Binding[] = [
       {
         combo: "ctrl+k",
@@ -57,12 +77,41 @@ export function useGlobalKeymap() {
         },
       },
       {
+        combo: "ctrl+n",
+        description: "New workspace",
+        run: () => openPalette(),
+      },
+      {
+        combo: "ctrl+shift+o",
+        description: "Switch to previous workspace",
+        run: () => {
+          if (workspaces.length < 2) return;
+          const idx = workspaces.findIndex((w) => w.id === selectedWorkspaceId);
+          if (idx < 0) {
+            selectWorkspace(workspaces[0].id);
+            return;
+          }
+          const prev = workspaces[(idx - 1 + workspaces.length) % workspaces.length];
+          selectWorkspace(prev.id);
+        },
+      },
+      {
         combo: "ctrl+shift+l",
         description: "Cycle theme",
         run: () =>
           setTheme(
             theme === "system" ? "light" : theme === "light" ? "dark" : "system"
           ),
+      },
+      {
+        combo: "ctrl+alt+f",
+        description: "Toggle full-row span on first block",
+        run: () => {
+          if (!focusedBlockId || !layout) return;
+          const blk = layout.blocks.find((b) => b.id === focusedBlockId);
+          if (!blk) return;
+          updateBlock(blk.id, { fullRowSpan: !blk.fullRowSpan });
+        },
       },
     ];
 
@@ -77,6 +126,15 @@ export function useGlobalKeymap() {
         },
       });
     }
+
+    // Ctrl+Shift+1..7 → add block of nth kind (matches macOS Cmd+Shift+N order).
+    ADD_BLOCK_ORDER.forEach((kind, i) => {
+      bindings.push({
+        combo: `ctrl+shift+${i + 1}`,
+        description: `Add ${kind} block`,
+        run: () => addBlock(kind),
+      });
+    });
 
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape" && isPaletteOpen) {
@@ -102,7 +160,9 @@ export function useGlobalKeymap() {
     removeBlock,
     layout,
     workspaces,
+    selectedWorkspaceId,
     selectWorkspace,
+    updateBlock,
     setTheme,
     theme,
   ]);

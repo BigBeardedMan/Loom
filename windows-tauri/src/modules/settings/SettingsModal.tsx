@@ -713,18 +713,65 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 function McpPanel() {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
 
-  useEffect(() => {
+  const refresh = () =>
     ipc.agents
       .mcpList()
-      .then(setServers)
+      .then((s) => {
+        setServers(s);
+        setError(null);
+      })
       .catch((e) => setError(String(e)));
+
+  useEffect(() => {
+    refresh();
   }, []);
+
+  const remove = async (name: string) => {
+    if (!confirm(`Remove MCP server "${name}"?`)) return;
+    try {
+      await ipc.agents.mcpRemove(name);
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   return (
     <div>
-      <H2>MCP Servers</H2>
-      <Hint>Managed via the Claude CLI (`claude mcp list/add/remove`).</Hint>
+      <div className="flex items-center gap-2" style={{ marginBottom: 4 }}>
+        <H2>MCP Servers</H2>
+        <button
+          onClick={() => setAdding(true)}
+          style={{
+            marginLeft: "auto",
+            padding: "4px 10px",
+            fontSize: 11,
+            borderRadius: 6,
+            background: "var(--color-loom-accent)",
+            color: "white",
+            border: 0,
+          }}
+        >
+          + Add server
+        </button>
+        <button
+          onClick={refresh}
+          aria-label="Refresh"
+          style={{
+            padding: 4,
+            borderRadius: 6,
+            color: text.muted,
+          }}
+        >
+          <Icons.refresh size={12} strokeWidth={2} />
+        </button>
+      </div>
+      <Hint>
+        Loom delegates to <code>claude mcp</code>. Add / remove rounds-trip through the CLI so
+        your other Claude Code clients see the same set.
+      </Hint>
       {error && (
         <div
           style={{
@@ -758,6 +805,7 @@ function McpPanel() {
         {servers.map((s) => (
           <li
             key={s.name}
+            className="flex items-center gap-2"
             style={{
               background: surface.inset,
               border: `1px solid ${surface.hairline}`,
@@ -766,13 +814,158 @@ function McpPanel() {
               fontSize: 12,
             }}
           >
-            <div style={{ fontWeight: 600, color: text.primary }}>{s.name}</div>
-            <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: text.muted }}>
-              {s.command} {s.args.join(" ")}
+            <div className="flex-1 min-w-0">
+              <div style={{ fontWeight: 600, color: text.primary }}>{s.name}</div>
+              <div
+                style={{
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 11,
+                  color: text.muted,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {s.command} {s.args.join(" ")}
+              </div>
             </div>
+            <button
+              onClick={() => remove(s.name)}
+              aria-label="Remove server"
+              style={{ padding: 4, borderRadius: 6, color: text.tertiary }}
+            >
+              <Icons.trash size={11} strokeWidth={2} />
+            </button>
           </li>
         ))}
       </ul>
+      {adding && (
+        <McpAddModal
+          onCancel={() => setAdding(false)}
+          onAdded={() => {
+            setAdding(false);
+            refresh();
+          }}
+          onError={(e) => setError(e)}
+        />
+      )}
+    </div>
+  );
+}
+
+function McpAddModal({
+  onCancel,
+  onAdded,
+  onError,
+}: {
+  onCancel: () => void;
+  onAdded: () => void;
+  onError: (msg: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [command, setCommand] = useState("");
+  const [argsText, setArgsText] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (!name.trim() || !command.trim()) {
+      onError("Name and command are required.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const args = argsText
+        .split(/\s+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      await ipc.agents.mcpAdd(name.trim(), command.trim(), args);
+      onAdded();
+    } catch (e) {
+      onError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 flex items-center justify-center"
+      style={{ background: "rgba(0,0,0,0.45)", zIndex: 80 }}
+      onClick={onCancel}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 420,
+          background: "var(--color-loom-panel)",
+          color: "var(--color-loom-text)",
+          border: `1px solid ${surface.hairline}`,
+          borderRadius: 14,
+          padding: 18,
+        }}
+      >
+        <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>Add MCP server</h3>
+        <div className="flex flex-col gap-2.5">
+          <Field label="Name">
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="filesystem"
+              style={fieldStyle}
+            />
+          </Field>
+          <Field label="Command">
+            <input
+              value={command}
+              onChange={(e) => setCommand(e.target.value)}
+              placeholder="npx"
+              style={{ ...fieldStyle, fontFamily: "var(--font-mono)" }}
+            />
+          </Field>
+          <Field label="Arguments (space-separated)">
+            <input
+              value={argsText}
+              onChange={(e) => setArgsText(e.target.value)}
+              placeholder="-y @modelcontextprotocol/server-filesystem ."
+              style={{ ...fieldStyle, fontFamily: "var(--font-mono)" }}
+            />
+          </Field>
+        </div>
+        <div className="flex justify-end gap-2" style={{ marginTop: 12 }}>
+          <button
+            onClick={onCancel}
+            style={{
+              padding: "6px 14px",
+              fontSize: 12,
+              borderRadius: 8,
+              background: "rgba(255,255,255,0.06)",
+              border: `1px solid ${surface.hairline}`,
+              color: text.primary,
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={busy}
+            style={{
+              padding: "6px 14px",
+              fontSize: 12,
+              fontWeight: 600,
+              borderRadius: 8,
+              background: "var(--color-loom-accent)",
+              color: "white",
+              border: 0,
+              opacity: busy ? 0.5 : 1,
+            }}
+          >
+            {busy ? "Adding…" : "Add"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -824,57 +1017,58 @@ function ShellPanel() {
   );
 }
 
-function TasksPanel() {
-  const [defaultAgent, setDefaultAgent] = useState(() =>
-    localStorage.getItem("loom.tasks.defaultAgent") || "Loom Agent"
-  );
-  const [saved, setSaved] = useState(false);
+const STALE_OPTIONS: { secs: number; label: string }[] = [
+  { secs: 30 * 60, label: "30 minutes" },
+  { secs: 60 * 60, label: "1 hour" },
+  { secs: 4 * 60 * 60, label: "4 hours" },
+  { secs: 12 * 60 * 60, label: "12 hours" },
+  { secs: 24 * 60 * 60, label: "24 hours" },
+  { secs: 0, label: "Never" },
+];
 
-  const save = () => {
-    localStorage.setItem("loom.tasks.defaultAgent", defaultAgent);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 1400);
-  };
+function TasksPanel() {
+  const initial = Number(localStorage.getItem("loom.tasks.staleSecs") ?? "3600") || 3600;
+  const [staleSecs, setStaleSecs] = useState<number>(initial);
+
+  useEffect(() => {
+    const effective = staleSecs > 0 ? staleSecs : 365 * 24 * 60 * 60;
+    ipc.liveTasks.setStaleness(effective).catch(() => {});
+    localStorage.setItem("loom.tasks.staleSecs", String(staleSecs));
+  }, [staleSecs]);
 
   return (
     <div>
       <H2>Tasks</H2>
       <Hint>
-        Defaults applied to new Kanban cards. Per-card overrides still win.
+        Hide live agent sessions whose task files haven't moved in this much time. Mirrors
+        macOS Settings → Tasks.
       </Hint>
       <label style={{ fontSize: 11, color: text.muted, display: "block", marginBottom: 6 }}>
-        Default agent
+        Stale window
       </label>
-      <input
-        value={defaultAgent}
-        onChange={(e) => setDefaultAgent(e.target.value)}
-        className="w-full focus:outline-none"
-        style={{
-          background: "var(--color-loom-bg-from)",
-          border: `1px solid ${surface.hairline}`,
-          borderRadius: 8,
-          padding: "8px 12px",
-          fontSize: 13,
-          color: text.primary,
-          marginBottom: 12,
-        }}
-      />
-      <button
-        onClick={save}
-        className="flex items-center gap-1.5"
-        style={{
-          background: "var(--color-loom-accent)",
-          color: "white",
-          borderRadius: 8,
-          padding: "6px 14px",
-          fontSize: 12,
-          fontWeight: 500,
-          border: "none",
-        }}
-      >
-        {saved && <Icons.check size={12} strokeWidth={2.4} />}
-        {saved ? "Saved" : "Save"}
-      </button>
+      <div className="flex flex-wrap gap-1.5">
+        {STALE_OPTIONS.map((opt) => (
+          <button
+            key={opt.secs}
+            onClick={() => setStaleSecs(opt.secs)}
+            style={{
+              padding: "5px 12px",
+              fontSize: 11,
+              borderRadius: 999,
+              border: `1px solid ${
+                staleSecs === opt.secs ? "var(--color-loom-accent)" : surface.hairline
+              }`,
+              background:
+                staleSecs === opt.secs
+                  ? "color-mix(in srgb, var(--color-loom-accent) 14%, transparent)"
+                  : "transparent",
+              color: staleSecs === opt.secs ? text.primary : text.muted,
+            }}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
