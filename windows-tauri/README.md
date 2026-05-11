@@ -18,12 +18,25 @@ UI changes hot-reload. Anything touching PTY, Credential Manager, or Windows-spe
 
 ## Building Windows artifacts from macOS
 
-Requires Rust stable, `aarch64-pc-windows-msvc` + `x86_64-pc-windows-msvc` rustup targets, [cargo-xwin](https://github.com/rust-cross/cargo-xwin), and [NSIS](https://nsis.sourceforge.io/) (`brew install nsis`).
+One-time setup:
 
 ```bash
-pnpm tauri build --target aarch64-pc-windows-msvc --runner cargo-xwin
-pnpm tauri build --target x86_64-pc-windows-msvc --runner cargo-xwin
+rustup target add aarch64-pc-windows-msvc x86_64-pc-windows-msvc
+cargo install cargo-xwin
+brew install llvm nsis
 ```
+
+The `llvm` install gives you `clang-cl`, `llvm-lib`, and `llvm-rc`, which are required for crates with C bindings (notably `ring` via reqwest's rustls). `src-tauri/.cargo/config.toml` points to those binaries.
+
+Build:
+
+```bash
+cd ~/Documents/Xcode/Loom/windows-tauri/src-tauri
+cargo xwin build --release --target aarch64-pc-windows-msvc
+cargo xwin build --release --target x86_64-pc-windows-msvc
+```
+
+For full MSI/NSIS packaging (not just the bare `.exe`), use Tauri's bundler with the Windows targets. Tauri's bundler invokes WiX/NSIS, which is more reliable inside the Win11 VM than on macOS. See [TESTING.md](./TESTING.md) for the VM-side build path.
 
 Output:
 ```

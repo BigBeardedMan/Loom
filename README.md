@@ -1,6 +1,11 @@
 # Loom
 
-Native macOS workspace app for terminals, editor, AI agents, and task state in one window. The terminal is the differentiator.
+Native workspace app for terminals, editor, AI agents, and task state in one window. The terminal is the differentiator.
+
+Two builds live in this repo:
+
+- **macOS** (this README): SwiftUI + SwiftData, ships as a `.dmg` to `/Applications/Loom.app`. Source under `Loom/`.
+- **Windows** (`windows-tauri/`): Tauri 2 + Rust + React, ships as MSI/NSIS for both `aarch64-pc-windows-msvc` and `x86_64-pc-windows-msvc`. See [`windows-tauri/README.md`](./windows-tauri/README.md) and [`windows-tauri/TESTING.md`](./windows-tauri/TESTING.md).
 
 Loom is a personal, single-user tool. No subscription model, hosted control plane, team billing, or feature gating. Local-first storage is the default; cloud services should be optional provider integrations only when they directly help the operator ship.
 
