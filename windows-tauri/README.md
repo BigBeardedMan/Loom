@@ -108,8 +108,15 @@ windows-tauri/
 
 ## Feature parity with macOS
 
-As of windows-v1.0.0 the port is 1:1 with macOS Loom across the features the
-audit found:
+As of windows-v1.1.0 the port is at or beyond 1:1 parity with macOS Loom.
+v1.1.0 closed out the deferred polish (local-endpoint wiring in the agent
+pane, Notes Ctrl+F search, auto-preview index per Preview block, pin
+management, first-run onboarding, system tray icon, toast notifications,
+multi-window via Ctrl+Shift+N or the ⌘K palette) and shipped alongside
+macOS Loom v2.5.0 which backported crash reporting, editor file watching,
+and editor syntax highlighting from this port.
+
+Across both releases the surface is:
 
 - Workspace shell — sidebar with rename, kind icons, per-workspace session
   count; cockpit with dynamic blocks, drag-to-reorder, block rename,
