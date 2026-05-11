@@ -2,7 +2,7 @@
 xcuserdata/
 *.xcuserstate
 DerivedData/
-build/
+/build/
 .swiftpm/
 Loom.xcodeproj/
 *.xcworkspace/xcuserdata/
