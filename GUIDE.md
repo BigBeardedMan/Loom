@@ -1,12 +1,18 @@
 # The Loom Guide
 
-A complete, single-page reference for the Loom macOS workspace app. Covers
+A complete, single-page reference for the Loom workspace app. Covers
 installation, every pane, every settings tab, the agent stack, the kanban, the
 auto-update pipeline, the release flow, and the underlying architecture.
 
 > Loom is a personal command center for builders. One window holds your
 > terminal, editor, AI agent, and task board side by side. Local-first, no
 > tenants, no tiers, no cloud sync.
+
+> **Windows port:** This guide describes the macOS build. The Windows port at
+> `windows-tauri/` mirrors the same feature surface on a Tauri 2 + Rust + React
+> stack. Same workspaces, terminals, agents, kanban, and notes. Setup lives in
+> [`windows-tauri/README.md`](./windows-tauri/README.md), VM-side test path in
+> [`windows-tauri/TESTING.md`](./windows-tauri/TESTING.md).
 
 This guide is generated and maintained alongside the app. The hosted MkDocs
 version of these chapters lives at
