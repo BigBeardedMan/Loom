@@ -10,6 +10,10 @@ import type { WorkspaceKind } from "../../lib/ipc";
 export type Block = {
   id: string;
   kind: Panel;
+  // Terminal blocks only: persisted split layout. 1-4 panes, axis controls
+  // 2H/2V/3H/3V (quad is forced at 4). Mirrors Loom/Workspace/WorkspaceLayout.swift.
+  terminalCount?: number;
+  terminalAxis?: "h" | "v";
 };
 
 export type Layout = {

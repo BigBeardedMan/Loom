@@ -48,6 +48,7 @@ type AppState = {
   removeBlock: (id: string) => Promise<void>;
   reorderBlocks: (newOrder: Block[]) => Promise<void>;
   resetLayout: () => Promise<void>;
+  updateBlock: (id: string, patch: Partial<Block>) => Promise<void>;
   setBlockStatus: (id: string, status: "idle" | "active" | "warning") => void;
   openPalette: () => void;
   closePalette: () => void;
@@ -184,6 +185,17 @@ export const useApp = create<AppState>((set, get) => ({
     const layout = defaultLayout(ws.kindRaw);
     set({ layout });
     await saveLayout(wsId, layout);
+  },
+
+  updateBlock: async (id, patch) => {
+    const wsId = get().selectedWorkspaceId;
+    const current = get().layout;
+    if (!wsId || !current) return;
+    const next: Layout = {
+      blocks: current.blocks.map((b) => (b.id === id ? { ...b, ...patch } : b)),
+    };
+    set({ layout: next });
+    await saveLayout(wsId, next);
   },
 
   setBlockStatus: (id, status) =>
