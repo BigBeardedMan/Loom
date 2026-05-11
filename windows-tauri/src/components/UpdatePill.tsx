@@ -1,12 +1,16 @@
 import { useState } from "react";
+import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { ipc } from "../lib/ipc";
 import { Icons } from "../lib/icons";
 import { shadow } from "../lib/theme";
 
 type Props = { version: string };
 
-// Mirrors the green update pill in Loom/App/LoomApp.swift (or UpdatePill view).
-// Capsule, green bg, white text, drop shadow, swaps icon while applying.
+const RELEASES_URL = "https://github.com/BigBeardedMan/Loom/releases/latest";
+
+// Mirrors the green update pill in Loom/Workspace/WorkspaceView.swift (lines 140-155).
+// Tries the tauri-plugin-updater first; falls back to opening the GitHub
+// release page if the in-app updater fails (e.g. missing signature).
 export function UpdatePill({ version }: Props) {
   const [applying, setApplying] = useState(false);
   const Icon = applying ? Icons.updateApplying : Icons.updateAvailable;
@@ -16,7 +20,9 @@ export function UpdatePill({ version }: Props) {
     setApplying(true);
     try {
       await ipc.update.apply();
-    } catch {
+    } catch (e) {
+      console.warn("In-app update failed, opening release page", e);
+      await openExternal(RELEASES_URL).catch(() => {});
       setApplying(false);
     }
   };
@@ -31,18 +37,31 @@ export function UpdatePill({ version }: Props) {
         background: "var(--color-ws-green)",
         boxShadow: shadow.pill,
         borderRadius: 999,
-        padding: "6px 10px",
+        padding: "5px 10px",
         fontSize: 12,
         fontWeight: 600,
-        transition: "opacity 180ms ease-in-out, transform 180ms ease-in-out",
+        transition: "opacity 180ms ease-in-out",
       }}
+      title={`Update to Loom ${version}`}
     >
       <Icon
         className={applying ? "animate-spin" : ""}
         size={11}
         strokeWidth={2.5}
       />
-      <span>{applying ? "Updating…" : `Update to ${version}`}</span>
+      <span>{applying ? "Updating…" : "Update"}</span>
+      {!applying && (
+        <span
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: 10,
+            opacity: 0.85,
+            fontWeight: 500,
+          }}
+        >
+          v{version}
+        </span>
+      )}
     </button>
   );
 }

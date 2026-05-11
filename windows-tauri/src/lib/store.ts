@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { ipc, type Workspace } from "./ipc";
 
-type Panel =
+export type Panel =
   | "terminal"
   | "editor"
   | "tasks"

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Icons } from "../../lib/icons";
 import {
   useApp,
@@ -6,6 +6,7 @@ import {
 } from "../../lib/store";
 import {
   ipc,
+  type SessionInfo,
   type Workspace,
   type WorkspaceColor as IpcColor,
   type WorkspaceKind as IpcKind,
@@ -44,6 +45,16 @@ export function WorkspaceSidebar() {
   const createWorkspace = useApp((s) => s.createWorkspace);
   const deleteWorkspace = useApp((s) => s.deleteWorkspace);
   const [creating, setCreating] = useState(false);
+  const [sessions, setSessions] = useState<SessionInfo[]>([]);
+
+  useEffect(() => {
+    const tick = () => {
+      ipc.terminal.list().then(setSessions).catch(() => {});
+    };
+    tick();
+    const id = setInterval(tick, 2000);
+    return () => clearInterval(id);
+  }, []);
 
   return (
     <aside
@@ -109,6 +120,56 @@ export function WorkspaceSidebar() {
             />
           ))}
         </div>
+
+        {sessions.length > 0 && (
+          <div className="mt-4">
+            <div
+              className="flex items-center justify-between"
+              style={{ padding: "4px 6px 6px" }}
+            >
+              <span className="section-header">Terminal Sessions</span>
+              <span
+                className="font-mono"
+                style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  color: text.muted,
+                  padding: "1px 6px",
+                  background: surface.softPanel,
+                  borderRadius: 999,
+                }}
+              >
+                {sessions.length}
+              </span>
+            </div>
+            <div className="flex flex-col gap-1">
+              {sessions.map((s, i) => (
+                <div
+                  key={s.id}
+                  className="flex items-center gap-2"
+                  style={{
+                    padding: "5px 8px",
+                    borderRadius: 6,
+                    background: "color-mix(in srgb, " + surface.softPanel + ", transparent 40%)",
+                    border: `1px solid ${surface.hairline}`,
+                  }}
+                >
+                  <Icons.terminal
+                    size={11}
+                    strokeWidth={2.2}
+                    color="var(--color-ws-green)"
+                  />
+                  <span
+                    className="truncate flex-1 font-mono"
+                    style={{ fontSize: 11, color: text.primary }}
+                  >
+                    Terminal {i + 1}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {creating && (
@@ -140,23 +201,20 @@ function WorkspaceRow({
   onSelect: () => void;
   onDelete: () => void;
 }) {
-  const tint = workspaceColorVar[workspace.colorName as WorkspaceColor];
   return (
     <div
       className="group flex items-center gap-2 cursor-pointer transition-colors"
       onClick={onSelect}
       style={{
         padding: `${sidebar.rowPaddingV}px ${sidebar.rowPaddingH}px`,
-        borderRadius: radius.row,
-        background: selected ? `color-mix(in srgb, ${tint} 13%, transparent)` : "transparent",
-        border: `1px solid ${
-          selected ? `color-mix(in srgb, ${tint} 65%, transparent)` : surface.hairline
-        }`,
+        borderRadius: 6,
+        background: selected ? surface.softPanel : "transparent",
         color: selected ? text.primary : text.muted,
       }}
       onMouseEnter={(e) => {
         if (!selected) {
-          e.currentTarget.style.background = surface.softPanel as string;
+          e.currentTarget.style.background =
+            "color-mix(in srgb, " + surface.softPanel + ", transparent 50%)";
           e.currentTarget.style.color = text.primary as string;
         }
       }}
@@ -168,7 +226,6 @@ function WorkspaceRow({
       }}
     >
       <WorkspaceDot color={workspace.colorName as WorkspaceColor} />
-      <KindIcon kind={workspace.kindRaw} />
       <span
         className="truncate flex-1"
         style={{ fontSize: 12, fontWeight: 500 }}
@@ -181,7 +238,7 @@ function WorkspaceRow({
           style={{
             background: surface.softPanel,
             borderRadius: 999,
-            padding: "2px 6px",
+            padding: "1px 6px",
             fontSize: 10,
             fontWeight: 700,
             color: text.muted,
@@ -203,21 +260,6 @@ function WorkspaceRow({
       </button>
     </div>
   );
-}
-
-function KindIcon({ kind }: { kind: Workspace["kindRaw"] }) {
-  const props = { size: 11, strokeWidth: 1.8, color: text.tertiary as string };
-  switch (kind) {
-    case "code":
-      return <Icons.textCursor {...props} />;
-    case "ideas":
-      return <Icons.lightbulb {...props} />;
-    case "review":
-    case "build":
-      return <Icons.eye {...props} />;
-    default:
-      return <Icons.folderFill {...props} />;
-  }
 }
 
 function NewWorkspaceForm({

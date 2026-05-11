@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useApp } from "./lib/store";
 import { WorkspaceSidebar } from "./modules/workspace/WorkspaceSidebar";
 import { WorkspaceView } from "./modules/workspace/WorkspaceView";
@@ -16,6 +17,9 @@ function App() {
 
   useEffect(() => {
     loadWorkspaces();
+    // Force native chrome off at runtime in case tauri.conf.json
+    // decorations:false didn't take effect on Windows ARM.
+    getCurrentWindow().setDecorations(false).catch(() => {});
   }, [loadWorkspaces]);
 
   useEffect(() => {

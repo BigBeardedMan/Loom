@@ -1,29 +1,67 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { useApp } from "../lib/store";
 import { LoomLogoMark } from "./LoomLogoMark";
 import { UpdatePill } from "./UpdatePill";
 import { Icons } from "../lib/icons";
-import { text } from "../lib/theme";
+import { surface, text, workspaceColorVar } from "../lib/theme";
+import type { Panel as PanelType } from "../lib/store";
 
 const win = getCurrentWindow();
 
-// Mirrors the hidden-titlebar macOS chrome: traffic lights on the left,
-// drag region across the middle, Update pill + Settings on the right.
+type UsageTool = "claude" | "codex" | "gemini";
+const USAGE_TOOLS: { id: UsageTool; label: string; color: string }[] = [
+  { id: "claude", label: "Claude Usage", color: workspaceColorVar.orange },
+  { id: "codex", label: "Codex Usage", color: workspaceColorVar.green },
+  { id: "gemini", label: "Gemini Usage", color: workspaceColorVar.blue },
+];
+
+const PANEL_META: Record<PanelType, { label: string; icon: keyof typeof Icons }> = {
+  terminal: { label: "Terminal", icon: "terminal" },
+  editor: { label: "Editor", icon: "textCursor" },
+  tasks: { label: "Tasks", icon: "checkCircle" },
+  agent: { label: "Agent", icon: "sparkles" },
+  notes: { label: "Notes", icon: "lightbulb" },
+  preview: { label: "Preview", icon: "eye" },
+  commands: { label: "Commands", icon: "listBulletRect" },
+};
+
+// Mirrors Loom/Workspace/WorkspaceView.swift topBar (lines 97-138):
+// logo / usageTabs / spacer / addBlockStrip / updatePill.
 export function Titlebar() {
   const updatePill = useApp((s) => s.updatePill);
-  const openSettings = useApp((s) => s.openSettings);
+  const activePanels = useApp((s) => s.activePanels);
+  const workspaces = useApp((s) => s.workspaces);
+  const selectedId = useApp((s) => s.selectedWorkspaceId);
+  const workspace = workspaces.find((w) => w.id === selectedId);
 
   return (
     <div
-      className="titlebar flex items-center gap-3 px-3 no-select"
+      className="titlebar flex items-center gap-3 px-2 no-select flex-none"
       style={{
         background: "transparent",
-        borderBottom: "1px solid var(--color-loom-hairline)",
+        borderBottom: `1px solid ${surface.hairline}`,
       }}
     >
       <TrafficLights />
 
-      <div className="flex items-center gap-1.5">
+      <a
+        href="#"
+        data-no-drag
+        onClick={(e) => {
+          e.preventDefault();
+          openExternal("https://github.com/BigBeardedMan/Loom").catch(() => {});
+        }}
+        className="flex items-center gap-1.5"
+        style={{
+          padding: "3px 8px",
+          borderRadius: 8,
+          background: surface.softPanel,
+          border: `1px solid ${surface.hairline}`,
+          textDecoration: "none",
+        }}
+        title="Open Loom on GitHub"
+      >
         <LoomLogoMark size={18} />
         <span
           style={{
@@ -35,34 +73,131 @@ export function Titlebar() {
         >
           Loom
         </span>
+      </a>
+
+      <div className="flex items-center gap-1.5">
+        {USAGE_TOOLS.map((t) => (
+          <UsageChip key={t.id} label={t.label} color={t.color} />
+        ))}
       </div>
 
       <div className="flex-1" />
 
-      {updatePill && <UpdatePill version={updatePill.version} />}
+      {workspace && <AddBlockStrip activePanels={activePanels} workspace={workspace} />}
 
-      <button
-        data-no-drag
-        onClick={openSettings}
-        className="rounded-md p-1.5"
-        style={{
-          color: text.muted,
-          transition: "color 120ms ease-out, background 120ms ease-out",
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.color = text.primary as string;
-          e.currentTarget.style.background = "var(--color-loom-soft-panel)";
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.color = text.muted as string;
-          e.currentTarget.style.background = "transparent";
-        }}
-        aria-label="Settings"
-      >
-        <Icons.settings size={15} strokeWidth={1.8} />
-      </button>
+      {updatePill && <UpdatePill version={updatePill.version} />}
     </div>
   );
+}
+
+function UsageChip({ label, color }: { label: string; color: string }) {
+  return (
+    <button
+      data-no-drag
+      className="flex items-center gap-1.5 transition-colors"
+      style={{
+        padding: "4px 10px",
+        borderRadius: 999,
+        background: "color-mix(in srgb, " + surface.softPanel + ", transparent 30%)",
+        border: `1px solid ${surface.hairline}`,
+        color: text.primary,
+        fontSize: 12,
+        fontWeight: 600,
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = surface.softPanel as string;
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background =
+          "color-mix(in srgb, " + surface.softPanel + ", transparent 30%)";
+      }}
+    >
+      <span
+        style={{
+          width: 7,
+          height: 7,
+          borderRadius: 999,
+          background: color,
+          display: "inline-block",
+        }}
+      />
+      {label}
+    </button>
+  );
+}
+
+function AddBlockStrip({
+  activePanels,
+  workspace,
+}: {
+  activePanels: PanelType[];
+  workspace: { kindRaw: string };
+}) {
+  const available = panelsForKind(workspace.kindRaw);
+
+  return (
+    <div
+      data-no-drag
+      className="flex items-center gap-1"
+      style={{
+        padding: "3px 5px",
+        borderRadius: 999,
+        background: "color-mix(in srgb, " + surface.softPanel + ", transparent 40%)",
+        border: `1px solid ${surface.hairline}`,
+      }}
+    >
+      {available.map((p) => {
+        const meta = PANEL_META[p];
+        const Icon = Icons[meta.icon];
+        const active = activePanels.includes(p);
+        return (
+          <button
+            key={p}
+            className="flex items-center gap-1 transition-colors"
+            style={{
+              padding: "3px 8px",
+              borderRadius: 999,
+              background: active ? surface.softPanel : "transparent",
+              color: active ? text.primary : text.muted,
+              fontSize: 11,
+              fontWeight: 600,
+            }}
+            onMouseEnter={(e) => {
+              if (!active) {
+                e.currentTarget.style.background = surface.softPanel as string;
+                e.currentTarget.style.color = text.primary as string;
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (!active) {
+                e.currentTarget.style.background = "transparent";
+                e.currentTarget.style.color = text.muted as string;
+              }
+            }}
+            title={`Add ${meta.label} block`}
+          >
+            <Icons.plus size={9} strokeWidth={2.5} />
+            <Icon size={10} strokeWidth={2} />
+            {meta.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function panelsForKind(kind: string): PanelType[] {
+  switch (kind) {
+    case "code":
+      return ["terminal", "editor", "tasks", "agent", "commands"];
+    case "ideas":
+      return ["notes", "agent"];
+    case "review":
+    case "build":
+      return ["preview", "agent"];
+    default:
+      return [];
+  }
 }
 
 function TrafficLights() {
