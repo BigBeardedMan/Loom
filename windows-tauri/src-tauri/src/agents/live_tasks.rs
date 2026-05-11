@@ -353,10 +353,12 @@ pub fn start_poller(app: AppHandle) {
     let state = app.state::<LiveTasksState>().inner().groups.clone();
     let staleness = app.state::<LiveTasksState>().inner().staleness_secs.clone();
     let app2 = app.clone();
-    tokio::spawn(async move {
+    // Use Tauri's runtime — setup runs before any tokio runtime is live, so
+    // tokio::spawn would panic with "there is no reactor running."
+    tauri::async_runtime::spawn(async move {
         loop {
             let secs = *staleness.lock();
-            let groups = tokio::task::spawn_blocking(move || collect_all_groups(secs))
+            let groups = tauri::async_runtime::spawn_blocking(move || collect_all_groups(secs))
                 .await
                 .unwrap_or_default();
             let changed = {
