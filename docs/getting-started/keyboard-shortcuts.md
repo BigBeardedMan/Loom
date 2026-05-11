@@ -26,6 +26,8 @@ Standard macOS pasteboard items, routed through the responder chain so they targ
 
 Settings → Shell has an **Always paste as plain text** toggle that makes ⌘V skip the bracketed-paste wrapper too, so you don't have to reach for ⇧⌘V every time.
 
+**Right-click anywhere in a terminal pane** to pop the same items as a context menu — Copy, Paste, Paste as Plain Text, Select All. Validation stays consistent with the menu bar (Copy disabled when no selection, Paste* disabled when the clipboard is empty). Text fields and the Editor / Notes panes inherit their context menu from AppKit, so the same right-click works there for free.
+
 ## Adding panes
 
 The number maps to the panel order for the current workspace kind. In a **Prompt** workspace the order is Terminal, Editor, Tasks, Agent — so ⌘⇧1 adds a terminal, ⌘⇧4 adds an agent. In an **Ideas** workspace ⌘⇧1 adds Notes, ⌘⇧2 adds Agent.

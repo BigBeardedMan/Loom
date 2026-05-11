@@ -1702,9 +1702,19 @@ shows up in the menu bar.
 | `Command A` | Select All |
 
 Settings → Shell has an **Always paste as plain text** toggle that
-makes `Command V` skip the bracketed-paste wrapper too — useful when
+makes `Command V` skip the bracketed-paste wrapper too. Useful when
 pasting large multi-line snippets into shells whose prompt rendering
 gets confused by `CSI 200~/201~` markers.
+
+**Right-click context menu.** Secondary-click anywhere inside a
+terminal pane to pop a context menu with the same items: Copy, Paste,
+Paste as Plain Text, Select All. Menu items target nil so AppKit
+dispatches them through the responder chain to `LoomTerminalView`, and
+the existing `validateUserInterfaceItem` keeps Copy disabled when
+there's no selection and Paste\* disabled when the pasteboard holds
+nothing. Text fields and the Editor / Notes `TextEditor` inherit the
+default `NSTextField` / `NSTextView` context menu from AppKit, so
+right-click works there for free.
 
 ### Adding panes
 

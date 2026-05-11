@@ -281,6 +281,56 @@ final class LoomTerminalView: LocalProcessTerminalView {
         return super.validateUserInterfaceItem(item)
     }
 
+    // MARK: - Context menu
+
+    /// Right-click context menu. SwiftTerm's `TerminalView` is an `NSView`
+    /// subclass and ships no default menu, so without this override a
+    /// secondary click on the pane is a no-op. The items target nil so AppKit
+    /// dispatches each one through the responder chain — Copy/Paste land on
+    /// SwiftTerm's `copy(_:)` / our overridden `paste(_:)`, Paste as Plain
+    /// Text targets `pasteAsPlainText(_:)` on this class. `validateUserInter`
+    /// `faceItem` keeps Copy disabled when there's no selection and Paste*
+    /// disabled when the pasteboard is empty.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+
+        let copyItem = NSMenuItem(
+            title: "Copy",
+            action: #selector(NSText.copy(_:)),
+            keyEquivalent: "c"
+        )
+        copyItem.keyEquivalentModifierMask = .command
+        menu.addItem(copyItem)
+
+        let pasteItem = NSMenuItem(
+            title: "Paste",
+            action: #selector(NSText.paste(_:)),
+            keyEquivalent: "v"
+        )
+        pasteItem.keyEquivalentModifierMask = .command
+        menu.addItem(pasteItem)
+
+        let pastePlainItem = NSMenuItem(
+            title: "Paste as Plain Text",
+            action: #selector(LoomTerminalView.pasteAsPlainText(_:)),
+            keyEquivalent: "v"
+        )
+        pastePlainItem.keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(pastePlainItem)
+
+        menu.addItem(.separator())
+
+        let selectAllItem = NSMenuItem(
+            title: "Select All",
+            action: #selector(NSText.selectAll(_:)),
+            keyEquivalent: "a"
+        )
+        selectAllItem.keyEquivalentModifierMask = .command
+        menu.addItem(selectAllItem)
+
+        return menu
+    }
+
     // MARK: - Click-to-position
 
     private func installClickToPosition() {
