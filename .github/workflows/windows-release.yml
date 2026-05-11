@@ -74,11 +74,7 @@ jobs:
           $out = "release-artifacts"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
           $bundle = "src-tauri/target/${{ matrix.target }}/release/bundle"
-          Get-ChildItem -Path "$bundle/msi" -Filter *.msi -ErrorAction SilentlyContinue |
-            ForEach-Object { Copy-Item $_.FullName -Destination $out }
           Get-ChildItem -Path "$bundle/nsis" -Filter *.exe -ErrorAction SilentlyContinue |
-            ForEach-Object { Copy-Item $_.FullName -Destination $out }
-          Get-ChildItem -Path "$bundle/msi" -Filter *.sig -ErrorAction SilentlyContinue |
             ForEach-Object { Copy-Item $_.FullName -Destination $out }
           Get-ChildItem -Path "$bundle/nsis" -Filter *.sig -ErrorAction SilentlyContinue |
             ForEach-Object { Copy-Item $_.FullName -Destination $out }
@@ -104,8 +100,8 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#windows-v}"
-          MSI_X64=$(find dist -name "*x64*.msi" -o -name "*x86_64*.msi" | head -n1)
-          MSI_ARM=$(find dist -name "*arm64*.msi" -o -name "*aarch64*.msi" | head -n1)
+          NSIS_X64=$(find dist -name "*x64-setup.exe" | head -n1)
+          NSIS_ARM=$(find dist -name "*arm64-setup.exe" | head -n1)
           NOTES="Loom Windows ${VERSION}"
           cat > latest-windows.json <<EOF
           {
@@ -115,11 +111,11 @@ jobs:
             "platforms": {
               "windows-x86_64": {
                 "signature": "",
-                "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/$(basename "$MSI_X64")"
+                "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/$(basename "$NSIS_X64")"
               },
               "windows-aarch64": {
                 "signature": "",
-                "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/$(basename "$MSI_ARM")"
+                "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/$(basename "$NSIS_ARM")"
               }
             }
           }
