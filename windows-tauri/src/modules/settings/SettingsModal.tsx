@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
-import { X, Check, Loader2 } from "lucide-react";
+import { Icons } from "../../lib/icons";
 import { useApp } from "../../lib/store";
 import { ipc, type McpServer } from "../../lib/ipc";
+import { modal, radius, surface, text } from "../../lib/theme";
 
-type Tab = "providers" | "mcp" | "shell" | "about";
+type Tab = "appearance" | "providers" | "mcp" | "shell" | "about";
 
+// Mirrors Loom/Settings/SettingsScene.swift.
+// 620x460 sheet, blurred backdrop, tab rail at 140px on the left.
 export function SettingsModal() {
   const isOpen = useApp((s) => s.isSettingsOpen);
   const close = useApp((s) => s.closeSettings);
@@ -14,27 +17,52 @@ export function SettingsModal() {
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-40 flex items-center justify-center"
+      style={{
+        background: "rgba(0, 0, 0, 0.40)",
+        backdropFilter: "blur(20px) saturate(180%)",
+        WebkitBackdropFilter: "blur(20px) saturate(180%)",
+      }}
       onClick={close}
     >
       <div
-        className="flex h-[600px] w-[840px] max-w-[95vw] overflow-hidden rounded-xl border border-loom-border bg-loom-panel shadow-2xl"
+        className="flex overflow-hidden"
+        style={{
+          width: modal.settings.width,
+          height: modal.settings.height,
+          background: surface.panel,
+          border: `1px solid ${surface.hairline}`,
+          borderRadius: radius.panel,
+          boxShadow: "0 24px 48px rgba(0, 0, 0, 0.45)",
+        }}
         onClick={(e) => e.stopPropagation()}
       >
-        <aside className="w-44 border-r border-loom-border bg-loom-panel-elev p-2">
-          <div className="mb-2 flex items-center justify-between px-2">
-            <span className="text-xs font-medium uppercase tracking-wider text-loom-text-mute">
-              Settings
-            </span>
+        <aside
+          className="flex flex-col flex-none"
+          style={{
+            width: 140,
+            padding: 8,
+            background: surface.inset,
+            borderRight: `1px solid ${surface.hairline}`,
+          }}
+        >
+          <div
+            className="flex items-center justify-between"
+            style={{ padding: "4px 6px 8px" }}
+          >
+            <span className="section-header">Settings</span>
             <button
               onClick={close}
-              className="rounded p-1 text-loom-text-mute hover:bg-loom-border hover:text-loom-text"
+              className="rounded p-0.5"
+              style={{ color: text.muted }}
+              aria-label="Close"
             >
-              <X className="h-3.5 w-3.5" />
+              <Icons.close size={12} strokeWidth={2} />
             </button>
           </div>
           {(
             [
+              ["appearance", "Appearance"],
               ["providers", "AI Providers"],
               ["mcp", "MCP Servers"],
               ["shell", "Shell"],
@@ -44,22 +72,117 @@ export function SettingsModal() {
             <button
               key={id}
               onClick={() => setTab(id)}
-              className={`w-full rounded px-2 py-1 text-left text-sm ${
-                tab === id
-                  ? "bg-loom-panel text-loom-text"
-                  : "text-loom-text-dim hover:bg-loom-panel hover:text-loom-text"
-              }`}
+              className="w-full text-left transition-colors"
+              style={{
+                padding: "6px 10px",
+                borderRadius: 6,
+                fontSize: 12,
+                fontWeight: 500,
+                color: tab === id ? text.primary : text.muted,
+                background:
+                  tab === id
+                    ? "color-mix(in srgb, var(--color-loom-accent) 16%, transparent)"
+                    : "transparent",
+              }}
             >
               {label}
             </button>
           ))}
         </aside>
-        <main className="flex-1 overflow-y-auto scrollbar-thin p-6">
+        <main className="flex-1 overflow-y-auto scrollbar-thin" style={{ padding: 24 }}>
+          {tab === "appearance" && <AppearancePanel />}
           {tab === "providers" && <ProvidersPanel />}
           {tab === "mcp" && <McpPanel />}
           {tab === "shell" && <ShellPanel />}
           {tab === "about" && <AboutPanel />}
         </main>
+      </div>
+    </div>
+  );
+}
+
+function H2({ children }: { children: React.ReactNode }) {
+  return (
+    <h2
+      style={{
+        fontSize: 14,
+        fontWeight: 600,
+        color: text.primary,
+        marginBottom: 6,
+      }}
+    >
+      {children}
+    </h2>
+  );
+}
+
+function Hint({ children }: { children: React.ReactNode }) {
+  return (
+    <p style={{ fontSize: 11, color: text.muted, marginBottom: 12, lineHeight: 1.5 }}>
+      {children}
+    </p>
+  );
+}
+
+function AppearancePanel() {
+  const [mode, setMode] = useState<"system" | "light" | "dark">(() => {
+    const saved = localStorage.getItem("loom.theme");
+    if (saved === "light" || saved === "dark" || saved === "system") return saved;
+    return "system";
+  });
+
+  useEffect(() => {
+    localStorage.setItem("loom.theme", mode);
+    const root = document.documentElement;
+    if (mode === "system") {
+      root.removeAttribute("data-theme");
+    } else {
+      root.setAttribute("data-theme", mode);
+    }
+  }, [mode]);
+
+  const opts: { value: typeof mode; label: string; icon: keyof typeof Icons }[] = [
+    { value: "system", label: "System", icon: "appearanceSystem" },
+    { value: "light", label: "Light", icon: "appearanceLight" },
+    { value: "dark", label: "Dark", icon: "appearanceDark" },
+  ];
+
+  return (
+    <div>
+      <H2>Appearance</H2>
+      <Hint>Match system preference, or pick a fixed theme. Mirrors AppearanceSetting on macOS.</Hint>
+      <div
+        className="flex gap-1 flex-none"
+        style={{
+          padding: 4,
+          background: surface.inset,
+          borderRadius: 8,
+          width: "fit-content",
+        }}
+      >
+        {opts.map((o) => {
+          const Icon = Icons[o.icon];
+          const active = mode === o.value;
+          return (
+            <button
+              key={o.value}
+              onClick={() => setMode(o.value)}
+              className="flex items-center gap-1.5"
+              style={{
+                padding: "6px 12px",
+                borderRadius: 6,
+                fontSize: 12,
+                fontWeight: 500,
+                color: active ? text.primary : text.muted,
+                background: active ? surface.panel : "transparent",
+                boxShadow: active ? "0 1px 2px rgba(0, 0, 0, 0.15)" : "none",
+              }}
+            >
+              <Icon size={13} strokeWidth={1.8} />
+              {o.label}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -84,48 +207,62 @@ function ProvidersPanel() {
   const save = async () => {
     setSaving(true);
     try {
-      if (anthropic) {
-        await ipc.keychain.set("loom.anthropic", "default", anthropic);
-      } else {
-        await ipc.keychain.delete("loom.anthropic", "default");
-      }
+      if (anthropic) await ipc.keychain.set("loom.anthropic", "default", anthropic);
+      else await ipc.keychain.delete("loom.anthropic", "default");
       setSaved(true);
-      setTimeout(() => setSaved(false), 1500);
+      setTimeout(() => setSaved(false), 1400);
     } finally {
       setSaving(false);
     }
   };
 
-  if (!loaded) return <div className="text-sm text-loom-text-mute">Loading…</div>;
+  if (!loaded) return <div style={{ fontSize: 12, color: text.muted }}>Loading…</div>;
 
   return (
-    <div className="space-y-4">
-      <h2 className="text-base font-medium">AI Providers</h2>
-      <p className="text-xs text-loom-text-mute">
-        Keys are stored in Windows Credential Manager. Empty value removes the entry.
-      </p>
-      <div className="space-y-2">
-        <label className="block text-xs text-loom-text-dim">Anthropic API key</label>
-        <input
-          type="password"
-          value={anthropic}
-          onChange={(e) => setAnthropic(e.target.value)}
-          placeholder="sk-ant-…"
-          className="w-full rounded-md border border-loom-border bg-loom-bg px-3 py-2 text-sm text-loom-text focus:border-loom-accent focus:outline-none"
-        />
-        <button
-          onClick={save}
-          disabled={saving}
-          className="flex items-center gap-1.5 rounded-md bg-loom-accent px-3 py-1.5 text-sm text-white hover:opacity-90 disabled:opacity-50"
-        >
-          {saving ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : saved ? (
-            <Check className="h-3.5 w-3.5" />
-          ) : null}
-          {saved ? "Saved" : "Save"}
-        </button>
-      </div>
+    <div>
+      <H2>AI Providers</H2>
+      <Hint>
+        Keys stored in Windows Credential Manager. Empty value removes the entry.
+      </Hint>
+      <label style={{ fontSize: 11, color: text.muted, display: "block", marginBottom: 6 }}>
+        Anthropic API key
+      </label>
+      <input
+        type="password"
+        value={anthropic}
+        onChange={(e) => setAnthropic(e.target.value)}
+        placeholder="sk-ant-…"
+        className="w-full focus:outline-none"
+        style={{
+          background: "var(--color-loom-bg-from)",
+          border: `1px solid ${surface.hairline}`,
+          borderRadius: 8,
+          padding: "8px 12px",
+          fontSize: 13,
+          color: text.primary,
+          fontFamily: "var(--font-mono)",
+          marginBottom: 12,
+        }}
+      />
+      <button
+        onClick={save}
+        disabled={saving}
+        className="flex items-center gap-1.5"
+        style={{
+          background: "var(--color-loom-accent)",
+          color: "white",
+          borderRadius: 8,
+          padding: "6px 14px",
+          fontSize: 12,
+          fontWeight: 500,
+          border: "none",
+          opacity: saving ? 0.5 : 1,
+        }}
+      >
+        {saving && <Icons.spinner size={12} className="animate-spin" />}
+        {saved && <Icons.check size={12} strokeWidth={2.4} />}
+        {saved ? "Saved" : "Save"}
+      </button>
     </div>
   );
 }
@@ -142,29 +279,52 @@ function McpPanel() {
   }, []);
 
   return (
-    <div className="space-y-3">
-      <h2 className="text-base font-medium">MCP Servers</h2>
-      <p className="text-xs text-loom-text-mute">
-        Managed via the Claude CLI (`claude mcp list/add/remove`).
-      </p>
+    <div>
+      <H2>MCP Servers</H2>
+      <Hint>Managed via the Claude CLI (`claude mcp list/add/remove`).</Hint>
       {error && (
-        <div className="rounded border border-loom-border bg-red-500/10 px-3 py-2 text-xs text-red-300">
+        <div
+          style={{
+            background: "rgba(242, 70, 32, 0.10)",
+            border: `1px solid ${surface.hairline}`,
+            borderRadius: 8,
+            padding: 10,
+            fontSize: 11,
+            color: "var(--color-ws-orange)",
+            marginBottom: 12,
+          }}
+        >
           {error}
         </div>
       )}
       {servers.length === 0 && !error && (
-        <div className="rounded border border-dashed border-loom-border px-3 py-6 text-center text-xs text-loom-text-mute">
+        <div
+          style={{
+            border: `1px dashed ${surface.hairline}`,
+            borderRadius: 8,
+            padding: 20,
+            textAlign: "center",
+            fontSize: 11,
+            color: text.tertiary,
+          }}
+        >
           No MCP servers configured.
         </div>
       )}
-      <ul className="space-y-1">
+      <ul style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {servers.map((s) => (
           <li
             key={s.name}
-            className="rounded border border-loom-border bg-loom-bg px-3 py-2 text-sm"
+            style={{
+              background: surface.inset,
+              border: `1px solid ${surface.hairline}`,
+              borderRadius: 8,
+              padding: "8px 12px",
+              fontSize: 12,
+            }}
           >
-            <div className="font-medium">{s.name}</div>
-            <div className="font-mono text-xs text-loom-text-mute">
+            <div style={{ fontWeight: 600, color: text.primary }}>{s.name}</div>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: text.muted }}>
               {s.command} {s.args.join(" ")}
             </div>
           </li>
@@ -175,41 +335,46 @@ function McpPanel() {
 }
 
 function ShellPanel() {
-  const [installed, setInstalled] = useState(false);
-  const [installing, setInstalling] = useState(false);
   const [path, setPath] = useState<string | null>(null);
+  const [installing, setInstalling] = useState(false);
 
   const install = async () => {
     setInstalling(true);
     try {
       const p = await ipc.shell.installIntegration();
       setPath(p);
-      setInstalled(true);
     } finally {
       setInstalling(false);
     }
   };
 
   return (
-    <div className="space-y-3">
-      <h2 className="text-base font-medium">Shell Integration</h2>
-      <p className="text-xs text-loom-text-mute">
-        Installs a PowerShell profile hook that records every command to{" "}
-        <code className="font-mono text-loom-text-dim">
-          %LOCALAPPDATA%\Loom\history.jsonl
-        </code>{" "}
+    <div>
+      <H2>Shell Integration</H2>
+      <Hint>
+        Installs a PowerShell profile hook recording every command to{" "}
+        <code style={{ fontFamily: "var(--font-mono)" }}>%LOCALAPPDATA%\Loom\history.jsonl</code>{" "}
         for the Commands pane and the agent.
-      </p>
+      </Hint>
       <button
         onClick={install}
         disabled={installing}
-        className="rounded-md bg-loom-accent px-3 py-1.5 text-sm text-white hover:opacity-90 disabled:opacity-50"
+        style={{
+          background: "var(--color-loom-accent)",
+          color: "white",
+          borderRadius: 8,
+          padding: "6px 14px",
+          fontSize: 12,
+          fontWeight: 500,
+          border: "none",
+          opacity: installing ? 0.5 : 1,
+        }}
       >
-        {installing ? "Installing…" : installed ? "Reinstall" : "Install"}
+        {installing ? "Installing…" : path ? "Reinstall" : "Install"}
       </button>
       {path && (
-        <div className="text-xs text-loom-text-mute">
-          Wrote to <code className="font-mono">{path}</code>
+        <div style={{ marginTop: 10, fontSize: 11, color: text.tertiary }}>
+          Wrote to <code style={{ fontFamily: "var(--font-mono)" }}>{path}</code>
         </div>
       )}
     </div>
@@ -222,14 +387,14 @@ function AboutPanel() {
     ipc.appVersion().then(setVersion);
   }, []);
   return (
-    <div className="space-y-3">
-      <h2 className="text-base font-medium">About Loom</h2>
-      <div className="text-sm text-loom-text-dim">
-        Version <span className="font-mono">{version}</span>
+    <div>
+      <H2>About Loom</H2>
+      <div style={{ fontSize: 13, color: text.muted, marginBottom: 8 }}>
+        Version <span style={{ fontFamily: "var(--font-mono)", color: text.primary }}>{version}</span>
       </div>
-      <div className="text-xs text-loom-text-mute">
-        Workspace cockpit for Windows. Built with Tauri + Rust + React.
-      </div>
+      <Hint>
+        Workspace cockpit for Windows. Built with Tauri + Rust + React. Mirrors the macOS Loom feature surface.
+      </Hint>
     </div>
   );
 }

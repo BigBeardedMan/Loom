@@ -1,27 +1,31 @@
 import { useEffect, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown } from "@codemirror/lang-markdown";
-import { oneDark } from "@codemirror/theme-one-dark";
-import { Plus, Trash2 } from "lucide-react";
+import { EditorView } from "@codemirror/view";
+import { Icons } from "../../lib/icons";
 import { ipc, type IdeaNote, type Workspace } from "../../lib/ipc";
 
+// Mirrors Loom/Notes/NotesPaneView.swift.
+// Tab strip at top, editor below. Inky background, yellow lightbulb on active tab.
 export function NotesPane({ workspace }: { workspace: Workspace }) {
   const [notes, setNotes] = useState<IdeaNote[]>([]);
-  const [selected, setSelected] = useState<IdeaNote | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const load = async () => {
     const list = await ipc.notes.list(workspace.id);
     setNotes(list);
-    if (!selected && list.length > 0) setSelected(list[0]);
-    if (selected && !list.find((n) => n.id === selected.id))
-      setSelected(list[0] ?? null);
+    if (list.length === 0) setSelectedId(null);
+    else if (!selectedId || !list.find((n) => n.id === selectedId))
+      setSelectedId(list[0].id);
   };
 
   useEffect(() => {
-    setSelected(null);
+    setSelectedId(null);
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace.id]);
+
+  const selected = notes.find((n) => n.id === selectedId);
 
   const createNote = async () => {
     const note = await ipc.notes.upsert({
@@ -30,19 +34,7 @@ export function NotesPane({ workspace }: { workspace: Workspace }) {
       body: "",
     });
     await load();
-    setSelected(note);
-  };
-
-  const updateBody = async (body: string) => {
-    if (!selected) return;
-    const updated = await ipc.notes.upsert({
-      id: selected.id,
-      workspaceId: workspace.id,
-      title: selected.title,
-      body,
-    });
-    setSelected(updated);
-    setNotes((prev) => prev.map((n) => (n.id === updated.id ? updated : n)));
+    setSelectedId(note.id);
   };
 
   const updateTitle = async (title: string) => {
@@ -53,90 +45,175 @@ export function NotesPane({ workspace }: { workspace: Workspace }) {
       title,
       body: selected.body,
     });
-    setSelected(updated);
     setNotes((prev) => prev.map((n) => (n.id === updated.id ? updated : n)));
   };
 
-  const remove = async (id: string) => {
+  const updateBody = async (body: string) => {
+    if (!selected) return;
+    const updated = await ipc.notes.upsert({
+      id: selected.id,
+      workspaceId: workspace.id,
+      title: selected.title,
+      body,
+    });
+    setNotes((prev) => prev.map((n) => (n.id === updated.id ? updated : n)));
+  };
+
+  const removeNote = async (id: string) => {
     await ipc.notes.delete(id);
     await load();
   };
 
   return (
-    <div className="flex h-full bg-loom-bg">
-      <div className="flex w-56 flex-col border-r border-loom-border bg-loom-panel">
-        <div className="flex items-center justify-between border-b border-loom-border px-3 py-1.5">
-          <span className="text-xs font-medium uppercase tracking-wider text-loom-text-mute">
-            Notes
-          </span>
-          <button
-            onClick={createNote}
-            className="rounded p-1 text-loom-text-dim hover:bg-loom-panel-elev hover:text-loom-text"
-            aria-label="New note"
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </button>
-        </div>
-        <div className="scrollbar-thin flex-1 overflow-y-auto p-1">
-          {notes.length === 0 && (
-            <div className="px-2 py-4 text-center text-xs text-loom-text-mute">
-              No notes yet.
-            </div>
-          )}
-          {notes.map((n) => (
-            <div
-              key={n.id}
-              className={`group flex cursor-pointer items-center gap-1 rounded px-2 py-1 text-xs ${
-                selected?.id === n.id
-                  ? "bg-loom-panel-elev text-loom-text"
-                  : "text-loom-text-dim hover:bg-loom-panel-elev"
-              }`}
-              onClick={() => setSelected(n)}
-            >
-              <span className="flex-1 truncate">{n.title || "Untitled"}</span>
-              <button
-                className="invisible rounded p-0.5 text-loom-text-mute hover:text-loom-text group-hover:visible"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  remove(n.id);
-                }}
-              >
-                <Trash2 className="h-3 w-3" />
-              </button>
-            </div>
+    <div className="flex h-full flex-col" style={{ background: "#050608" }}>
+      <div
+        className="flex items-center gap-1 flex-none"
+        style={{
+          padding: "6px",
+          background: "rgba(0, 0, 0, 0.32)",
+          borderBottom: "1px solid rgba(255, 255, 255, 0.10)",
+        }}
+      >
+        <div className="scrollbar-thin flex flex-1 gap-1 overflow-x-auto">
+          {notes.map((note) => (
+            <Tab
+              key={note.id}
+              note={note}
+              active={selectedId === note.id}
+              onClick={() => setSelectedId(note.id)}
+              onClose={() => removeNote(note.id)}
+            />
           ))}
         </div>
+        <button
+          onClick={createNote}
+          aria-label="New note"
+          style={{
+            color: "rgba(255, 255, 255, 0.55)",
+            padding: 4,
+            borderRadius: 4,
+          }}
+        >
+          <Icons.plus size={13} strokeWidth={2.2} />
+        </button>
       </div>
-      <div className="flex flex-1 flex-col">
+
+      <div className="flex-1 min-h-0">
         {selected ? (
-          <>
+          <div className="flex h-full flex-col">
             <input
               value={selected.title}
               onChange={(e) => updateTitle(e.target.value)}
-              className="border-b border-loom-border bg-transparent px-4 py-2 text-base text-loom-text outline-none"
+              className="flex-none focus:outline-none"
+              style={{
+                background: "transparent",
+                color: "rgba(255, 255, 255, 0.9)",
+                fontSize: 14,
+                fontWeight: 600,
+                padding: "14px 16px 6px",
+                border: "none",
+              }}
+              placeholder="Untitled note"
             />
             <div className="flex-1 min-h-0">
               <CodeMirror
                 value={selected.body}
                 onChange={updateBody}
-                extensions={[markdown()]}
-                theme={oneDark}
+                extensions={[markdown(), notesEditorTheme]}
+                theme="none"
                 height="100%"
                 style={{ height: "100%" }}
                 basicSetup={{
                   lineNumbers: false,
                   foldGutter: false,
                   highlightActiveLine: false,
+                  autocompletion: false,
                 }}
               />
             </div>
-          </>
+          </div>
         ) : (
-          <div className="flex flex-1 items-center justify-center text-sm text-loom-text-mute">
-            Create a note to begin.
+          <div
+            className="flex h-full items-center justify-center"
+            style={{ color: "rgba(255, 255, 255, 0.45)", fontSize: 12 }}
+          >
+            <div className="flex flex-col items-center gap-2">
+              <Icons.lightbulb size={28} strokeWidth={1.2} />
+              <span style={{ fontSize: 13, fontWeight: 500 }}>No note selected</span>
+              <span style={{ fontSize: 11 }}>Click + to capture an idea.</span>
+            </div>
           </div>
         )}
       </div>
     </div>
   );
 }
+
+function Tab({
+  note,
+  active,
+  onClick,
+  onClose,
+}: {
+  note: IdeaNote;
+  active: boolean;
+  onClick: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="group flex items-center gap-1.5 flex-none"
+      style={{
+        padding: "5px 10px",
+        borderRadius: 6,
+        background: active ? "rgba(255, 255, 255, 0.10)" : "transparent",
+        border: `1px solid ${active ? "rgba(255, 255, 255, 0.18)" : "transparent"}`,
+        color: active ? "white" : "rgba(255, 255, 255, 0.6)",
+        fontSize: 11,
+        fontWeight: 500,
+        maxWidth: 200,
+      }}
+    >
+      <Icons.lightbulb
+        size={10}
+        strokeWidth={2}
+        color={active ? "var(--color-ws-yellow)" : "rgba(255, 255, 255, 0.45)"}
+      />
+      <span className="truncate">{note.title || "Untitled"}</span>
+      <span
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+        className="invisible rounded p-0.5 group-hover:visible"
+        style={{ color: "rgba(255, 255, 255, 0.45)" }}
+      >
+        <Icons.close size={9} strokeWidth={2.5} />
+      </span>
+    </button>
+  );
+}
+
+const notesEditorTheme = EditorView.theme(
+  {
+    "&": {
+      backgroundColor: "transparent",
+      color: "rgba(255, 255, 255, 0.86)",
+      fontSize: "13px",
+      height: "100%",
+    },
+    ".cm-scroller": {
+      fontFamily: "var(--font-mono)",
+      padding: "8px 16px 12px",
+    },
+    ".cm-content": { caretColor: "var(--color-ws-blue)" },
+    ".cm-cursor": { borderLeftColor: "var(--color-ws-blue)" },
+    "&.cm-focused .cm-selectionBackground, ::selection": {
+      backgroundColor: "rgba(45, 128, 245, 0.30)",
+    },
+    ".cm-gutters": { display: "none" },
+    ".cm-activeLine": { backgroundColor: "transparent" },
+  },
+  { dark: true }
+);

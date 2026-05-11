@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Send, Square, Sparkles } from "lucide-react";
+import { Icons } from "../../lib/icons";
+import { PaneTitleBar } from "../../components/PaneTitleBar";
 import { ipc, on, type Workspace } from "../../lib/ipc";
 
 type Vendor = "claude" | "codex" | "gemini" | "ollama" | "anthropic";
@@ -20,20 +21,18 @@ const VENDORS: { value: Vendor; label: string }[] = [
   { value: "anthropic", label: "Anthropic API" },
 ];
 
+// Mirrors Loom/Agents/AgentPaneView.swift.
+// PaneTitleBar with sparkles icon, vendor picker, model field, transcript, input bar.
 export function AgentPane({ workspace }: { workspace: Workspace }) {
   const [vendor, setVendor] = useState<Vendor>("claude");
-  const [model, setModel] = useState<string>("claude-sonnet-4-6");
+  const [model, setModel] = useState("claude-sonnet-4-6");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const cleanupRef = useRef<(() => void) | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    return () => {
-      cleanupRef.current?.();
-    };
-  }, []);
+  useEffect(() => () => cleanupRef.current?.(), []);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 99999, behavior: "smooth" });
@@ -56,15 +55,14 @@ export function AgentPane({ workspace }: { workspace: Workspace }) {
     setBusy(true);
 
     try {
-      if (vendor === "anthropic") {
-        await runAnthropic(prompt, asstId);
-      } else {
-        await runCli(prompt, asstId);
-      }
+      if (vendor === "anthropic") await runAnthropic(prompt, asstId);
+      else await runCli(prompt, asstId);
     } catch (e) {
       setTurns((prev) =>
         prev.map((t) =>
-          t.id === asstId ? { ...t, text: `${t.text}\n[error] ${String(e)}`, streaming: false } : t
+          t.id === asstId
+            ? { ...t, text: `${t.text}\n[error] ${String(e)}`, streaming: false }
+            : t
         )
       );
       setBusy(false);
@@ -99,9 +97,7 @@ export function AgentPane({ workspace }: { workspace: Workspace }) {
 
   const runAnthropic = async (prompt: string, asstId: string) => {
     const apiKey = await ipc.keychain.get("loom.anthropic", "default");
-    if (!apiKey) {
-      throw new Error("Anthropic API key not set. Add it in Settings.");
-    }
+    if (!apiKey) throw new Error("Anthropic API key not set. Open Settings to add one.");
     const messages = [{ role: "user", content: prompt }];
     const streamId = await ipc.agents.httpSend({
       apiKey,
@@ -113,14 +109,11 @@ export function AgentPane({ workspace }: { workspace: Workspace }) {
       `agent://${streamId}/event`,
       (ev) => {
         if (ev.kind === "content_block_delta") {
-          const text = ((ev.data as { delta?: { text?: string } }).delta?.text) || "";
-          if (text) {
+          const t = (ev.data as { delta?: { text?: string } }).delta?.text || "";
+          if (t)
             setTurns((prev) =>
-              prev.map((t) =>
-                t.id === asstId ? { ...t, text: t.text + text } : t
-              )
+              prev.map((x) => (x.id === asstId ? { ...x, text: x.text + t } : x))
             );
-          }
         }
       }
     );
@@ -142,67 +135,137 @@ export function AgentPane({ workspace }: { workspace: Workspace }) {
   const cancel = () => {
     cleanupRef.current?.();
     cleanupRef.current = null;
-    setTurns((prev) =>
-      prev.map((t) => (t.streaming ? { ...t, streaming: false } : t))
-    );
+    setTurns((prev) => prev.map((t) => (t.streaming ? { ...t, streaming: false } : t)));
     setBusy(false);
   };
 
   return (
-    <div className="flex h-full flex-col bg-loom-bg">
-      <div className="flex items-center justify-between border-b border-loom-border bg-loom-panel px-3 py-1.5 text-xs">
-        <div className="flex items-center gap-1.5">
-          <Sparkles className="h-3.5 w-3.5 text-loom-accent" />
-          <span className="font-medium uppercase tracking-wider text-loom-text-mute">
-            Agent
-          </span>
-        </div>
-        <div className="flex items-center gap-1">
-          <select
-            value={vendor}
-            onChange={(e) => setVendor(e.target.value as Vendor)}
-            className="rounded border border-loom-border bg-loom-bg px-1.5 py-0.5 text-xs text-loom-text focus:border-loom-accent focus:outline-none"
-          >
-            {VENDORS.map((v) => (
-              <option key={v.value} value={v.value}>
-                {v.label}
-              </option>
-            ))}
-          </select>
-          {vendor === "anthropic" && (
-            <input
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              placeholder="model"
-              className="w-32 rounded border border-loom-border bg-loom-bg px-1.5 py-0.5 text-xs text-loom-text focus:border-loom-accent focus:outline-none"
-            />
-          )}
-        </div>
-      </div>
+    <div className="flex h-full flex-col" style={{ background: "#04050A" }}>
+      <PaneTitleBar
+        variant="dark"
+        icon={<Icons.sparkles size={11} strokeWidth={2} color="var(--color-ws-orange)" />}
+        title="Agent"
+        right={
+          <>
+            <select
+              data-no-drag
+              value={vendor}
+              onChange={(e) => setVendor(e.target.value as Vendor)}
+              className="focus:outline-none"
+              style={{
+                background: "rgba(255, 255, 255, 0.06)",
+                border: "1px solid rgba(255, 255, 255, 0.10)",
+                borderRadius: 4,
+                padding: "2px 6px",
+                fontSize: 11,
+                color: "rgba(255, 255, 255, 0.9)",
+              }}
+            >
+              {VENDORS.map((v) => (
+                <option key={v.value} value={v.value}>
+                  {v.label}
+                </option>
+              ))}
+            </select>
+            {vendor === "anthropic" && (
+              <input
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder="model"
+                className="focus:outline-none"
+                style={{
+                  background: "rgba(255, 255, 255, 0.06)",
+                  border: "1px solid rgba(255, 255, 255, 0.10)",
+                  borderRadius: 4,
+                  padding: "2px 6px",
+                  fontSize: 11,
+                  width: 130,
+                  color: "rgba(255, 255, 255, 0.9)",
+                  fontFamily: "var(--font-mono)",
+                }}
+              />
+            )}
+          </>
+        }
+      />
 
       <div
         ref={scrollRef}
-        className="scrollbar-thin flex-1 overflow-y-auto px-3 py-2"
+        className="scrollbar-thin flex-1 overflow-y-auto"
+        style={{ padding: "12px 16px" }}
       >
         {turns.length === 0 && (
-          <div className="flex h-full items-center justify-center text-sm text-loom-text-mute">
+          <div
+            className="flex h-full items-center justify-center"
+            style={{ color: "rgba(255, 255, 255, 0.35)", fontSize: 12 }}
+          >
             Ask the agent anything about this workspace.
           </div>
         )}
-        {turns.map((t) => (
-          <div key={t.id} className="mb-3 text-sm">
-            <div className="mb-0.5 text-[10px] uppercase tracking-wider text-loom-text-mute">
+        {turns.map((t, i) => (
+          <div
+            key={t.id}
+            className="flex flex-col gap-1"
+            style={{
+              marginBottom: 14,
+              background:
+                t.role === "user" ? "rgba(255, 255, 255, 0.04)" : "transparent",
+              borderRadius: 8,
+              padding: t.role === "user" ? "8px 10px" : 0,
+            }}
+          >
+            <span
+              className="uppercase"
+              style={{
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: 0.6,
+                color: "rgba(255, 255, 255, 0.45)",
+              }}
+            >
               {t.role === "user" ? "You" : t.vendor ?? "Agent"}
-              {t.streaming && " · streaming…"}
-            </div>
-            <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-loom-text">
+              {t.streaming && (
+                <Icons.spinner
+                  size={10}
+                  strokeWidth={2}
+                  className="ml-1 inline-block animate-spin"
+                  style={{ verticalAlign: -1 }}
+                />
+              )}
+            </span>
+            <pre
+              className="whitespace-pre-wrap break-words"
+              style={{
+                fontSize: 13,
+                fontFamily: t.role === "user" ? "var(--font-sans)" : "var(--font-mono)",
+                color: "rgba(255, 255, 255, 0.92)",
+                lineHeight: 1.5,
+                margin: 0,
+              }}
+            >
               {t.text}
             </pre>
+            {i < turns.length - 1 && i % 2 === 1 && (
+              <hr
+                style={{
+                  border: "none",
+                  borderTop: "1px solid rgba(255, 255, 255, 0.06)",
+                  margin: "8px 0 0",
+                }}
+              />
+            )}
           </div>
         ))}
       </div>
 
-      <div className="flex items-end gap-1 border-t border-loom-border bg-loom-panel p-2">
+      <div
+        className="flex items-end gap-2 flex-none"
+        style={{
+          padding: 10,
+          background: "rgba(0, 0, 0, 0.24)",
+          borderTop: "1px solid rgba(255, 255, 255, 0.10)",
+        }}
+      >
         <textarea
           rows={2}
           value={draft}
@@ -214,24 +277,49 @@ export function AgentPane({ workspace }: { workspace: Workspace }) {
             }
           }}
           placeholder="Message the agent…"
-          className="scrollbar-thin flex-1 resize-none rounded-md border border-loom-border bg-loom-bg px-2 py-1.5 text-sm text-loom-text outline-none focus:border-loom-accent"
+          className="scrollbar-thin flex-1 resize-none focus:outline-none"
+          style={{
+            background: "rgba(255, 255, 255, 0.06)",
+            border: "1px solid rgba(255, 255, 255, 0.10)",
+            borderRadius: 8,
+            padding: "8px 10px",
+            fontSize: 13,
+            fontFamily: "var(--font-mono)",
+            color: "rgba(255, 255, 255, 0.92)",
+            minHeight: 38,
+          }}
         />
         {busy ? (
           <button
             onClick={cancel}
-            className="rounded-md bg-red-500/80 px-2 py-1.5 text-white hover:bg-red-500"
             aria-label="Cancel"
+            style={{
+              background: "rgba(242, 70, 32, 0.85)",
+              color: "white",
+              borderRadius: 999,
+              padding: 8,
+              border: "none",
+            }}
           >
-            <Square className="h-4 w-4" />
+            <Icons.cancel size={14} strokeWidth={2.4} fill="currentColor" />
           </button>
         ) : (
           <button
             onClick={submit}
             disabled={!draft.trim()}
-            className="rounded-md bg-loom-accent px-2 py-1.5 text-white hover:opacity-90 disabled:opacity-50"
             aria-label="Send"
+            style={{
+              background: draft.trim()
+                ? "var(--color-loom-accent)"
+                : "rgba(255, 255, 255, 0.10)",
+              color: "white",
+              borderRadius: 999,
+              padding: 8,
+              border: "none",
+              opacity: draft.trim() ? 1 : 0.5,
+            }}
           >
-            <Send className="h-4 w-4" />
+            <Icons.send size={14} strokeWidth={2.2} />
           </button>
         )}
       </div>

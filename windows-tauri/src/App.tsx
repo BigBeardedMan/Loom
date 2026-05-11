@@ -55,7 +55,7 @@ function App() {
   }, [setUpdatePill]);
 
   return (
-    <div className="flex h-full w-full flex-col bg-loom-bg text-loom-text">
+    <div className="flex h-full w-full flex-col" style={{ color: "var(--color-loom-text)" }}>
       <Titlebar />
       <div className="flex flex-1 min-h-0">
         <WorkspaceSidebar />

@@ -1,51 +1,87 @@
 import { useEffect, useRef, useState } from "react";
-import { RefreshCw, ArrowRight } from "lucide-react";
+import { Icons } from "../../lib/icons";
+import { PaneTitleBar } from "../../components/PaneTitleBar";
 import { ipc, type Workspace } from "../../lib/ipc";
 
+// Mirrors Loom/Build/PreviewPaneView.swift.
+// Inky surface with PaneTitleBar; URL bar in body with refresh + go controls.
 export function PreviewPane({ workspace }: { workspace: Workspace }) {
   const [url, setUrl] = useState(workspace.previewUrl || "http://localhost:3000");
-  const [navTarget, setNavTarget] = useState(url);
+  const [draft, setDraft] = useState(url);
   const frameRef = useRef<HTMLIFrameElement>(null);
 
   useEffect(() => {
-    setUrl(workspace.previewUrl || "http://localhost:3000");
-    setNavTarget(workspace.previewUrl || "http://localhost:3000");
-  }, [workspace.id]);
+    const fresh = workspace.previewUrl || "http://localhost:3000";
+    setUrl(fresh);
+    setDraft(fresh);
+  }, [workspace.id, workspace.previewUrl]);
 
-  const persist = async (next: string) => {
+  const navigate = async (next: string) => {
     setUrl(next);
     await ipc.workspace.update(workspace.id, { previewUrl: next });
   };
 
   return (
-    <div className="flex h-full flex-col bg-loom-bg">
-      <div className="flex items-center gap-1 border-b border-loom-border bg-loom-panel px-2 py-1.5">
+    <div className="flex h-full flex-col" style={{ background: "#050608" }}>
+      <PaneTitleBar
+        variant="dark"
+        icon={<Icons.eye size={11} strokeWidth={2} color="var(--color-ws-pink)" />}
+        title="Preview"
+        subtitle={url.replace(/^https?:\/\//, "")}
+      />
+
+      <div
+        className="flex items-center gap-1.5 flex-none"
+        style={{
+          padding: "8px 10px",
+          background: "rgba(0, 0, 0, 0.32)",
+          borderBottom: "1px solid rgba(255, 255, 255, 0.10)",
+        }}
+      >
         <input
-          value={navTarget}
-          onChange={(e) => setNavTarget(e.target.value)}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") persist(navTarget);
+            if (e.key === "Enter") navigate(draft);
           }}
-          className="flex-1 rounded-md border border-loom-border bg-loom-bg px-2 py-1 text-xs text-loom-text focus:border-loom-accent focus:outline-none"
           placeholder="http://localhost:…"
+          className="flex-1 focus:outline-none"
+          style={{
+            background: "rgba(255, 255, 255, 0.06)",
+            border: "1px solid rgba(255, 255, 255, 0.10)",
+            borderRadius: 6,
+            padding: "5px 10px",
+            fontSize: 12,
+            fontFamily: "var(--font-mono)",
+            color: "rgba(255, 255, 255, 0.9)",
+          }}
         />
         <button
-          onClick={() => persist(navTarget)}
-          className="rounded p-1.5 text-loom-text-dim hover:bg-loom-panel-elev hover:text-loom-text"
+          onClick={() => navigate(draft)}
           aria-label="Go"
+          style={{
+            padding: 6,
+            borderRadius: 4,
+            color: "rgba(255, 255, 255, 0.55)",
+          }}
         >
-          <ArrowRight className="h-4 w-4" />
+          <Icons.go size={14} strokeWidth={2} />
         </button>
         <button
           onClick={() => {
             if (frameRef.current) frameRef.current.src = url;
           }}
-          className="rounded p-1.5 text-loom-text-dim hover:bg-loom-panel-elev hover:text-loom-text"
           aria-label="Reload"
+          style={{
+            padding: 6,
+            borderRadius: 4,
+            color: "rgba(255, 255, 255, 0.55)",
+          }}
         >
-          <RefreshCw className="h-4 w-4" />
+          <Icons.refresh size={14} strokeWidth={2} />
         </button>
       </div>
+
       <iframe
         ref={frameRef}
         src={url}

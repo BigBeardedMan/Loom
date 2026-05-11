@@ -1,10 +1,14 @@
 import { useEffect, useState } from "react";
-import { Plus } from "lucide-react";
-import { ipc, type KanbanBoard, type KanbanCard, type Workspace } from "../../lib/ipc";
+import { Icons } from "../../lib/icons";
+import { PaneTitleBar } from "../../components/PaneTitleBar";
+import { surface } from "../../lib/theme";
+import { ipc, type KanbanBoard, type Workspace } from "../../lib/ipc";
+import { KanbanColumn } from "./KanbanColumn";
 
+// Mirrors Loom/Kanban/KanbanPaneView.swift.
+// PaneTitleBar header + horizontal column strip with KanbanColumn children.
 export function KanbanPane({ workspace }: { workspace: Workspace }) {
   const [board, setBoard] = useState<KanbanBoard | null>(null);
-  const [adding, setAdding] = useState<string | null>(null);
 
   const load = async () => {
     try {
@@ -21,18 +25,16 @@ export function KanbanPane({ workspace }: { workspace: Workspace }) {
   }, [workspace.id]);
 
   const addCard = async (columnId: string, title: string) => {
-    if (!title.trim()) return;
     await ipc.kanban.createCard({
       columnId,
-      title: title.trim(),
+      title,
       projectPath: workspace.folderPath,
     });
-    setAdding(null);
     load();
   };
 
-  const moveCard = async (card: KanbanCard, newColumnId: string) => {
-    await ipc.kanban.moveCard(card.id, newColumnId);
+  const moveCard = async (cardId: string, newColumnId: string) => {
+    await ipc.kanban.moveCard(cardId, newColumnId);
     load();
   };
 
@@ -41,105 +43,42 @@ export function KanbanPane({ workspace }: { workspace: Workspace }) {
     load();
   };
 
+  const totalCards = board?.columns.reduce((a, c) => a + c.cards.length, 0) ?? 0;
+
   return (
-    <div className="flex h-full flex-col bg-loom-bg">
-      <div className="flex items-center justify-between border-b border-loom-border bg-loom-panel px-3 py-1.5">
-        <span className="text-xs font-medium uppercase tracking-wider text-loom-text-mute">
-          Tasks
-        </span>
-      </div>
+    <div className="flex h-full flex-col" style={{ background: surface.panel }}>
+      <PaneTitleBar
+        icon={<Icons.checkCircle size={11} strokeWidth={2.2} color="var(--color-ws-orange)" />}
+        title="Tasks"
+        right={
+          <span
+            className="font-mono"
+            style={{
+              fontSize: 10,
+              fontWeight: 600,
+              color: "var(--color-loom-text-muted)",
+              padding: "1px 6px",
+              borderRadius: 999,
+              background: "rgba(255, 255, 255, 0.05)",
+            }}
+          >
+            {totalCards}
+          </span>
+        }
+      />
       <div className="scrollbar-thin flex-1 overflow-x-auto">
-        <div className="flex h-full min-w-max gap-2 p-2">
+        <div className="flex h-full min-w-max gap-2.5 p-3">
           {board?.columns.map((col) => (
-            <div
+            <KanbanColumn
               key={col.id}
-              className="flex w-48 flex-none flex-col rounded-md border border-loom-border bg-loom-panel"
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={(e) => {
-                const cardId = e.dataTransfer.getData("loom/card-id");
-                if (!cardId) return;
-                const card = board?.columns
-                  .flatMap((c) => c.cards)
-                  .find((c) => c.id === cardId);
-                if (card && card.columnId !== col.id) moveCard(card, col.id);
-              }}
-            >
-              <div className="flex items-center justify-between border-b border-loom-border px-2 py-1 text-xs">
-                <span className="font-medium text-loom-text">{col.name}</span>
-                <span className="text-loom-text-mute">{col.cards.length}</span>
-              </div>
-              <div className="scrollbar-thin flex flex-1 flex-col gap-1 overflow-y-auto p-1.5">
-                {col.cards.map((card) => (
-                  <div
-                    key={card.id}
-                    draggable
-                    onDragStart={(e) =>
-                      e.dataTransfer.setData("loom/card-id", card.id)
-                    }
-                    className="group cursor-grab rounded border border-loom-border bg-loom-bg px-2 py-1.5 text-xs text-loom-text-dim hover:border-loom-accent hover:text-loom-text active:cursor-grabbing"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <span className="flex-1">{card.title}</span>
-                      <button
-                        className="invisible text-loom-text-mute hover:text-loom-text group-hover:visible"
-                        onClick={() => deleteCard(card.id)}
-                        aria-label="Delete card"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  </div>
-                ))}
-                {adding === col.id ? (
-                  <AddCardForm
-                    onAdd={(t) => addCard(col.id, t)}
-                    onCancel={() => setAdding(null)}
-                  />
-                ) : (
-                  <button
-                    onClick={() => setAdding(col.id)}
-                    className="flex items-center gap-1 rounded px-1.5 py-1 text-xs text-loom-text-mute hover:bg-loom-panel-elev hover:text-loom-text"
-                  >
-                    <Plus className="h-3 w-3" />
-                    Add card
-                  </button>
-                )}
-              </div>
-            </div>
+              column={col}
+              onAdd={(title) => addCard(col.id, title)}
+              onMove={(cardId) => moveCard(cardId, col.id)}
+              onDelete={deleteCard}
+            />
           ))}
         </div>
       </div>
     </div>
-  );
-}
-
-function AddCardForm({
-  onAdd,
-  onCancel,
-}: {
-  onAdd: (title: string) => void;
-  onCancel: () => void;
-}) {
-  const [v, setV] = useState("");
-  return (
-    <textarea
-      autoFocus
-      value={v}
-      onChange={(e) => setV(e.target.value)}
-      onBlur={() => {
-        if (v.trim()) onAdd(v);
-        else onCancel();
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" && !e.shiftKey) {
-          e.preventDefault();
-          onAdd(v);
-        }
-        if (e.key === "Escape") onCancel();
-      }}
-      rows={2}
-      placeholder="Card title…"
-      className="w-full resize-none rounded border border-loom-border bg-loom-bg px-2 py-1 text-xs text-loom-text outline-none focus:border-loom-accent"
-    />
   );
 }

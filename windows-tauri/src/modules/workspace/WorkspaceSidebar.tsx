@@ -1,19 +1,42 @@
 import { useState } from "react";
-import {
-  Plus,
-  Folder,
-  FolderOpen,
-  Lightbulb,
-  Eye,
-  Trash2,
-} from "lucide-react";
+import { Icons } from "../../lib/icons";
 import {
   useApp,
-  workspaceColorClass,
   workspaceKindLabel,
 } from "../../lib/store";
-import { ipc, type Workspace, type WorkspaceColor, type WorkspaceKind } from "../../lib/ipc";
+import {
+  ipc,
+  type Workspace,
+  type WorkspaceColor as IpcColor,
+  type WorkspaceKind as IpcKind,
+} from "../../lib/ipc";
+import {
+  radius,
+  sidebar,
+  surface,
+  text,
+  workspaceColorVar,
+  type WorkspaceColor,
+} from "../../lib/theme";
+import { WorkspaceDot } from "../../components/WorkspaceDot";
 
+const COLORS: WorkspaceColor[] = [
+  "blue",
+  "green",
+  "orange",
+  "pink",
+  "purple",
+  "yellow",
+];
+
+const KINDS: { value: IpcKind; label: string }[] = [
+  { value: "code", label: workspaceKindLabel.code },
+  { value: "ideas", label: workspaceKindLabel.ideas },
+  { value: "review", label: workspaceKindLabel.review },
+];
+
+// Mirrors Loom/Workspace/WorkspaceSidebarView.swift.
+// 240 px wide, 12/14 padding, hairline right border, sectioned rows.
 export function WorkspaceSidebar() {
   const workspaces = useApp((s) => s.workspaces);
   const selectedId = useApp((s) => s.selectedWorkspaceId);
@@ -23,35 +46,69 @@ export function WorkspaceSidebar() {
   const [creating, setCreating] = useState(false);
 
   return (
-    <aside className="flex h-full w-60 flex-col border-r border-loom-border bg-loom-panel">
-      <div className="flex items-center justify-between border-b border-loom-border px-3 py-2">
-        <span className="text-xs font-medium uppercase tracking-wider text-loom-text-mute">
-          Workspaces
-        </span>
+    <aside
+      className="flex h-full flex-col flex-none"
+      style={{
+        width: sidebar.width,
+        background: surface.panel,
+        borderRight: `1px solid ${surface.hairline}`,
+      }}
+    >
+      <div
+        className="flex items-center justify-between flex-none"
+        style={{
+          padding: `${sidebar.paddingV - 4}px ${sidebar.paddingH}px`,
+          borderBottom: `1px solid ${surface.hairline}`,
+        }}
+      >
+        <span className="section-header">Workspaces</span>
         <button
-          className="rounded p-1 text-loom-text-dim hover:bg-loom-panel-elev hover:text-loom-text"
           onClick={() => setCreating(true)}
+          className="rounded-md p-1 transition-colors"
+          style={{ color: text.muted }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = text.primary as string;
+            e.currentTarget.style.background = surface.softPanel as string;
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = text.muted as string;
+            e.currentTarget.style.background = "transparent";
+          }}
           aria-label="New workspace"
         >
-          <Plus className="h-4 w-4" />
+          <Icons.plus size={13} strokeWidth={2.2} />
         </button>
       </div>
 
-      <div className="scrollbar-thin flex-1 overflow-y-auto p-2">
+      <div
+        className="scrollbar-thin flex-1 overflow-y-auto"
+        style={{
+          padding: `${sidebar.paddingV - 6}px ${sidebar.paddingH - 4}px`,
+        }}
+      >
         {workspaces.length === 0 && !creating && (
-          <div className="px-2 py-6 text-center text-xs text-loom-text-mute">
+          <div
+            className="text-center"
+            style={{
+              padding: "24px 8px",
+              fontSize: 11,
+              color: text.tertiary,
+            }}
+          >
             No workspaces yet. Click + to create one.
           </div>
         )}
-        {workspaces.map((ws) => (
-          <WorkspaceRow
-            key={ws.id}
-            workspace={ws}
-            selected={ws.id === selectedId}
-            onSelect={() => selectWorkspace(ws.id)}
-            onDelete={() => deleteWorkspace(ws.id)}
-          />
-        ))}
+        <div className="flex flex-col gap-1">
+          {workspaces.map((ws) => (
+            <WorkspaceRow
+              key={ws.id}
+              workspace={ws}
+              selected={ws.id === selectedId}
+              onSelect={() => selectWorkspace(ws.id)}
+              onDelete={() => deleteWorkspace(ws.id)}
+            />
+          ))}
+        </div>
       </div>
 
       {creating && (
@@ -60,7 +117,7 @@ export function WorkspaceSidebar() {
             await createWorkspace(
               input.name,
               input.folderPath,
-              input.color,
+              input.color as IpcColor,
               input.kind
             );
             setCreating(false);
@@ -83,64 +140,85 @@ function WorkspaceRow({
   onSelect: () => void;
   onDelete: () => void;
 }) {
+  const tint = workspaceColorVar[workspace.colorName as WorkspaceColor];
   return (
     <div
-      className={`group flex items-center gap-2 rounded-md px-2 py-1.5 cursor-pointer text-sm ${
-        selected
-          ? "bg-loom-panel-elev text-loom-text"
-          : "text-loom-text-dim hover:bg-loom-panel-elev"
-      }`}
+      className="group flex items-center gap-2 cursor-pointer transition-colors"
       onClick={onSelect}
+      style={{
+        padding: `${sidebar.rowPaddingV}px ${sidebar.rowPaddingH}px`,
+        borderRadius: radius.row,
+        background: selected ? `color-mix(in srgb, ${tint} 13%, transparent)` : "transparent",
+        border: `1px solid ${
+          selected ? `color-mix(in srgb, ${tint} 65%, transparent)` : surface.hairline
+        }`,
+        color: selected ? text.primary : text.muted,
+      }}
+      onMouseEnter={(e) => {
+        if (!selected) {
+          e.currentTarget.style.background = surface.softPanel as string;
+          e.currentTarget.style.color = text.primary as string;
+        }
+      }}
+      onMouseLeave={(e) => {
+        if (!selected) {
+          e.currentTarget.style.background = "transparent";
+          e.currentTarget.style.color = text.muted as string;
+        }
+      }}
     >
-      <div className={`h-2 w-2 rounded-full ${workspaceColorClass[workspace.colorName]}`} />
+      <WorkspaceDot color={workspace.colorName as WorkspaceColor} />
       <KindIcon kind={workspace.kindRaw} />
-      <span className="truncate flex-1">{workspace.name}</span>
+      <span
+        className="truncate flex-1"
+        style={{ fontSize: 12, fontWeight: 500 }}
+      >
+        {workspace.name}
+      </span>
       {workspace.taskBadge > 0 && (
-        <span className="rounded-full bg-loom-accent px-1.5 text-[10px] font-medium text-white">
+        <span
+          className="font-mono"
+          style={{
+            background: surface.softPanel,
+            borderRadius: 999,
+            padding: "2px 6px",
+            fontSize: 10,
+            fontWeight: 700,
+            color: text.muted,
+          }}
+        >
           {workspace.taskBadge}
         </span>
       )}
       <button
-        className="invisible rounded p-0.5 text-loom-text-mute hover:text-loom-text group-hover:visible"
+        className="invisible rounded p-0.5 group-hover:visible"
         onClick={(e) => {
           e.stopPropagation();
           if (confirm(`Delete workspace "${workspace.name}"?`)) onDelete();
         }}
+        style={{ color: text.tertiary }}
         aria-label="Delete workspace"
       >
-        <Trash2 className="h-3 w-3" />
+        <Icons.trash size={11} strokeWidth={2} />
       </button>
     </div>
   );
 }
 
 function KindIcon({ kind }: { kind: Workspace["kindRaw"] }) {
+  const props = { size: 11, strokeWidth: 1.8, color: text.tertiary as string };
   switch (kind) {
     case "code":
-      return <FolderOpen className="h-3.5 w-3.5 text-loom-text-mute" />;
+      return <Icons.textCursor {...props} />;
     case "ideas":
-      return <Lightbulb className="h-3.5 w-3.5 text-loom-text-mute" />;
+      return <Icons.lightbulb {...props} />;
     case "review":
     case "build":
-      return <Eye className="h-3.5 w-3.5 text-loom-text-mute" />;
+      return <Icons.eye {...props} />;
     default:
-      return <Folder className="h-3.5 w-3.5 text-loom-text-mute" />;
+      return <Icons.folderFill {...props} />;
   }
 }
-
-const COLORS: WorkspaceColor[] = [
-  "blue",
-  "green",
-  "orange",
-  "pink",
-  "purple",
-  "yellow",
-];
-const KINDS: { value: WorkspaceKind; label: string }[] = [
-  { value: "code", label: workspaceKindLabel.code },
-  { value: "ideas", label: workspaceKindLabel.ideas },
-  { value: "review", label: workspaceKindLabel.review },
-];
 
 function NewWorkspaceForm({
   onCreate,
@@ -150,14 +228,14 @@ function NewWorkspaceForm({
     name: string;
     folderPath: string;
     color: WorkspaceColor;
-    kind: WorkspaceKind;
+    kind: IpcKind;
   }) => Promise<void>;
   onCancel: () => void;
 }) {
   const [name, setName] = useState("");
   const [folderPath, setFolderPath] = useState("");
   const [color, setColor] = useState<WorkspaceColor>("blue");
-  const [kind, setKind] = useState<WorkspaceKind>("code");
+  const [kind, setKind] = useState<IpcKind>("code");
   const [busy, setBusy] = useState(false);
 
   const pickFolder = async () => {
@@ -176,77 +254,126 @@ function NewWorkspaceForm({
   };
 
   return (
-    <div className="border-t border-loom-border bg-loom-panel-elev p-3">
-      <div className="space-y-2">
-        <input
-          autoFocus
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Workspace name"
-          className="w-full rounded-md border border-loom-border bg-loom-bg px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-loom-accent"
-          onKeyDown={(e) => {
-            if (e.key === "Enter") submit();
-            if (e.key === "Escape") onCancel();
-          }}
-        />
-        <div className="flex items-center gap-1">
+    <div
+      className="flex-none space-y-2"
+      style={{
+        padding: 12,
+        borderTop: `1px solid ${surface.hairline}`,
+        background: surface.softPanel,
+      }}
+    >
+      <input
+        autoFocus
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="Workspace name"
+        className="w-full focus:outline-none"
+        style={{
+          background: "var(--color-loom-bg-from)",
+          border: `1px solid ${surface.hairline}`,
+          borderRadius: radius.control,
+          padding: "5px 8px",
+          fontSize: 12,
+          color: text.primary,
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") submit();
+          if (e.key === "Escape") onCancel();
+        }}
+      />
+      <button
+        type="button"
+        onClick={pickFolder}
+        className="w-full truncate text-left"
+        style={{
+          background: "var(--color-loom-bg-from)",
+          border: `1px solid ${surface.hairline}`,
+          borderRadius: radius.control,
+          padding: "5px 8px",
+          fontSize: 11,
+          color: folderPath ? text.primary : text.muted,
+        }}
+      >
+        {folderPath || "Pick folder…"}
+      </button>
+      <div className="flex flex-wrap gap-1.5">
+        {COLORS.map((c) => (
           <button
+            key={c}
             type="button"
-            className="flex-1 truncate rounded-md border border-loom-border bg-loom-bg px-2 py-1 text-left text-xs text-loom-text-dim hover:text-loom-text"
-            onClick={pickFolder}
-          >
-            {folderPath || "Pick folder…"}
-          </button>
-        </div>
-        <div className="flex flex-wrap gap-1">
-          {COLORS.map((c) => (
-            <button
-              key={c}
-              type="button"
-              className={`h-5 w-5 rounded-full ${workspaceColorClass[c]} ${
-                color === c
-                  ? "ring-2 ring-loom-text ring-offset-1 ring-offset-loom-panel-elev"
-                  : ""
-              }`}
-              onClick={() => setColor(c)}
-              aria-label={`Color ${c}`}
-            />
-          ))}
-        </div>
-        <div className="flex gap-1">
-          {KINDS.map((k) => (
-            <button
-              key={k.value}
-              type="button"
-              className={`flex-1 rounded-md border px-2 py-1 text-xs ${
+            onClick={() => setColor(c)}
+            aria-label={`Color ${c}`}
+            style={{
+              width: 18,
+              height: 18,
+              borderRadius: 999,
+              background: workspaceColorVar[c],
+              boxShadow: color === c
+                ? `0 0 0 2px var(--color-loom-bg-from), 0 0 0 3px ${workspaceColorVar[c]}`
+                : "0 0 0 1px rgba(255, 255, 255, 0.08)",
+            }}
+          />
+        ))}
+      </div>
+      <div className="flex gap-1">
+        {KINDS.map((k) => (
+          <button
+            key={k.value}
+            type="button"
+            onClick={() => setKind(k.value)}
+            className="flex-1"
+            style={{
+              padding: "5px 8px",
+              borderRadius: radius.control,
+              fontSize: 11,
+              border: `1px solid ${
+                kind === k.value ? "var(--color-loom-accent)" : surface.hairline
+              }`,
+              background:
                 kind === k.value
-                  ? "border-loom-accent bg-loom-accent/10 text-loom-text"
-                  : "border-loom-border text-loom-text-dim hover:text-loom-text"
-              }`}
-              onClick={() => setKind(k.value)}
-            >
-              {k.label}
-            </button>
-          ))}
-        </div>
-        <div className="flex gap-1 pt-1">
-          <button
-            type="button"
-            className="flex-1 rounded-md border border-loom-border px-2 py-1 text-xs text-loom-text-dim hover:text-loom-text"
-            onClick={onCancel}
-            disabled={busy}
+                  ? "color-mix(in srgb, var(--color-loom-accent) 12%, transparent)"
+                  : "transparent",
+              color: kind === k.value ? text.primary : text.muted,
+            }}
           >
-            Cancel
+            {k.label}
           </button>
-          <button
-            type="button"
-            className="flex-1 rounded-md bg-loom-accent px-2 py-1 text-xs text-white hover:opacity-90 disabled:opacity-50"
-            onClick={submit}
-            disabled={busy || !name.trim()}
-          >
-            Create
-          </button>
-        </div>
+        ))}
+      </div>
+      <div className="flex gap-1 pt-1">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={busy}
+          className="flex-1"
+          style={{
+            padding: "5px 8px",
+            borderRadius: radius.control,
+            fontSize: 11,
+            border: `1px solid ${surface.hairline}`,
+            background: "transparent",
+            color: text.muted,
+          }}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={submit}
+          disabled={busy || !name.trim()}
+          className="flex-1"
+          style={{
+            padding: "5px 8px",
+            borderRadius: radius.control,
+            fontSize: 11,
+            border: "none",
+            background: "var(--color-loom-accent)",
+            color: "white",
+            opacity: busy || !name.trim() ? 0.5 : 1,
+          }}
+        >
+          Create
+        </button>
       </div>
     </div>
   );

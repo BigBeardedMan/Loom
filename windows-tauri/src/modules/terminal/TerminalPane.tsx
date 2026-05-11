@@ -3,7 +3,9 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { ipc, on, type Workspace } from "../../lib/ipc";
-import { Plus, X } from "lucide-react";
+import { Icons } from "../../lib/icons";
+import { PaneTitleBar } from "../../components/PaneTitleBar";
+import { surface, text } from "../../lib/theme";
 
 type Session = {
   id: string;
@@ -13,6 +15,8 @@ type Session = {
   unlistenExit?: () => void;
 };
 
+// Mirrors Loom/Terminal/TerminalPaneView.swift.
+// Inky black background (#04050A), PaneTitleBar header, tab strip beneath.
 export function TerminalPane({ workspace }: { workspace: Workspace }) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -33,14 +37,15 @@ export function TerminalPane({ workspace }: { workspace: Workspace }) {
 
   const spawn = async () => {
     const term = new Terminal({
-      fontFamily: 'ui-monospace, "Cascadia Code", Menlo, monospace',
+      fontFamily:
+        '"SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, monospace',
       fontSize: 13,
       cursorBlink: true,
       theme: {
-        background: "#1a1a1a",
+        background: "#04050A",
         foreground: "#e0e0e0",
-        cursor: "#4a90ff",
-        selectionBackground: "rgba(74,144,255,0.3)",
+        cursor: "#2D80F5",
+        selectionBackground: "rgba(45, 128, 245, 0.30)",
       },
       allowProposedApi: true,
       scrollback: 5000,
@@ -81,10 +86,7 @@ export function TerminalPane({ workspace }: { workspace: Workspace }) {
       term.write("\r\n\x1b[33m[process exited]\x1b[0m\r\n");
     });
 
-    setSessions((prev) => [
-      ...prev,
-      { id, term, fit, unlistenData, unlistenExit },
-    ]);
+    setSessions((prev) => [...prev, { id, term, fit, unlistenData, unlistenExit }]);
     setActiveId(id);
   };
 
@@ -97,9 +99,7 @@ export function TerminalPane({ workspace }: { workspace: Workspace }) {
     s.term.dispose();
     setSessions((prev) => {
       const next = prev.filter((x) => x.id !== id);
-      if (activeId === id) {
-        setActiveId(next[0]?.id ?? null);
-      }
+      if (activeId === id) setActiveId(next[0]?.id ?? null);
       return next;
     });
   };
@@ -131,45 +131,103 @@ export function TerminalPane({ workspace }: { workspace: Workspace }) {
     return () => window.removeEventListener("resize", onResize);
   }, [sessions, activeId]);
 
+  const cwd = workspace.folderPath || "~";
+
   return (
-    <div className="flex h-full flex-col bg-loom-bg">
-      <div className="flex items-center border-b border-loom-border bg-loom-panel">
+    <div
+      className="flex h-full flex-col"
+      style={{ background: surface.terminal }}
+    >
+      <PaneTitleBar
+        variant="dark"
+        icon={
+          <Icons.terminal
+            size={11}
+            strokeWidth={2.4}
+            color="var(--color-ws-green)"
+          />
+        }
+        title="Terminal"
+        subtitle={cwd}
+        right={
+          <button
+            onClick={spawn}
+            aria-label="New terminal"
+            style={{
+              color: "rgba(255, 255, 255, 0.55)",
+              padding: 4,
+              borderRadius: 4,
+            }}
+          >
+            <Icons.addPane size={12} strokeWidth={1.8} />
+          </button>
+        }
+      />
+
+      <div
+        className="flex flex-none"
+        style={{
+          background: "rgba(0, 0, 0, 0.25)",
+          borderBottom: `1px solid rgba(255, 255, 255, 0.06)`,
+        }}
+      >
         <div className="scrollbar-thin flex-1 overflow-x-auto">
           <div className="flex">
             {sessions.map((s, i) => (
               <button
                 key={s.id}
                 onClick={() => setActiveId(s.id)}
-                className={`group flex items-center gap-1.5 border-r border-loom-border px-3 py-1.5 text-xs ${
-                  activeId === s.id
-                    ? "bg-loom-bg text-loom-text"
-                    : "text-loom-text-dim hover:bg-loom-panel-elev"
-                }`}
+                className="group flex items-center gap-1.5 transition-colors"
+                style={{
+                  padding: "5px 12px",
+                  fontSize: 11,
+                  fontWeight: 500,
+                  background:
+                    activeId === s.id
+                      ? surface.terminal
+                      : "transparent",
+                  color:
+                    activeId === s.id
+                      ? "rgba(255, 255, 255, 0.94)"
+                      : "rgba(255, 255, 255, 0.55)",
+                  borderRight: `1px solid rgba(255, 255, 255, 0.08)`,
+                }}
               >
+                <Icons.terminal
+                  size={10}
+                  strokeWidth={2}
+                  color={
+                    activeId === s.id
+                      ? "var(--color-ws-green)"
+                      : "rgba(255, 255, 255, 0.45)"
+                  }
+                />
                 <span>Terminal {i + 1}</span>
                 <span
-                  className="invisible rounded p-0.5 text-loom-text-mute hover:bg-loom-border hover:text-loom-text group-hover:visible"
+                  className="invisible rounded p-0.5 group-hover:visible"
                   onClick={(e) => {
                     e.stopPropagation();
                     closeSession(s.id);
                   }}
+                  style={{ color: "rgba(255, 255, 255, 0.45)" }}
                 >
-                  <X className="h-3 w-3" />
+                  <Icons.close size={9} strokeWidth={2.5} />
                 </span>
               </button>
             ))}
           </div>
         </div>
-        <button
-          onClick={spawn}
-          className="px-3 py-1.5 text-loom-text-dim hover:bg-loom-panel-elev hover:text-loom-text"
-          aria-label="New terminal"
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
       </div>
 
       <div className="relative flex-1 min-h-0">
+        {sessions.length === 0 && (
+          <div
+            className="flex h-full items-center justify-center"
+            style={{ fontSize: 12, color: text.tertiary }}
+          >
+            Spawning shell…
+          </div>
+        )}
         {sessions.map((s) => (
           <div
             key={s.id}

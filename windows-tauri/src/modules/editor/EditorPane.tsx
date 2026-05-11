@@ -1,12 +1,17 @@
 import { useEffect, useState } from "react";
 import Editor from "@monaco-editor/react";
-import { File, FolderOpen, Save } from "lucide-react";
+import { Icons } from "../../lib/icons";
+import { PaneTitleBar } from "../../components/PaneTitleBar";
+import { surface, text } from "../../lib/theme";
 import { ipc, type FsNode, type Workspace } from "../../lib/ipc";
+import { FileTree } from "./FileTree";
 
+// Mirrors Loom/Editor/EditorPaneView.swift.
+// PaneTitleBar header, FileTree sidebar, Monaco editor right.
 export function EditorPane({ workspace }: { workspace: Workspace }) {
   const [tree, setTree] = useState<FsNode | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  const [content, setContent] = useState<string>("");
+  const [content, setContent] = useState("");
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
@@ -19,8 +24,8 @@ export function EditorPane({ workspace }: { workspace: Workspace }) {
 
   const openFile = async (path: string) => {
     try {
-      const text = await ipc.fs.read(path);
-      setContent(text);
+      const t = await ipc.fs.read(path);
+      setContent(t);
       setSelected(path);
       setDirty(false);
     } catch (e) {
@@ -45,31 +50,53 @@ export function EditorPane({ workspace }: { workspace: Workspace }) {
     return () => window.removeEventListener("keydown", onSave);
   });
 
+  const filename = selected?.split(/[\\/]/).pop();
+
   return (
-    <div className="flex h-full flex-col bg-loom-bg">
-      <div className="flex items-center justify-between border-b border-loom-border bg-loom-panel px-3 py-1.5 text-xs">
-        <span className="font-medium uppercase tracking-wider text-loom-text-mute">
-          Editor
-        </span>
-        {selected && (
-          <button
-            onClick={save}
-            disabled={!dirty}
-            className="flex items-center gap-1 rounded-md px-2 py-0.5 text-loom-text-dim hover:bg-loom-panel-elev hover:text-loom-text disabled:opacity-50"
-          >
-            <Save className="h-3 w-3" />
-            Save
-          </button>
-        )}
-      </div>
+    <div className="flex h-full flex-col" style={{ background: surface.panel }}>
+      <PaneTitleBar
+        icon={<Icons.textCursor size={11} strokeWidth={2} color="var(--color-ws-blue)" />}
+        title="Editor"
+        subtitle={filename}
+        right={
+          selected && (
+            <button
+              onClick={save}
+              disabled={!dirty}
+              style={{
+                fontSize: 11,
+                fontWeight: 500,
+                color: dirty ? text.primary : text.tertiary,
+                padding: "2px 8px",
+                borderRadius: 4,
+                background: dirty ? surface.softPanel : "transparent",
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                cursor: dirty ? "pointer" : "default",
+              }}
+            >
+              <Icons.save size={11} strokeWidth={2} />
+              Save
+            </button>
+          )
+        }
+      />
 
       <div className="flex flex-1 min-h-0">
-        <div className="scrollbar-thin w-48 overflow-y-auto border-r border-loom-border bg-loom-panel text-xs">
+        <div
+          className="scrollbar-thin overflow-y-auto flex-none"
+          style={{
+            width: 200,
+            background: surface.inset,
+            borderRight: `1px solid ${surface.hairline}`,
+            paddingTop: 4,
+            paddingBottom: 4,
+          }}
+        >
           {!tree && (
-            <div className="px-3 py-4 text-loom-text-mute">
-              {workspace.folderPath
-                ? "Loading…"
-                : "No folder attached to this workspace."}
+            <div style={{ padding: 12, fontSize: 11, color: text.tertiary }}>
+              {workspace.folderPath ? "Loading…" : "No folder attached."}
             </div>
           )}
           {tree && (
@@ -89,68 +116,24 @@ export function EditorPane({ workspace }: { workspace: Workspace }) {
               options={{
                 minimap: { enabled: false },
                 fontSize: 13,
-                fontFamily: 'ui-monospace, "Cascadia Code", Menlo, monospace',
+                fontFamily: "var(--font-mono), monospace",
                 wordWrap: "on",
                 automaticLayout: true,
+                scrollBeyondLastLine: false,
+                renderLineHighlight: "none",
+                padding: { top: 8, bottom: 8 },
               }}
             />
           ) : (
-            <div className="flex h-full items-center justify-center text-sm text-loom-text-mute">
+            <div
+              className="flex h-full items-center justify-center"
+              style={{ fontSize: 12, color: text.tertiary }}
+            >
               Select a file to edit.
             </div>
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-function FileTree({
-  node,
-  depth,
-  onOpen,
-  selected,
-}: {
-  node: FsNode;
-  depth: number;
-  onOpen: (p: string) => void;
-  selected: string | null;
-}) {
-  const [open, setOpen] = useState(depth < 1);
-  if (!node.isDir) {
-    return (
-      <div
-        className={`flex cursor-pointer items-center gap-1 px-2 py-0.5 hover:bg-loom-panel-elev ${
-          selected === node.path ? "bg-loom-panel-elev text-loom-text" : "text-loom-text-dim"
-        }`}
-        style={{ paddingLeft: 8 + depth * 12 }}
-        onClick={() => onOpen(node.path)}
-      >
-        <File className="h-3 w-3 flex-none" />
-        <span className="truncate">{node.name}</span>
-      </div>
-    );
-  }
-  return (
-    <div>
-      <div
-        className="flex cursor-pointer items-center gap-1 px-2 py-0.5 text-loom-text-dim hover:bg-loom-panel-elev"
-        style={{ paddingLeft: 8 + depth * 12 }}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <FolderOpen className="h-3 w-3 flex-none" />
-        <span className="truncate">{node.name}</span>
-      </div>
-      {open &&
-        node.children?.map((child) => (
-          <FileTree
-            key={child.path}
-            node={child}
-            depth={depth + 1}
-            onOpen={onOpen}
-            selected={selected}
-          />
-        ))}
     </div>
   );
 }

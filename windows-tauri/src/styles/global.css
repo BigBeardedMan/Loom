@@ -1,27 +1,77 @@
 @import "tailwindcss";
 @import "@xterm/xterm/css/xterm.css";
 
-@theme {
-  --color-loom-bg: oklch(0.16 0 0);
-  --color-loom-panel: oklch(0.21 0.005 285);
-  --color-loom-panel-elev: oklch(0.24 0.005 285);
-  --color-loom-border: oklch(0.32 0.008 285);
-  --color-loom-text: oklch(0.96 0.005 285);
-  --color-loom-text-dim: oklch(0.7 0.01 285);
-  --color-loom-text-mute: oklch(0.5 0.01 285);
-  --color-loom-accent: oklch(0.68 0.18 250);
+:root {
+  color-scheme: dark light;
 
-  --color-ws-orange: oklch(0.62 0.18 35);
-  --color-ws-green: oklch(0.74 0.16 145);
-  --color-ws-blue: oklch(0.55 0.2 255);
-  --color-ws-pink: oklch(0.58 0.22 358);
-  --color-ws-yellow: oklch(0.82 0.15 95);
-  --color-ws-purple: oklch(0.56 0.22 305);
+  --color-loom-bg-from: #050608;
+  --color-loom-bg-to: #090a0b;
+  --color-loom-panel: rgba(14, 15, 18, 0.92);
+  --color-loom-soft-panel: rgba(22, 25, 32, 0.9);
+  --color-loom-inset: rgba(0, 0, 0, 0.18);
+  --color-loom-hairline: rgba(255, 255, 255, 0.12);
+  --color-loom-terminal: #04050a;
+  --color-loom-text: rgba(255, 255, 255, 0.94);
+  --color-loom-text-muted: rgba(255, 255, 255, 0.55);
+  --color-loom-text-tertiary: rgba(255, 255, 255, 0.35);
 
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-    "Cascadia Code", "Source Code Pro", monospace;
+  --color-ws-orange: #f24620;
+  --color-ws-green: #3adb75;
+  --color-ws-blue: #2d80f5;
+  --color-ws-pink: #f23388;
+  --color-ws-yellow: #f5c533;
+  --color-ws-purple: #9e57f0;
+  --color-loom-accent: var(--color-ws-blue);
+
+  --radius-panel: 14px;
+  --radius-row: 8px;
+  --radius-control: 6px;
+
+  --shadow-panel: 0 12px 18px rgba(0, 0, 0, 0.28);
+  --shadow-panel-drag: 0 18px 28px rgba(0, 0, 0, 0.55);
+  --shadow-pill: 0 4px 8px rgba(58, 219, 117, 0.5);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Segoe UI Variable",
+    "SF Pro Text", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono",
+    "Source Code Pro", Menlo, Consolas, monospace;
+}
+
+:root[data-theme="light"] {
+  --color-loom-bg-from: #f7f7fa;
+  --color-loom-bg-to: #edf0f5;
+  --color-loom-panel: rgba(252, 252, 255, 0.96);
+  --color-loom-soft-panel: rgba(242, 242, 248, 0.94);
+  --color-loom-inset: rgba(237, 240, 245, 0.6);
+  --color-loom-hairline: rgba(0, 0, 0, 0.1);
+  --color-loom-terminal: #04050a;
+  --color-loom-text: rgba(0, 0, 0, 0.92);
+  --color-loom-text-muted: rgba(0, 0, 0, 0.55);
+  --color-loom-text-tertiary: rgba(0, 0, 0, 0.35);
+}
+
+@theme inline {
+  --color-loom-bg-from: var(--color-loom-bg-from);
+  --color-loom-bg-to: var(--color-loom-bg-to);
+  --color-loom-panel: var(--color-loom-panel);
+  --color-loom-soft-panel: var(--color-loom-soft-panel);
+  --color-loom-inset: var(--color-loom-inset);
+  --color-loom-hairline: var(--color-loom-hairline);
+  --color-loom-terminal: var(--color-loom-terminal);
+  --color-loom-text: var(--color-loom-text);
+  --color-loom-text-muted: var(--color-loom-text-muted);
+  --color-loom-text-tertiary: var(--color-loom-text-tertiary);
+  --color-loom-accent: var(--color-loom-accent);
+
+  --color-ws-orange: var(--color-ws-orange);
+  --color-ws-green: var(--color-ws-green);
+  --color-ws-blue: var(--color-ws-blue);
+  --color-ws-pink: var(--color-ws-pink);
+  --color-ws-yellow: var(--color-ws-yellow);
+  --color-ws-purple: var(--color-ws-purple);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
 }
 
 html,
@@ -29,12 +79,21 @@ body,
 #root {
   height: 100%;
   margin: 0;
-  background: var(--color-loom-bg);
   color: var(--color-loom-text);
   font-family: var(--font-sans);
   font-feature-settings: "cv11", "ss01";
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+}
+
+body {
+  background: linear-gradient(
+    135deg,
+    var(--color-loom-bg-from),
+    var(--color-loom-bg-to)
+  );
+  background-attachment: fixed;
 }
 
 * {
@@ -46,13 +105,24 @@ body,
   -webkit-user-select: none;
 }
 
+.section-header {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--color-loom-text-muted);
+}
+
 .scrollbar-thin::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 .scrollbar-thin::-webkit-scrollbar-thumb {
-  background: var(--color-loom-border);
+  background: var(--color-loom-hairline);
   border-radius: 4px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: var(--color-loom-text-tertiary);
 }
 .scrollbar-thin::-webkit-scrollbar-track {
   background: transparent;
@@ -67,10 +137,34 @@ body,
 }
 
 .titlebar {
-  height: 36px;
+  height: 38px;
   -webkit-app-region: drag;
 }
 .titlebar button,
-.titlebar a {
+.titlebar a,
+.titlebar [data-no-drag] {
   -webkit-app-region: no-drag;
+}
+
+.window-control {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  transition: filter 120ms ease-out;
+}
+.window-control:hover {
+  filter: brightness(1.15);
+}
+.window-control svg {
+  opacity: 0;
+  transition: opacity 80ms ease-out;
+}
+.window-control:hover svg {
+  opacity: 0.6;
 }
