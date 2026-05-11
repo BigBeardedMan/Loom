@@ -12,6 +12,11 @@ struct LoomApp: App {
     @State private var workspaceContext = WorkspaceContext()
     @State private var mcpService = MCPService()
     @State private var commandHistory = CommandHistoryService()
+    @State private var crashService = CrashService.shared
+
+    init() {
+        CrashService.shared.install()
+    }
 
     let container: ModelContainer = {
         let schema = Schema([
@@ -50,6 +55,16 @@ struct LoomApp: App {
                     commandHistory.start()
                     layout.startLiveAgentPolling()
                     await agentRegistry.refresh(localEndpoints: localEndpoints.endpoints)
+                }
+                .sheet(item: Binding(
+                    get: { crashService.pendingReport },
+                    set: { newValue in
+                        if newValue == nil { crashService.dismiss() }
+                    }
+                )) { report in
+                    CrashReportSheet(report: report) {
+                        crashService.dismiss()
+                    }
                 }
         }
         .modelContainer(container)

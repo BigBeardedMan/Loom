@@ -9,6 +9,9 @@ struct EditorPaneView: View {
     @State private var isDirty: Bool = false
     @State private var error: String?
     @State private var loadedAt: Date?
+    @State private var diskBaseline: String = ""
+    @State private var externalChange: Bool = false
+    @State private var watcher: FileWatcher?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -24,7 +27,12 @@ struct EditorPaneView: View {
                 if fileURL == nil {
                     emptyState
                 } else {
-                    editor
+                    VStack(spacing: 0) {
+                        if externalChange {
+                            externalChangeBanner
+                        }
+                        editor
+                    }
                 }
             }
 
@@ -37,6 +45,33 @@ struct EditorPaneView: View {
                     .background(Color.red.opacity(0.1))
             }
         }
+    }
+
+    private var externalChangeBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .foregroundStyle(Color.yellow)
+            Text("File changed on disk")
+                .font(.system(size: 11, weight: .medium))
+            Spacer()
+            Button("Reload") {
+                if let url = fileURL { reload(url: url) }
+            }
+            .controlSize(.small)
+            Button("Keep mine") {
+                externalChange = false
+            }
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.yellow.opacity(0.12))
+        .overlay(
+            Rectangle()
+                .frame(height: 1)
+                .foregroundStyle(Color.white.opacity(0.08)),
+            alignment: .bottom
+        )
     }
 
     private var paneHeader: some View {
@@ -89,14 +124,16 @@ struct EditorPaneView: View {
     }
 
     private var editor: some View {
-        TextEditor(text: $text)
-            .font(.system(.body, design: .monospaced))
-            .scrollContentBackground(.hidden)
-            .foregroundStyle(Color.white.opacity(0.86))
+        EditorView(text: $text, language: detectLanguage())
             .background(Color(red: 0.035, green: 0.04, blue: 0.045))
             .onChange(of: text) { _, _ in
                 if loadedAt != nil { isDirty = true }
             }
+    }
+
+    private func detectLanguage() -> SyntaxLanguage {
+        guard let url = fileURL else { return .plain }
+        return SyntaxLanguage.detect(forExtension: url.pathExtension)
     }
 
     private var emptyState: some View {
@@ -141,8 +178,43 @@ struct EditorPaneView: View {
             isDirty = false
             error = nil
             loadedAt = .now
+            diskBaseline = contents
+            externalChange = false
+            startWatching(url: url)
         } catch {
             self.error = "Couldn't read file: \(error.localizedDescription)"
+        }
+    }
+
+    private func reload(url: URL) {
+        do {
+            let contents = try String(contentsOf: url, encoding: .utf8)
+            text = contents
+            diskBaseline = contents
+            isDirty = false
+            externalChange = false
+        } catch {
+            self.error = "Couldn't reload: \(error.localizedDescription)"
+        }
+    }
+
+    private func startWatching(url: URL) {
+        let w = FileWatcher {
+            handleFileEvent(url: url)
+        }
+        w.watch(url: url)
+        watcher = w
+    }
+
+    private func handleFileEvent(url: URL) {
+        guard let onDisk = try? String(contentsOf: url, encoding: .utf8) else { return }
+        if onDisk == diskBaseline || onDisk == text { return }
+        if isDirty {
+            externalChange = true
+        } else {
+            text = onDisk
+            diskBaseline = onDisk
+            externalChange = false
         }
     }
 
@@ -152,17 +224,23 @@ struct EditorPaneView: View {
             try text.write(to: url, atomically: true, encoding: .utf8)
             isDirty = false
             error = nil
+            diskBaseline = text
+            externalChange = false
         } catch {
             self.error = "Couldn't save: \(error.localizedDescription)"
         }
     }
 
     private func close() {
+        watcher?.stop()
+        watcher = nil
         fileURL = nil
         text = ""
         isDirty = false
         loadedAt = nil
         error = nil
+        diskBaseline = ""
+        externalChange = false
     }
 
     private func displayPath(_ url: URL) -> String {
