@@ -300,8 +300,11 @@ struct WorkspaceView: View {
 
                         // Divider grips overlay the gaps between blocks.
                         // Hidden until hover so the deck stays visually quiet.
+                        // Identity is keyed on `kind` (stable across weight
+                        // changes) so an in-flight drag isn't torn down each
+                        // time the seam's rect shifts.
                         if draggingBlockID == nil {
-                            ForEach(metrics.dividers, id: \.self) { divider in
+                            ForEach(metrics.dividers, id: \.kind) { divider in
                                 DividerGripView(divider: divider, metrics: metrics, deckSize: geo.size)
                                     .frame(width: divider.rect.width, height: divider.rect.height)
                                     .position(x: divider.rect.midX, y: divider.rect.midY)

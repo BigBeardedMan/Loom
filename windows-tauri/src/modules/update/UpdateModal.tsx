@@ -1,20 +1,24 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { ipc, on, type UpdateInfo } from "../../lib/ipc";
 import { Icons } from "../../lib/icons";
 
-type Step = "info" | "downloading" | "ready" | "error";
+type Step = "downloading" | "installing" | "error";
 
 type Props = {
   info: UpdateInfo;
   onClose: () => void;
 };
 
+// One-click in-place update. Clicking the green Update pill drops the user
+// here: the modal kicks off the download immediately, then hands the staged
+// NSIS installer to the silent updater helper, which closes Loom, installs,
+// and relaunches. No NSIS wizard, no double-click.
 export function UpdateModal({ info, onClose }: Props) {
-  const [step, setStep] = useState<Step>("info");
+  const [step, setStep] = useState<Step>("downloading");
   const [progress, setProgress] = useState({ downloaded: 0, total: info.sizeBytes });
   const [error, setError] = useState<string | null>(null);
-  const [stagedPath, setStagedPath] = useState<string | null>(null);
+  const started = useRef(false);
 
   useEffect(() => {
     let off: (() => void) | undefined;
@@ -26,30 +30,30 @@ export function UpdateModal({ info, onClose }: Props) {
     return () => off?.();
   }, []);
 
-  const download = async () => {
-    setStep("downloading");
-    setError(null);
-    try {
-      const path = await ipc.update.downloadAndStage(info.downloadUrl, info.assetName);
-      setStagedPath(path);
-      setStep("ready");
-    } catch (e) {
-      setError(String(e));
-      setStep("error");
-    }
-  };
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    (async () => {
+      try {
+        const path = await ipc.update.downloadAndStage(
+          info.downloadUrl,
+          info.assetName
+        );
+        setStep("installing");
+        // Hand the installer to the silent relauncher. ipc returns once the
+        // helper is spawned; Loom then exits and the helper takes over.
+        await ipc.update.runInstaller(path, true);
+      } catch (e) {
+        setError(String(e));
+        setStep("error");
+      }
+    })();
+  }, [info.assetName, info.downloadUrl]);
 
-  const install = async () => {
-    if (!stagedPath) return;
-    try {
-      await ipc.update.runInstaller(stagedPath, true);
-    } catch (e) {
-      setError(String(e));
-      setStep("error");
-    }
-  };
-
-  const pct = progress.total > 0 ? Math.min(100, Math.round((progress.downloaded / progress.total) * 100)) : 0;
+  const pct =
+    progress.total > 0
+      ? Math.min(100, Math.round((progress.downloaded / progress.total) * 100))
+      : 0;
 
   return (
     <div
@@ -57,7 +61,7 @@ export function UpdateModal({ info, onClose }: Props) {
       aria-modal="true"
       className="fixed inset-0 flex items-center justify-center"
       style={{ background: "rgba(0,0,0,0.45)", zIndex: 60 }}
-      onClick={onClose}
+      onClick={step === "error" ? onClose : undefined}
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -72,53 +76,26 @@ export function UpdateModal({ info, onClose }: Props) {
         }}
       >
         <header className="flex items-center gap-2" style={{ marginBottom: 12 }}>
-          <Icons.updateAvailable size={18} strokeWidth={2.2} style={{ color: "var(--color-ws-green)" }} />
+          <Icons.updateAvailable
+            size={18}
+            strokeWidth={2.2}
+            style={{ color: "var(--color-ws-green)" }}
+          />
           <h2 style={{ fontSize: 15, fontWeight: 600 }}>
-            Loom {info.version} available
+            Updating Loom to {info.version}
           </h2>
         </header>
-        <p style={{ fontSize: 12, color: "rgba(255,255,255,0.65)", marginBottom: 12 }}>
-          You're currently running v{info.currentVersion}. Download {fmtBytes(info.sizeBytes)} for{" "}
-          {info.assetName.includes("arm64") ? "ARM64" : "x64"}.{" "}
-          <button
-            onClick={() => openExternal(info.releaseNotesUrl).catch(() => {})}
-            style={{
-              color: "rgb(120, 170, 245)",
-              fontSize: 12,
-              textDecoration: "underline",
-              background: "none",
-              border: 0,
-              padding: 0,
-            }}
-          >
-            Release notes
-          </button>
-          .
+
+        <p style={{ fontSize: 12, color: "rgba(255,255,255,0.65)", marginBottom: 14 }}>
+          {step === "downloading"
+            ? `Downloading ${fmtBytes(info.sizeBytes)} for ${info.assetName.includes("arm64") ? "ARM64" : "x64"}…`
+            : step === "installing"
+              ? "Closing Loom and installing the new version. Loom will relaunch automatically."
+              : "Update failed. Try again, or grab the latest build from the release page."}
         </p>
 
-        {info.notes && step === "info" && (
-          <pre
-            className="scrollbar-thin"
-            style={{
-              fontSize: 11,
-              fontFamily: "var(--font-mono)",
-              color: "rgba(255,255,255,0.6)",
-              background: "rgba(255,255,255,0.04)",
-              border: "1px solid rgba(255,255,255,0.06)",
-              borderRadius: 8,
-              padding: "8px 10px",
-              maxHeight: 140,
-              overflow: "auto",
-              whiteSpace: "pre-wrap",
-              marginBottom: 14,
-            }}
-          >
-            {info.notes}
-          </pre>
-        )}
-
-        {step === "downloading" && (
-          <div style={{ marginBottom: 14 }}>
+        {step !== "error" && (
+          <div style={{ marginBottom: 16 }}>
             <div
               style={{
                 height: 6,
@@ -129,7 +106,7 @@ export function UpdateModal({ info, onClose }: Props) {
             >
               <div
                 style={{
-                  width: `${pct}%`,
+                  width: step === "installing" ? "100%" : `${pct}%`,
                   height: "100%",
                   background: "var(--color-ws-green)",
                   transition: "width 120ms ease-out",
@@ -144,16 +121,11 @@ export function UpdateModal({ info, onClose }: Props) {
                 fontFamily: "var(--font-mono)",
               }}
             >
-              {fmtBytes(progress.downloaded)} / {fmtBytes(progress.total)} ({pct}%)
+              {step === "downloading"
+                ? `${fmtBytes(progress.downloaded)} / ${fmtBytes(progress.total)} (${pct}%)`
+                : "Installing…"}
             </div>
           </div>
-        )}
-
-        {step === "ready" && (
-          <p style={{ fontSize: 12, color: "rgba(255,255,255,0.7)", marginBottom: 14 }}>
-            Download complete. Installing will close Loom and run the NSIS installer. The wizard
-            will offer to relaunch Loom when it finishes.
-          </p>
         )}
 
         {step === "error" && (
@@ -175,67 +147,37 @@ export function UpdateModal({ info, onClose }: Props) {
         )}
 
         <footer className="flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            style={{
-              padding: "6px 14px",
-              fontSize: 12,
-              fontWeight: 500,
-              borderRadius: 8,
-              background: "rgba(255,255,255,0.06)",
-              border: "1px solid rgba(255,255,255,0.10)",
-              color: "rgba(255,255,255,0.85)",
-            }}
-          >
-            {step === "ready" ? "Install later" : "Cancel"}
-          </button>
-          {step === "info" && (
-            <button
-              onClick={download}
-              style={{
-                padding: "6px 14px",
-                fontSize: 12,
-                fontWeight: 600,
-                borderRadius: 8,
-                background: "var(--color-ws-green)",
-                color: "white",
-                border: 0,
-              }}
-            >
-              Download
-            </button>
-          )}
-          {step === "ready" && (
-            <button
-              onClick={install}
-              style={{
-                padding: "6px 14px",
-                fontSize: 12,
-                fontWeight: 600,
-                borderRadius: 8,
-                background: "var(--color-ws-green)",
-                color: "white",
-                border: 0,
-              }}
-            >
-              Install now
-            </button>
-          )}
           {step === "error" && (
-            <button
-              onClick={() => openExternal(info.releaseNotesUrl).catch(() => {})}
-              style={{
-                padding: "6px 14px",
-                fontSize: 12,
-                fontWeight: 600,
-                borderRadius: 8,
-                background: "var(--color-ws-green)",
-                color: "white",
-                border: 0,
-              }}
-            >
-              Open release page
-            </button>
+            <>
+              <button
+                onClick={onClose}
+                style={{
+                  padding: "6px 14px",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  borderRadius: 8,
+                  background: "rgba(255,255,255,0.06)",
+                  border: "1px solid rgba(255,255,255,0.10)",
+                  color: "rgba(255,255,255,0.85)",
+                }}
+              >
+                Close
+              </button>
+              <button
+                onClick={() => openExternal(info.releaseNotesUrl).catch(() => {})}
+                style={{
+                  padding: "6px 14px",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  borderRadius: 8,
+                  background: "var(--color-ws-green)",
+                  color: "white",
+                  border: 0,
+                }}
+              >
+                Open release page
+              </button>
+            </>
           )}
         </footer>
       </div>

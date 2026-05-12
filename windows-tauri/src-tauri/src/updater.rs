@@ -205,9 +205,65 @@ pub fn update_run_installer(
     if !path.exists() {
         return Err(format!("installer missing: {}", installer_path));
     }
-    Command::new(&path)
-        .spawn()
-        .map_err(|e| format!("spawn installer: {e}"))?;
+
+    // Goal: one-click in-place update. Spawn a detached helper that
+    // (1) waits for this Loom.exe to exit so NSIS can overwrite the binary,
+    // (2) runs the NSIS installer silently with /S, and
+    // (3) relaunches the freshly-installed Loom.exe. No wizard, no
+    // post-install user action. Mirrors what auto-updaters in other apps do.
+    #[cfg(windows)]
+    {
+        let exe = std::env::current_exe()
+            .map_err(|e| format!("current_exe: {e}"))?;
+        let exe_path = exe.to_string_lossy().to_string();
+        let parent_pid = std::process::id();
+
+        let temp = std::env::temp_dir();
+        let batch_path = temp.join(format!("loom-update-{}.bat", parent_pid));
+
+        // Self-deleting batch: poll tasklist for the parent PID, run the
+        // installer silently, relaunch Loom, then delete itself.
+        let script = format!(
+            "@echo off\r\n\
+:waitloop\r\n\
+tasklist /FI \"PID eq {pid}\" 2>nul | findstr /C:\" {pid} \" >nul\r\n\
+if not errorlevel 1 (\r\n\
+    timeout /t 1 /nobreak >nul\r\n\
+    goto waitloop\r\n\
+)\r\n\
+timeout /t 1 /nobreak >nul\r\n\
+\"{installer}\" /S\r\n\
+timeout /t 2 /nobreak >nul\r\n\
+start \"\" \"{exe}\"\r\n\
+(goto) 2>nul & del \"%~f0\"\r\n",
+            pid = parent_pid,
+            installer = installer_path.replace('"', ""),
+            exe = exe_path.replace('"', ""),
+        );
+
+        fs::write(&batch_path, script).map_err(|e| format!("write helper: {e}"))?;
+
+        use std::os::windows::process::CommandExt;
+        // CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS — survives parent exit.
+        const DETACHED_PROCESS: u32 = 0x00000008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+        Command::new("cmd")
+            .arg("/c")
+            .arg(&batch_path)
+            .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+            .spawn()
+            .map_err(|e| format!("spawn helper: {e}"))?;
+    }
+
+    #[cfg(not(windows))]
+    {
+        // Non-Windows builds (rare in practice for this Tauri target) fall
+        // back to launching the installer directly; the user finishes it.
+        Command::new(&path)
+            .spawn()
+            .map_err(|e| format!("spawn installer: {e}"))?;
+    }
+
     if exit_app {
         app.exit(0);
     }

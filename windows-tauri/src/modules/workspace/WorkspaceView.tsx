@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useApp, type Panel } from "../../lib/store";
 import { TerminalPane } from "../terminal/TerminalPane";
 import { EditorPane } from "../editor/EditorPane";
@@ -55,22 +55,28 @@ export function WorkspaceView() {
   const usageTool = useApp((s) => s.selectedUsageTool);
   const workspace = workspaces.find((w) => w.id === selectedId);
 
-  const containerRef = useRef<HTMLDivElement | null>(null);
+  // Callback ref: fires whenever the deck container element mounts or
+  // unmounts. A useLayoutEffect with [] deps would miss the mount that
+  // happens after the early-return empty states (no workspace / no layout)
+  // get replaced by the main deck, leaving deckSize stuck at {0,0} and
+  // every block frameless.
+  const [containerEl, setContainerEl] = useState<HTMLDivElement | null>(null);
   const [deckSize, setDeckSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
 
-  useLayoutEffect(() => {
-    if (!containerRef.current) return;
-    const el = containerRef.current;
-    const ro = new ResizeObserver((entries) => {
-      const r = entries[0]?.contentRect;
-      if (!r) return;
-      setDeckSize({ width: r.width, height: r.height });
-    });
-    ro.observe(el);
-    const rect = el.getBoundingClientRect();
-    setDeckSize({ width: rect.width, height: rect.height });
+  useEffect(() => {
+    if (!containerEl) return;
+    const measure = () => {
+      const rect = containerEl.getBoundingClientRect();
+      setDeckSize({
+        width: Math.max(0, rect.width - 2 * cockpit.outerPadding),
+        height: Math.max(0, rect.height - cockpit.outerPadding),
+      });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(containerEl);
     return () => ro.disconnect();
-  }, []);
+  }, [containerEl]);
 
   const blocks = layout?.blocks ?? [];
   const metrics = useMemo<DeckMetrics>(
@@ -88,7 +94,7 @@ export function WorkspaceView() {
   useEffect(() => {
     if (!drag) return;
     const onMove = (e: PointerEvent) => {
-      const containerRect = containerRef.current?.getBoundingClientRect();
+      const containerRect = containerEl?.getBoundingClientRect();
       if (!containerRect) return;
       const tx = e.clientX - drag.startMouse.x;
       const ty = e.clientY - drag.startMouse.y;
@@ -116,7 +122,7 @@ export function WorkspaceView() {
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
     };
-  }, [drag, metrics, setBlockPin, swapBlocks]);
+  }, [drag, metrics, setBlockPin, swapBlocks, containerEl]);
 
   // Deck-level right-click for "Reset Grid Layout".
   const [deckMenu, setDeckMenu] = useState<{ x: number; y: number } | null>(null);
@@ -187,7 +193,7 @@ export function WorkspaceView() {
 
   return (
     <div
-      ref={containerRef}
+      ref={setContainerEl}
       className="h-full w-full"
       style={{ position: "relative", padding: cockpit.outerPadding, paddingTop: 0 }}
       onContextMenu={(e) => {

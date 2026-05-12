@@ -150,8 +150,11 @@ Across both platforms the surface is:
   grid, donuts, hour-of-day heatmap, recent prompts, top topics, top
   projects; timeframe picker persists.
 - Updater — arch-aware (handles ARM64 emulation), downloads matching NSIS
-  installer to `%APPDATA%\com.chasesims.Loom\staging\` with live progress,
-  prompts, then hands off to the wizard.
+  installer to `%APPDATA%\com.chasesims.Loom\staging\` with live progress.
+  One click on the green Update pill runs the full flow: download, silent
+  NSIS `/S` install via a detached `%TEMP%\loom-update-<pid>.bat` helper
+  that waits for the running Loom to exit, then relaunches the fresh
+  build. No installer wizard, no uninstall step.
 - Crash reporter — Rust panic hook + React ErrorBoundary surface a modal
   on next launch with copy + "Report on GitHub" deep link.
 - Keyboard — Ctrl+K palette, Ctrl+T add terminal, Ctrl+W close, Ctrl+N
