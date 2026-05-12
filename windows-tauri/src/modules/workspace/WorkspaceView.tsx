@@ -1,19 +1,4 @@
-import { useMemo, useState } from "react";
-import {
-  DndContext,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  closestCenter,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  arrayMove,
-  rectSortingStrategy,
-  useSortable,
-} from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useApp, type Panel } from "../../lib/store";
 import { TerminalPane } from "../terminal/TerminalPane";
 import { EditorPane } from "../editor/EditorPane";
@@ -24,11 +9,23 @@ import { PreviewPane } from "../build/PreviewPane";
 import { LoomPanel } from "../../components/LoomPanel";
 import { BlockTitleBar } from "../../components/BlockTitleBar";
 import { Icons } from "../../lib/icons";
-import { cockpit, text } from "../../lib/theme";
-import type { Block } from "./LayoutPersistence";
+import { cockpit, surface, text } from "../../lib/theme";
+import type { Block, BlockPin } from "./LayoutPersistence";
 import type { Workspace } from "../../lib/ipc";
 import { UsageView } from "../usage/UsageView";
 import { CommandsPane } from "../commands/CommandsPane";
+import {
+  computeDeckMetrics,
+  dropTargetAt,
+  pinPreviewRect,
+  pinDragSign,
+  MIN_BLOCK_WIDTH,
+  MIN_BLOCK_HEIGHT,
+  type DeckDivider,
+  type DeckMetrics,
+  type DropTarget,
+  type Rect,
+} from "./deckMetrics";
 
 const PANEL_LABEL: Record<Panel, string> = {
   terminal: "Terminal",
@@ -42,24 +39,87 @@ const PANEL_LABEL: Record<Panel, string> = {
 
 const DARK_PANES: Panel[] = ["terminal", "agent", "preview", "notes"];
 
-// Mirrors Loom/Workspace/WorkspaceView.swift deck (lines 43-58, 261-340).
-// CSS grid auto-fits blocks at min 320 px; @dnd-kit handles reorder.
+// Mirrors Loom/Workspace/WorkspaceView.swift deck. Custom GeometryReader-style
+// layout: compute per-block frames via DeckMetrics, render absolutely
+// positioned, overlay divider grips in the gaps for live resize.
 export function WorkspaceView() {
   const workspaces = useApp((s) => s.workspaces);
   const selectedId = useApp((s) => s.selectedWorkspaceId);
   const layout = useApp((s) => s.layout);
   const removeBlock = useApp((s) => s.removeBlock);
-  const reorderBlocks = useApp((s) => s.reorderBlocks);
   const resetLayout = useApp((s) => s.resetLayout);
+  const resetAllWeights = useApp((s) => s.resetAllWeights);
+  const setBlockPin = useApp((s) => s.setBlockPin);
+  const swapBlocks = useApp((s) => s.swapBlocks);
+  const toggleFullRow = useApp((s) => s.toggleFullRow);
   const usageTool = useApp((s) => s.selectedUsageTool);
   const workspace = workspaces.find((w) => w.id === selectedId);
 
-  // All hooks must run on every render — keep these above the early returns
-  // so React's hook-order invariant holds when the usage dashboard toggles.
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [deckSize, setDeckSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+
+  useLayoutEffect(() => {
+    if (!containerRef.current) return;
+    const el = containerRef.current;
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect;
+      if (!r) return;
+      setDeckSize({ width: r.width, height: r.height });
+    });
+    ro.observe(el);
+    const rect = el.getBoundingClientRect();
+    setDeckSize({ width: rect.width, height: rect.height });
+    return () => ro.disconnect();
+  }, []);
+
+  const blocks = layout?.blocks ?? [];
+  const metrics = useMemo<DeckMetrics>(
+    () => computeDeckMetrics(deckSize, blocks),
+    [deckSize, blocks]
   );
-  const blockIds = useMemo(() => layout?.blocks.map((b) => b.id) ?? [], [layout]);
+
+  // Block-drag state for pin/swap. Tracking is global so the user can drag
+  // anywhere on screen and we still see mousemove/mouseup.
+  const [drag, setDrag] = useState<
+    | { blockID: string; startMouse: { x: number; y: number }; startFrame: Rect; translation: { x: number; y: number }; target: DropTarget }
+    | null
+  >(null);
+
+  useEffect(() => {
+    if (!drag) return;
+    const onMove = (e: PointerEvent) => {
+      const containerRect = containerRef.current?.getBoundingClientRect();
+      if (!containerRect) return;
+      const tx = e.clientX - drag.startMouse.x;
+      const ty = e.clientY - drag.startMouse.y;
+      const cursor = {
+        x: drag.startFrame.x + drag.startFrame.width / 2 + tx,
+        y: drag.startFrame.y + drag.startFrame.height / 2 + ty,
+      };
+      const target = dropTargetAt(metrics, cursor, drag.blockID);
+      setDrag({ ...drag, translation: { x: tx, y: ty }, target });
+    };
+    const onUp = () => {
+      const resolved = drag.target;
+      if (resolved?.kind === "pin") {
+        setBlockPin(drag.blockID, resolved.pin);
+      } else if (resolved?.kind === "swap") {
+        swapBlocks(drag.blockID, resolved.id);
+      }
+      setDrag(null);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+  }, [drag, metrics, setBlockPin, swapBlocks]);
+
+  // Deck-level right-click for "Reset Grid Layout".
+  const [deckMenu, setDeckMenu] = useState<{ x: number; y: number } | null>(null);
 
   if (usageTool) {
     return <UsageView tool={usageTool} />;
@@ -120,133 +180,166 @@ export function WorkspaceView() {
     );
   }
 
-  const handleDragEnd = (e: DragEndEvent) => {
-    const { active, over } = e;
-    if (!over || active.id === over.id) return;
-    const oldIndex = layout.blocks.findIndex((b) => b.id === active.id);
-    const newIndex = layout.blocks.findIndex((b) => b.id === over.id);
-    if (oldIndex < 0 || newIndex < 0) return;
-    reorderBlocks(arrayMove(layout.blocks, oldIndex, newIndex));
-  };
-
-  const hasPinned = layout.blocks.some((b) => b.pinnedTo);
-  const pinnedCols = layout.blocks
-    .map((b) => b.pinnedTo?.col ?? -1)
-    .filter((c) => c >= 0);
-  const trackCount = hasPinned ? Math.max(4, Math.max(0, ...pinnedCols) + 1) : 0;
+  const pinPreview =
+    drag && drag.target?.kind === "pin"
+      ? pinPreviewRect(drag.target.pin, deckSize)
+      : null;
 
   return (
     <div
-      className="h-full w-full overflow-auto scrollbar-thin"
-      style={{
-        padding: cockpit.outerPadding,
-        paddingTop: 0,
+      ref={containerRef}
+      className="h-full w-full"
+      style={{ position: "relative", padding: cockpit.outerPadding, paddingTop: 0 }}
+      onContextMenu={(e) => {
+        // Suppress deck-level menu when right-clicking inside a block; the
+        // block has its own context menu via stopPropagation.
+        e.preventDefault();
+        setDeckMenu({ x: e.clientX, y: e.clientY });
       }}
     >
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        onDragEnd={handleDragEnd}
+      <div
+        style={{
+          position: "absolute",
+          left: cockpit.outerPadding,
+          top: 0,
+          width: deckSize.width,
+          height: deckSize.height,
+        }}
       >
-        <SortableContext items={blockIds} strategy={rectSortingStrategy}>
+        {pinPreview && (
           <div
-            className="grid h-full"
             style={{
-              gap: cockpit.gap,
-              gridTemplateColumns: hasPinned
-                ? `repeat(${trackCount}, 1fr)`
-                : `repeat(auto-fit, minmax(360px, 1fr))`,
-              gridAutoRows: `minmax(260px, 1fr)`,
+              position: "absolute",
+              left: pinPreview.x,
+              top: pinPreview.y,
+              width: pinPreview.width,
+              height: pinPreview.height,
+              borderRadius: 14,
+              background: "rgba(45, 128, 245, 0.13)",
+              border: "2px dashed rgba(45, 128, 245, 0.65)",
+              pointerEvents: "none",
+              transition: "all 120ms ease-out",
             }}
-          >
-            {layout.blocks.map((b) => (
-              <SortableBlock
-                key={b.id}
-                block={b}
-                workspace={workspace}
-                onRemove={() => removeBlock(b.id)}
-              />
-            ))}
-          </div>
-        </SortableContext>
-      </DndContext>
+          />
+        )}
+
+        {layout.blocks.map((block) => {
+          const frame = metrics.frames.get(block.id);
+          if (!frame) return null;
+          const isDragging = drag?.blockID === block.id;
+          const isHoverTarget =
+            drag && !isDragging && drag.target?.kind === "swap" && drag.target.id === block.id;
+          return (
+            <BlockShell
+              key={block.id}
+              block={block}
+              frame={frame}
+              translation={isDragging ? drag!.translation : { x: 0, y: 0 }}
+              isDragging={!!isDragging}
+              isHoverTarget={!!isHoverTarget}
+              workspace={workspace}
+              onRemove={() => removeBlock(block.id)}
+              onTitleBarDragStart={(mouse) =>
+                setDrag({
+                  blockID: block.id,
+                  startMouse: mouse,
+                  startFrame: frame,
+                  translation: { x: 0, y: 0 },
+                  target: null,
+                })
+              }
+              onToggleFullRow={() => toggleFullRow(block.id)}
+              onUnpin={() => setBlockPin(block.id, undefined)}
+            />
+          );
+        })}
+
+        {!drag &&
+          metrics.dividers.map((divider, idx) => (
+            <DividerGrip
+              key={`${divider.kind.kind}-${idx}`}
+              divider={divider}
+              metrics={metrics}
+              deckSize={deckSize}
+            />
+          ))}
+      </div>
+
+      {deckMenu && (
+        <DeckMenu
+          x={deckMenu.x}
+          y={deckMenu.y}
+          onClose={() => setDeckMenu(null)}
+          onReset={() => {
+            resetAllWeights();
+            setDeckMenu(null);
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function SortableBlock({
+function BlockShell({
   block,
+  frame,
+  translation,
+  isDragging,
+  isHoverTarget,
   workspace,
   onRemove,
+  onTitleBarDragStart,
+  onToggleFullRow,
+  onUnpin,
 }: {
   block: Block;
+  frame: Rect;
+  translation: { x: number; y: number };
+  isDragging: boolean;
+  isHoverTarget: boolean;
   workspace: Workspace;
   onRemove: () => void;
+  onTitleBarDragStart: (mouse: { x: number; y: number }) => void;
+  onToggleFullRow: () => void;
+  onUnpin: () => void;
 }) {
   const status = useApp((s) => s.blockStatus[block.id] ?? "idle");
   const updateBlock = useApp((s) => s.updateBlock);
-  const layout = useApp((s) => s.layout);
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-    isOver,
-  } = useSortable({ id: block.id });
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-
-  const pinGridStyle: React.CSSProperties = block.pinnedTo
-    ? {
-        gridColumn: `${block.pinnedTo.col + 1}`,
-        gridRow: `${block.pinnedTo.row + 1}`,
-      }
-    : {};
-
-  const style: React.CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
-    minHeight: 0,
-    minWidth: 0,
-    height: "100%",
-    ...(block.fullRowSpan && !block.pinnedTo ? { gridColumn: "1 / -1" } : {}),
-    ...pinGridStyle,
-  };
   const isDark = DARK_PANES.includes(block.kind);
   const title = block.customTitle?.trim() || PANEL_LABEL[block.kind];
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
-  const toggleFullRow = () => {
-    updateBlock(block.id, { fullRowSpan: !block.fullRowSpan });
-  };
-
-  const pinHere = () => {
-    if (!layout) return;
-    const idx = layout.blocks.findIndex((b) => b.id === block.id);
-    if (idx < 0) return;
-    const col = idx % 4;
-    const row = Math.floor(idx / 4);
-    updateBlock(block.id, { pinnedTo: { row, col } });
-  };
-
-  const unpin = () => {
-    updateBlock(block.id, { pinnedTo: undefined });
-  };
+  const startDrag = useCallback(
+    (e: React.PointerEvent) => {
+      // Only left button; ignore right-click and middle-click.
+      if (e.button !== 0) return;
+      e.preventDefault();
+      onTitleBarDragStart({ x: e.clientX, y: e.clientY });
+    },
+    [onTitleBarDragStart]
+  );
 
   return (
     <div
-      ref={setNodeRef}
-      style={style}
+      style={{
+        position: "absolute",
+        left: frame.x + translation.x,
+        top: frame.y + translation.y,
+        width: frame.width,
+        height: frame.height,
+        zIndex: isDragging ? 10 : isHoverTarget ? 1 : 0,
+        transition: isDragging ? "none" : "left 180ms ease-out, top 180ms ease-out, width 180ms ease-out, height 180ms ease-out",
+      }}
       onContextMenu={(e) => {
         e.preventDefault();
+        e.stopPropagation();
         setMenu({ x: e.clientX, y: e.clientY });
       }}
     >
       <LoomPanel
         className="h-full"
         dragging={isDragging}
-        dropTarget={isOver && !isDragging}
+        dropTarget={isHoverTarget}
       >
         <BlockTitleBar
           kind={block.kind}
@@ -255,7 +348,7 @@ function SortableBlock({
           variant={isDark ? "dark" : "light"}
           onRename={(next) => updateBlock(block.id, { customTitle: next })}
           onClose={onRemove}
-          dragHandleProps={{ ...attributes, ...listeners }}
+          dragHandleProps={{ onPointerDown: startDrag }}
         />
         <div className="flex-1 min-h-0 min-w-0">
           <BlockContent kind={block.kind} workspace={workspace} blockId={block.id} />
@@ -267,17 +360,13 @@ function SortableBlock({
           y={menu.y}
           onClose={() => setMenu(null)}
           fullRow={!!block.fullRowSpan}
-          pinned={!!block.pinnedTo}
+          pinned={!!block.pin}
           onToggleFullRow={() => {
-            toggleFullRow();
-            setMenu(null);
-          }}
-          onPin={() => {
-            pinHere();
+            onToggleFullRow();
             setMenu(null);
           }}
           onUnpin={() => {
-            unpin();
+            onUnpin();
             setMenu(null);
           }}
           onClose2={() => {
@@ -290,6 +379,209 @@ function SortableBlock({
   );
 }
 
+function DividerGrip({
+  divider,
+  metrics,
+  deckSize,
+}: {
+  divider: DeckDivider;
+  metrics: DeckMetrics;
+  deckSize: { width: number; height: number };
+}) {
+  const layoutState = useApp((s) => s.layout);
+  const applyBlockWeights = useApp((s) => s.applyBlockWeights);
+  const setPinFraction = useApp((s) => s.setPinFraction);
+  const resetSeam = useApp((s) => s.resetSeam);
+  const [hover, setHover] = useState(false);
+  const [active, setActive] = useState(false);
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (!layoutState) return;
+    const start = { x: e.clientX, y: e.clientY };
+
+    type StartState =
+      | {
+          kind: "column";
+          leftID: string;
+          rightID: string;
+          leftWeight: number;
+          rightWeight: number;
+          leftPx: number;
+          rowWidthPx: number;
+        }
+      | {
+          kind: "row";
+          topID: string;
+          bottomID: string;
+          topWeight: number;
+          bottomWeight: number;
+          topPx: number;
+          colHeightPx: number;
+        }
+      | {
+          kind: "pin";
+          pinnedID: string;
+          axis: "horizontal" | "vertical";
+          fraction: number;
+          extentPx: number;
+          sign: number;
+        };
+
+    let s: StartState | null = null;
+    if (divider.kind.kind === "columnGap") {
+      const { leftID, rightID } = divider.kind;
+      const l = layoutState.blocks.find((b) => b.id === leftID);
+      const r = layoutState.blocks.find((b) => b.id === rightID);
+      const lr = metrics.frames.get(leftID);
+      const rr = metrics.frames.get(rightID);
+      if (!l || !r || !lr || !rr) return;
+      s = {
+        kind: "column",
+        leftID,
+        rightID,
+        leftWeight: l.widthWeight ?? 1.0,
+        rightWeight: r.widthWeight ?? 1.0,
+        leftPx: lr.width,
+        rowWidthPx: lr.width + rr.width + metrics.gap,
+      };
+    } else if (divider.kind.kind === "rowGap") {
+      const { topAnchorID, bottomAnchorID } = divider.kind;
+      const t = layoutState.blocks.find((b) => b.id === topAnchorID);
+      const bb = layoutState.blocks.find((b) => b.id === bottomAnchorID);
+      const tr = metrics.frames.get(topAnchorID);
+      const br = metrics.frames.get(bottomAnchorID);
+      if (!t || !bb || !tr || !br) return;
+      s = {
+        kind: "row",
+        topID: topAnchorID,
+        bottomID: bottomAnchorID,
+        topWeight: t.heightWeight ?? 1.0,
+        bottomWeight: bb.heightWeight ?? 1.0,
+        topPx: tr.height,
+        colHeightPx: tr.height + br.height + metrics.gap,
+      };
+    } else if (divider.kind.kind === "pinSplit") {
+      const { pinnedID, axis } = divider.kind;
+      const p = layoutState.blocks.find((b) => b.id === pinnedID);
+      if (!p || !p.pin) return;
+      const extent = axis === "horizontal" ? deckSize.width - metrics.gap : deckSize.height - metrics.gap;
+      s = {
+        kind: "pin",
+        pinnedID,
+        axis,
+        fraction: p.pinFraction ?? 0.5,
+        extentPx: extent,
+        sign: pinDragSign(p.pin, axis),
+      };
+    }
+    if (!s) return;
+    setActive(true);
+    const startState: StartState = s;
+
+    const onMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - start.x;
+      const dy = ev.clientY - start.y;
+      if (startState.kind === "column") {
+        const totalW = Math.max(0.0001, startState.leftWeight + startState.rightWeight);
+        const usable = startState.rowWidthPx - metrics.gap;
+        const minLeft = MIN_BLOCK_WIDTH;
+        const minRight = MIN_BLOCK_WIDTH;
+        const newLeftPx = Math.min(
+          Math.max(startState.leftPx + dx, minLeft),
+          Math.max(minLeft, usable - minRight)
+        );
+        const leftFrac = Math.max(0.001, Math.min(0.999, newLeftPx / Math.max(1, usable)));
+        applyBlockWeights([
+          { id: startState.leftID, widthWeight: totalW * leftFrac },
+          { id: startState.rightID, widthWeight: totalW * (1 - leftFrac) },
+        ]);
+      } else if (startState.kind === "row") {
+        const totalH = Math.max(0.0001, startState.topWeight + startState.bottomWeight);
+        const usable = startState.colHeightPx - metrics.gap;
+        const minTop = MIN_BLOCK_HEIGHT;
+        const minBottom = MIN_BLOCK_HEIGHT;
+        const newTopPx = Math.min(
+          Math.max(startState.topPx + dy, minTop),
+          Math.max(minTop, usable - minBottom)
+        );
+        const topFrac = Math.max(0.001, Math.min(0.999, newTopPx / Math.max(1, usable)));
+        applyBlockWeights([
+          { id: startState.topID, heightWeight: totalH * topFrac },
+          { id: startState.bottomID, heightWeight: totalH * (1 - topFrac) },
+        ]);
+      } else {
+        const d = startState.axis === "horizontal" ? dx : dy;
+        const normalized = (startState.sign * d) / Math.max(1, startState.extentPx);
+        setPinFraction(startState.pinnedID, startState.fraction + normalized);
+      }
+    };
+    const onUp = () => {
+      setActive(false);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  };
+
+  const onDoubleClick = () => {
+    if (divider.kind.kind === "columnGap") {
+      resetSeam([divider.kind.leftID, divider.kind.rightID]);
+    } else if (divider.kind.kind === "rowGap") {
+      resetSeam([divider.kind.topAnchorID, divider.kind.bottomAnchorID]);
+    } else if (divider.kind.kind === "pinSplit") {
+      setPinFraction(divider.kind.pinnedID, 0.5);
+    }
+  };
+
+  const opacity = active ? 0.45 : hover ? 0.25 : 0;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: divider.rect.x,
+        top: divider.rect.y,
+        width: divider.rect.width,
+        height: divider.rect.height,
+        cursor: divider.isVertical ? "ew-resize" : "ns-resize",
+        touchAction: "none",
+        zIndex: 5,
+      }}
+      onPointerEnter={() => setHover(true)}
+      onPointerLeave={() => setHover(false)}
+      onPointerDown={onPointerDown}
+      onDoubleClick={onDoubleClick}
+    >
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          opacity,
+          transition: "opacity 120ms ease-out",
+          pointerEvents: "none",
+        }}
+      >
+        <div
+          style={
+            divider.isVertical
+              ? { width: 2, height: "100%", background: surface.hairline }
+              : { width: "100%", height: 2, background: surface.hairline }
+          }
+        />
+      </div>
+    </div>
+  );
+}
+
 function BlockContextMenu({
   x,
   y,
@@ -297,7 +589,6 @@ function BlockContextMenu({
   fullRow,
   pinned,
   onToggleFullRow,
-  onPin,
   onUnpin,
   onClose2,
 }: {
@@ -307,7 +598,6 @@ function BlockContextMenu({
   fullRow: boolean;
   pinned: boolean;
   onToggleFullRow: () => void;
-  onPin: () => void;
   onUnpin: () => void;
   onClose2: () => void;
 }) {
@@ -338,11 +628,7 @@ function BlockContextMenu({
         <MenuButton onClick={onToggleFullRow}>
           {fullRow ? "Unspan full row" : "Span full row"}
         </MenuButton>
-        {pinned ? (
-          <MenuButton onClick={onUnpin}>Unpin from grid</MenuButton>
-        ) : (
-          <MenuButton onClick={onPin}>Pin to current position</MenuButton>
-        )}
+        {pinned && <MenuButton onClick={onUnpin}>Unpin from edge</MenuButton>}
         <div
           style={{
             height: 1,
@@ -353,6 +639,47 @@ function BlockContextMenu({
         <MenuButton onClick={onClose2} danger>
           Close block
         </MenuButton>
+      </div>
+    </div>
+  );
+}
+
+function DeckMenu({
+  x,
+  y,
+  onClose,
+  onReset,
+}: {
+  x: number;
+  y: number;
+  onClose: () => void;
+  onReset: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50"
+      onClick={onClose}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onClose();
+      }}
+    >
+      <div
+        style={{
+          position: "fixed",
+          left: x,
+          top: y,
+          background: "var(--color-loom-panel)",
+          border: `1px solid var(--color-loom-hairline)`,
+          borderRadius: 8,
+          boxShadow: "0 12px 28px rgba(0,0,0,0.40)",
+          padding: 4,
+          minWidth: 180,
+          fontSize: 12,
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <MenuButton onClick={onReset}>Reset Grid Layout</MenuButton>
       </div>
     </div>
   );
@@ -423,3 +750,6 @@ function BlockContent({
       return null;
   }
 }
+
+// Re-exports to avoid unused-import lint when tightening the file further.
+export type { BlockPin };

@@ -399,9 +399,22 @@ ghost indicator uses a 120ms ease-out so the drop target stays snappy.
 
 ### Resize
 
-Each block fills its allotted grid cell automatically. There are no
-draggable dividers between blocks today; the cell sizes are computed from
-the deck capacity, the block count, and any pin and span flags.
+Each block fills its allotted grid cell, but the cell sizes are adjustable.
+Hover the gap between any two blocks. A faint hairline appears and the
+cursor flips to the horizontal or vertical resize variant. Drag to bias
+that seam: width within a row, height between rows. The deck stays
+gap-free; minimum cell size (140w by 160h) clamps the drag so neither side
+disappears. Double-click a divider to reset just that pair back to even.
+Right-click the deck background for **Reset Grid Layout** to clear every
+weight and pin fraction in one shot.
+
+Pin boundaries are draggable too. Pin a block to the left edge, then drag
+the seam between the pin and the rest of the deck. The pin can claim
+anywhere from 20% to 80% of the deck along its axis. Corner pins expose
+two draggable seams (one per shared edge) and share a single fraction.
+
+Sizes persist per block in `layout.json`, so reordering or reopening Loom
+preserves your tuned layout.
 
 ### Persistence
 

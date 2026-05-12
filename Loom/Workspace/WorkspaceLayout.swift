@@ -73,6 +73,18 @@ final class WorkspaceBlock: Identifiable {
     var webController: WebController?
     var pin: BlockPin?
     var spansFullRow: Bool
+    /// Relative width within the block's row. Defaults to 1.0 (even share).
+    /// Combined with siblings via `weight_i / sum_of_weights` to size each
+    /// column. Clamped to `weightRange` on write.
+    var widthWeight: Double
+    /// Relative height of the row this block anchors. Only the first block in
+    /// a row drives row height; non-anchor blocks still store the value so
+    /// reordering preserves user intent.
+    var heightWeight: Double
+    /// Pin's share of the deck (0.2 to 0.8). When `pin != nil`, replaces the
+    /// hard-coded 0.5 split between the pinned area and the free area. `nil`
+    /// falls back to 0.5 for backwards compatibility.
+    var pinFraction: Double?
     var customTitle: String?
     var autoTerminalIndex: Int?
     var autoPreviewIndex: Int?
@@ -89,11 +101,22 @@ final class WorkspaceBlock: Identifiable {
     /// the panes get too small to read on typical macOS windows.
     static let maxTerminalPanes = 4
 
+    /// Allowed range for column/row weights. Below 0.2 the block disappears
+    /// behind the minimum size clamp; above 5x the neighbouring block hits
+    /// the minimum on the other side.
+    static let weightRange: ClosedRange<Double> = 0.2...5.0
+    /// Allowed range for `pinFraction`. Symmetrical so the unpinned side
+    /// never falls below 20% of the deck.
+    static let pinFractionRange: ClosedRange<Double> = 0.2...0.8
+
     init(kind: PanelKind, cwd: URL = FileManager.default.homeDirectoryForCurrentUser) {
         self.id = UUID()
         self.kind = kind
         self.pin = nil
         self.spansFullRow = false
+        self.widthWeight = 1.0
+        self.heightWeight = 1.0
+        self.pinFraction = nil
         self.customTitle = nil
         self.autoTerminalIndex = nil
         self.autoPreviewIndex = nil
@@ -299,10 +322,71 @@ final class WorkspaceLayout {
         let current = blocks
         for block in current {
             if block.id == id {
+                // Re-pinning to a different edge clears any prior pin
+                // fraction so the new edge starts at the default 50% split.
+                // Re-pinning to the same edge keeps the user's drag.
+                if block.pin != pin {
+                    block.pinFraction = nil
+                }
                 block.pin = pin
             } else if pin != nil {
                 block.pin = nil
+                block.pinFraction = nil
             }
+        }
+        blocksByKind[currentKind] = current
+        persistCurrent()
+    }
+
+    /// Apply new width/height weights to a pair of adjacent blocks (a single
+    /// drag of a divider). Both ends are clamped to `WorkspaceBlock.weightRange`.
+    func applyWeights(_ updates: [(id: UUID, width: Double?, height: Double?)]) {
+        let current = blocks
+        for update in updates {
+            guard let block = current.first(where: { $0.id == update.id }) else { continue }
+            if let w = update.width {
+                block.widthWeight = min(max(w, WorkspaceBlock.weightRange.lowerBound),
+                                        WorkspaceBlock.weightRange.upperBound)
+            }
+            if let h = update.height {
+                block.heightWeight = min(max(h, WorkspaceBlock.weightRange.lowerBound),
+                                         WorkspaceBlock.weightRange.upperBound)
+            }
+        }
+        blocksByKind[currentKind] = current
+        persistCurrent()
+    }
+
+    /// Update the pin/free split for a pinned block. No-op when the block
+    /// isn't pinned. Clamped to `WorkspaceBlock.pinFractionRange`.
+    func setPinFraction(_ id: UUID, to fraction: Double) {
+        let current = blocks
+        guard let block = current.first(where: { $0.id == id }), block.pin != nil else { return }
+        block.pinFraction = min(max(fraction, WorkspaceBlock.pinFractionRange.lowerBound),
+                                WorkspaceBlock.pinFractionRange.upperBound)
+        blocksByKind[currentKind] = current
+        persistCurrent()
+    }
+
+    /// Reset weights for a specific pair (the two sides of one divider).
+    func resetWeights(for ids: [UUID]) {
+        let current = blocks
+        for block in current where ids.contains(block.id) {
+            block.widthWeight = 1.0
+            block.heightWeight = 1.0
+        }
+        blocksByKind[currentKind] = current
+        persistCurrent()
+    }
+
+    /// Reset all weights and pin fractions on the current deck. Pin
+    /// assignments themselves are preserved; only the fractions revert.
+    func resetAllWeights() {
+        let current = blocks
+        for block in current {
+            block.widthWeight = 1.0
+            block.heightWeight = 1.0
+            block.pinFraction = nil
         }
         blocksByKind[currentKind] = current
         persistCurrent()

@@ -35,6 +35,14 @@ enum LayoutPersistence {
         /// Layout direction for 2- or 3-pane terminal blocks. Ignored at
         /// 1 pane and at 4 panes (always rendered 2x2).
         var terminalSplitAxis: String?
+        /// Relative column width within the block's row. `nil` on read
+        /// means a pre-3.1.0 store; hydrate at default 1.0.
+        var widthWeight: Double?
+        /// Relative height of the row this block anchors.
+        var heightWeight: Double?
+        /// Pin fraction (0.2-0.8). `nil` means an unpinned block or a
+        /// pre-3.1.0 store with default 50% split.
+        var pinFraction: Double?
     }
 
     fileprivate struct StoredLayout: Codable, Sendable {
@@ -117,6 +125,11 @@ private extension LayoutPersistence.StoredBlock {
         self.previewURL = block.previewURL
         self.pin = block.pin?.rawValue
         self.spansFullRow = block.spansFullRow
+        // Only serialize weights when they diverge from the default so the
+        // on-disk store stays compact and predictable.
+        self.widthWeight = block.widthWeight == 1.0 ? nil : block.widthWeight
+        self.heightWeight = block.heightWeight == 1.0 ? nil : block.heightWeight
+        self.pinFraction = block.pinFraction
         if block.kind == .terminal {
             self.cwdPath = block.terminalSessions.first?.cwd.path
             self.terminalCwds = block.terminalSessions.map { $0.cwd.path }
@@ -141,6 +154,18 @@ private extension LayoutPersistence.StoredBlock {
         block.previewURL = previewURL
         block.pin = pin.flatMap(BlockPin.init(rawValue:))
         block.spansFullRow = spansFullRow
+        if let w = widthWeight {
+            block.widthWeight = min(max(w, WorkspaceBlock.weightRange.lowerBound),
+                                    WorkspaceBlock.weightRange.upperBound)
+        }
+        if let h = heightWeight {
+            block.heightWeight = min(max(h, WorkspaceBlock.weightRange.lowerBound),
+                                     WorkspaceBlock.weightRange.upperBound)
+        }
+        if let pf = pinFraction {
+            block.pinFraction = min(max(pf, WorkspaceBlock.pinFractionRange.lowerBound),
+                                    WorkspaceBlock.pinFractionRange.upperBound)
+        }
 
         if kind == .terminal {
             // Migrate forward: when terminalCwds is present, recreate the

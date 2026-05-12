@@ -297,10 +297,23 @@ struct WorkspaceView: View {
                         ForEach(layout.blocks) { block in
                             deckBlock(block, metrics: metrics)
                         }
+
+                        // Divider grips overlay the gaps between blocks.
+                        // Hidden until hover so the deck stays visually quiet.
+                        if draggingBlockID == nil {
+                            ForEach(metrics.dividers, id: \.self) { divider in
+                                DividerGripView(divider: divider, metrics: metrics, deckSize: geo.size)
+                                    .frame(width: divider.rect.width, height: divider.rect.height)
+                                    .position(x: divider.rect.midX, y: divider.rect.midY)
+                            }
+                        }
                     }
                     .frame(width: geo.size.width, height: geo.size.height)
                     .coordinateSpace(name: "deck")
                     .animation(.easeOut(duration: 0.12), value: dragTarget)
+                    .contextMenu {
+                        Button("Reset Grid Layout") { layout.resetAllWeights() }
+                    }
                     .onAppear { deckSize = geo.size }
                     .onChange(of: geo.size) { _, new in deckSize = new }
                 }
@@ -434,6 +447,181 @@ struct WorkspaceView: View {
 #Preview {
     WorkspaceView()
         .frame(width: 1400, height: 800)
+}
+
+/// Captured at drag start so weight math is stable across the gesture even
+/// as SwiftUI re-renders the view with updated metrics.
+private enum DividerDragStart {
+    case column(leftWeight: Double, rightWeight: Double, leftPx: CGFloat, rowWidthPx: CGFloat)
+    case row(topWeight: Double, bottomWeight: Double, topPx: CGFloat, colHeightPx: CGFloat)
+    case pin(fraction: Double, extentPx: CGFloat, sign: CGFloat)
+}
+
+/// Invisible 12pt-thick grip living in a gap between blocks. Renders a thin
+/// hairline on hover, switches the cursor, and on drag updates the relevant
+/// widthWeight/heightWeight/pinFraction live. Double-click resets to even.
+@MainActor
+struct DividerGripView: View {
+    let divider: DeckDivider
+    let metrics: DeckMetrics
+    let deckSize: CGSize
+    @Environment(WorkspaceLayout.self) private var layout
+    @State private var isHovering: Bool = false
+    @State private var isDragging: Bool = false
+    @State private var dragStart: DividerDragStart? = nil
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.clear)
+            .contentShape(Rectangle())
+            .overlay(gripIndicator.opacity(isDragging ? 0.45 : (isHovering ? 0.25 : 0)))
+            .animation(.easeOut(duration: 0.12), value: isHovering)
+            .onHover { hovering in
+                isHovering = hovering
+                #if canImport(AppKit)
+                if hovering {
+                    (divider.isVertical ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).set()
+                } else if !isDragging {
+                    NSCursor.arrow.set()
+                }
+                #endif
+            }
+            .gesture(
+                DragGesture(minimumDistance: 2, coordinateSpace: .named("deck"))
+                    .onChanged { value in
+                        if !isDragging {
+                            isDragging = true
+                            dragStart = captureStart()
+                        }
+                        applyDrag(translation: value.translation)
+                    }
+                    .onEnded { _ in
+                        isDragging = false
+                        dragStart = nil
+                    }
+            )
+            .onTapGesture(count: 2) { resetSeam() }
+    }
+
+    @ViewBuilder
+    private var gripIndicator: some View {
+        if divider.isVertical {
+            HStack(spacing: 0) {
+                Spacer()
+                Rectangle().fill(LoomTheme.hairline).frame(width: 2)
+                Spacer()
+            }
+        } else {
+            VStack(spacing: 0) {
+                Spacer()
+                Rectangle().fill(LoomTheme.hairline).frame(height: 2)
+                Spacer()
+            }
+        }
+    }
+
+    private func captureStart() -> DividerDragStart? {
+        switch divider.kind {
+        case .columnGap(let leftID, let rightID):
+            guard let l = layout.blocks.first(where: { $0.id == leftID }),
+                  let r = layout.blocks.first(where: { $0.id == rightID }) else { return nil }
+            let leftRect = metrics.frame(for: leftID)
+            let rightRect = metrics.frame(for: rightID)
+            let rowWidth = leftRect.width + rightRect.width + metrics.gap
+            return .column(leftWeight: l.widthWeight, rightWeight: r.widthWeight,
+                           leftPx: leftRect.width, rowWidthPx: rowWidth)
+        case .rowGap(let topID, let bottomID):
+            guard let t = layout.blocks.first(where: { $0.id == topID }),
+                  let b = layout.blocks.first(where: { $0.id == bottomID }) else { return nil }
+            let topRect = metrics.frame(for: topID)
+            let bottomRect = metrics.frame(for: bottomID)
+            let colHeight = topRect.height + bottomRect.height + metrics.gap
+            return .row(topWeight: t.heightWeight, bottomWeight: b.heightWeight,
+                        topPx: topRect.height, colHeightPx: colHeight)
+        case .pinSplit(let pinnedID, let axis):
+            guard let p = layout.blocks.first(where: { $0.id == pinnedID }), let pin = p.pin else { return nil }
+            let f0 = p.pinFraction ?? 0.5
+            let extent: CGFloat = axis == .horizontal
+                ? (deckSize.width - metrics.gap)
+                : (deckSize.height - metrics.gap)
+            return .pin(fraction: f0, extentPx: extent, sign: pinSign(for: pin, axis: axis))
+        }
+    }
+
+    private func applyDrag(translation: CGSize) {
+        guard let start = dragStart else { return }
+        switch (divider.kind, start) {
+        case (.columnGap(let leftID, let rightID),
+              .column(let w0L, let w0R, let leftPx0, let rowWidthPx)):
+            let totalW = max(0.0001, w0L + w0R)
+            let usable = rowWidthPx - metrics.gap
+            let minLeftPx: CGFloat = 140
+            let minRightPx: CGFloat = 140
+            let newLeftPx = min(max(leftPx0 + translation.width, minLeftPx),
+                                max(minLeftPx, usable - minRightPx))
+            let leftFrac = max(0.001, min(0.999, newLeftPx / max(1, usable)))
+            let newWL = totalW * Double(leftFrac)
+            let newWR = totalW - newWL
+            layout.applyWeights([
+                (id: leftID,  width: newWL, height: nil),
+                (id: rightID, width: newWR, height: nil)
+            ])
+
+        case (.rowGap(let topID, let bottomID),
+              .row(let h0T, let h0B, let topPx0, let colHeightPx)):
+            let totalH = max(0.0001, h0T + h0B)
+            let usable = colHeightPx - metrics.gap
+            let minTopPx: CGFloat = 160
+            let minBottomPx: CGFloat = 160
+            let newTopPx = min(max(topPx0 + translation.height, minTopPx),
+                               max(minTopPx, usable - minBottomPx))
+            let topFrac = max(0.001, min(0.999, newTopPx / max(1, usable)))
+            let newHT = totalH * Double(topFrac)
+            let newHB = totalH - newHT
+            layout.applyWeights([
+                (id: topID,    width: nil, height: newHT),
+                (id: bottomID, width: nil, height: newHB)
+            ])
+
+        case (.pinSplit(let pinnedID, let axis),
+              .pin(let f0, let extentPx, let sign)):
+            let delta: CGFloat = axis == .horizontal ? translation.width : translation.height
+            let normalized = (sign * delta) / max(1, extentPx)
+            let target = f0 + Double(normalized)
+            layout.setPinFraction(pinnedID, to: target)
+
+        default:
+            break
+        }
+    }
+
+    private func resetSeam() {
+        switch divider.kind {
+        case .columnGap(let leftID, let rightID), .rowGap(let leftID, let rightID):
+            layout.resetWeights(for: [leftID, rightID])
+        case .pinSplit(let pinnedID, _):
+            // Reset just this seam by clearing the pin fraction back to 50%.
+            layout.setPinFraction(pinnedID, to: 0.5)
+        }
+    }
+
+    /// Sign convention for pin drags. +1 means dragging the gesture's positive
+    /// axis direction (right or down) increases the pin's fraction. -1 means
+    /// it decreases the fraction.
+    private func pinSign(for pin: BlockPin, axis: Axis) -> CGFloat {
+        switch (pin, axis) {
+        case (.left, .horizontal), (.bottomLeft, .horizontal), (.topLeft, .horizontal):
+            return 1
+        case (.right, .horizontal), (.topRight, .horizontal), (.bottomRight, .horizontal):
+            return -1
+        case (.top, .vertical), (.topLeft, .vertical), (.topRight, .vertical):
+            return 1
+        case (.bottom, .vertical), (.bottomLeft, .vertical), (.bottomRight, .vertical):
+            return -1
+        default:
+            return 1
+        }
+    }
 }
 
 
@@ -607,131 +795,185 @@ enum DropTarget: Equatable, Hashable {
     case swap(UUID)
 }
 
+/// Identifies one draggable seam in the deck. The kind tells the gesture
+/// handler whose weights or pin fraction to update; the rect is the
+/// 12pt-thick hit area centered in the gap.
+enum DeckDividerKind: Hashable {
+    /// Vertical seam between two row-mates. Drag redistributes their
+    /// `widthWeight`.
+    case columnGap(leftID: UUID, rightID: UUID)
+    /// Horizontal seam between two rows. Drag redistributes the row anchors'
+    /// `heightWeight`.
+    case rowGap(topAnchorID: UUID, bottomAnchorID: UUID)
+    /// Boundary of a pinned block. `axis = .horizontal` for a vertical seam
+    /// (drag left/right adjusts width-side fraction); `axis = .vertical` for
+    /// a horizontal seam (drag up/down adjusts height-side fraction).
+    case pinSplit(pinnedID: UUID, axis: Axis)
+}
+
+struct DeckDivider: Hashable {
+    let kind: DeckDividerKind
+    let rect: CGRect
+    let isVertical: Bool
+}
+
 @MainActor
 struct DeckMetrics {
     let containerSize: CGSize
     let gap: CGFloat
     let frames: [UUID: CGRect]
     let pinnedID: UUID?
+    /// Draggable divider hit zones. Always centered in the 12pt gap so the
+    /// grip never overlaps a block's visible content.
+    let dividers: [DeckDivider]
 
     init(size: CGSize, blocks: [WorkspaceBlock]) {
         let gap: CGFloat = 12
         var frames: [UUID: CGRect] = [:]
         var pinnedID: UUID?
+        var dividers: [DeckDivider] = []
 
         if blocks.count == 1 {
             // Single block always fills the deck. Pinning makes no sense when
             // there are no other blocks to take the remainder.
             frames[blocks[0].id] = CGRect(origin: .zero, size: size)
         } else if let pinned = blocks.first(where: { $0.pin != nil }), let pin = pinned.pin {
-            frames[pinned.id] = Self.pinFrame(pin: pin, deckSize: size, gap: gap)
+            let fraction = CGFloat(pinned.pinFraction ?? 0.5)
+            frames[pinned.id] = Self.pinFrame(pin: pin, deckSize: size, gap: gap, fraction: fraction)
             pinnedID = pinned.id
 
             let freeBlocks = blocks.filter { $0.id != pinned.id }
             if pin.isCorner {
                 // L-shaped free area: a small "neighbor" quadrant adjacent to the pin
                 // takes the first free block; the rest fill the opposite full-width row.
-                let zones = Self.cornerComplementZones(pin: pin, deckSize: size, gap: gap)
+                let zones = Self.cornerComplementZones(pin: pin, deckSize: size, gap: gap, fraction: fraction)
                 let neighbor = zones.neighbor
                 let wideRow = zones.wideRow
                 if let head = freeBlocks.first {
                     frames[head.id] = neighbor
                     let tail = Array(freeBlocks.dropFirst())
-                    for (id, rect) in Self.computeEvenRow(blocks: tail, area: wideRow, gap: gap) {
+                    let rowResult = Self.computeEvenRow(blocks: tail, area: wideRow, gap: gap)
+                    for (id, rect) in rowResult.frames {
                         frames[id] = rect
                     }
+                    dividers.append(contentsOf: rowResult.dividers)
                 }
             } else {
-                let freeArea = Self.complementFrame(pin: pin, deckSize: size, gap: gap)
-                for (id, rect) in Self.computeEvenRow(blocks: freeBlocks, area: freeArea, gap: gap) {
+                let freeArea = Self.complementFrame(pin: pin, deckSize: size, gap: gap, fraction: fraction)
+                let rowResult = Self.computeEvenRow(blocks: freeBlocks, area: freeArea, gap: gap)
+                for (id, rect) in rowResult.frames {
                     frames[id] = rect
                 }
+                dividers.append(contentsOf: rowResult.dividers)
             }
+
+            // Pin boundary draggable. Edge pins yield one divider (axis depends
+            // on the edge); corner pins yield two (one per shared edge).
+            dividers.append(contentsOf: Self.pinDividers(
+                pin: pin,
+                deckSize: size,
+                gap: gap,
+                fraction: fraction,
+                pinnedID: pinned.id
+            ))
         } else {
             let area = CGRect(origin: .zero, size: size)
-            for (id, rect) in Self.computeEvenRow(blocks: blocks, area: area, gap: gap) {
+            let rowResult = Self.computeEvenRow(blocks: blocks, area: area, gap: gap)
+            for (id, rect) in rowResult.frames {
                 frames[id] = rect
             }
+            dividers.append(contentsOf: rowResult.dividers)
         }
 
         self.containerSize = size
         self.gap = gap
         self.frames = frames
         self.pinnedID = pinnedID
+        self.dividers = dividers
     }
 
-    static func pinFrame(pin: BlockPin, deckSize: CGSize, gap: CGFloat) -> CGRect {
-        let halfW = (deckSize.width - gap) / 2
-        let halfH = (deckSize.height - gap) / 2
+    static func pinFrame(pin: BlockPin, deckSize: CGSize, gap: CGFloat, fraction: CGFloat = 0.5) -> CGRect {
+        let leftW  = (deckSize.width  - gap) * fraction
+        let rightW = (deckSize.width  - gap) - leftW
+        let topH   = (deckSize.height - gap) * fraction
+        let bottomH = (deckSize.height - gap) - topH
         switch pin {
         case .left:
-            return CGRect(x: 0, y: 0, width: halfW, height: deckSize.height)
+            return CGRect(x: 0, y: 0, width: leftW, height: deckSize.height)
         case .right:
-            return CGRect(x: halfW + gap, y: 0, width: halfW, height: deckSize.height)
+            return CGRect(x: leftW + gap, y: 0, width: rightW, height: deckSize.height)
         case .top:
-            return CGRect(x: 0, y: 0, width: deckSize.width, height: halfH)
+            return CGRect(x: 0, y: 0, width: deckSize.width, height: topH)
         case .bottom:
-            return CGRect(x: 0, y: halfH + gap, width: deckSize.width, height: halfH)
+            return CGRect(x: 0, y: topH + gap, width: deckSize.width, height: bottomH)
         case .topLeft:
-            return CGRect(x: 0, y: 0, width: halfW, height: halfH)
+            return CGRect(x: 0, y: 0, width: leftW, height: topH)
         case .topRight:
-            return CGRect(x: halfW + gap, y: 0, width: halfW, height: halfH)
+            return CGRect(x: leftW + gap, y: 0, width: rightW, height: topH)
         case .bottomLeft:
-            return CGRect(x: 0, y: halfH + gap, width: halfW, height: halfH)
+            return CGRect(x: 0, y: topH + gap, width: leftW, height: bottomH)
         case .bottomRight:
-            return CGRect(x: halfW + gap, y: halfH + gap, width: halfW, height: halfH)
+            return CGRect(x: leftW + gap, y: topH + gap, width: rightW, height: bottomH)
         }
     }
 
-    static func complementFrame(pin: BlockPin, deckSize: CGSize, gap: CGFloat) -> CGRect {
-        let halfW = (deckSize.width - gap) / 2
-        let halfH = (deckSize.height - gap) / 2
+    static func complementFrame(pin: BlockPin, deckSize: CGSize, gap: CGFloat, fraction: CGFloat = 0.5) -> CGRect {
+        let leftW  = (deckSize.width  - gap) * fraction
+        let rightW = (deckSize.width  - gap) - leftW
+        let topH   = (deckSize.height - gap) * fraction
+        let bottomH = (deckSize.height - gap) - topH
         switch pin {
         case .left:
-            return CGRect(x: halfW + gap, y: 0, width: halfW, height: deckSize.height)
+            return CGRect(x: leftW + gap, y: 0, width: rightW, height: deckSize.height)
         case .right:
-            return CGRect(x: 0, y: 0, width: halfW, height: deckSize.height)
+            return CGRect(x: 0, y: 0, width: leftW, height: deckSize.height)
         case .top:
-            return CGRect(x: 0, y: halfH + gap, width: deckSize.width, height: halfH)
+            return CGRect(x: 0, y: topH + gap, width: deckSize.width, height: bottomH)
         case .bottom:
-            return CGRect(x: 0, y: 0, width: deckSize.width, height: halfH)
+            return CGRect(x: 0, y: 0, width: deckSize.width, height: topH)
         case .topLeft, .topRight, .bottomLeft, .bottomRight:
             // Corners use cornerComplementZones; this should not be called for them.
             return CGRect(origin: .zero, size: deckSize)
         }
     }
 
-    private static func cornerComplementZones(pin: BlockPin, deckSize: CGSize, gap: CGFloat) -> (neighbor: CGRect, wideRow: CGRect) {
-        let halfW = (deckSize.width - gap) / 2
-        let halfH = (deckSize.height - gap) / 2
+    private static func cornerComplementZones(pin: BlockPin, deckSize: CGSize, gap: CGFloat, fraction: CGFloat = 0.5) -> (neighbor: CGRect, wideRow: CGRect) {
+        let leftW  = (deckSize.width  - gap) * fraction
+        let rightW = (deckSize.width  - gap) - leftW
+        let topH   = (deckSize.height - gap) * fraction
+        let bottomH = (deckSize.height - gap) - topH
         switch pin {
         case .topLeft:
             return (
-                neighbor: CGRect(x: halfW + gap, y: 0, width: halfW, height: halfH),
-                wideRow:  CGRect(x: 0, y: halfH + gap, width: deckSize.width, height: halfH)
+                neighbor: CGRect(x: leftW + gap, y: 0, width: rightW, height: topH),
+                wideRow:  CGRect(x: 0, y: topH + gap, width: deckSize.width, height: bottomH)
             )
         case .topRight:
             return (
-                neighbor: CGRect(x: 0, y: 0, width: halfW, height: halfH),
-                wideRow:  CGRect(x: 0, y: halfH + gap, width: deckSize.width, height: halfH)
+                neighbor: CGRect(x: 0, y: 0, width: leftW, height: topH),
+                wideRow:  CGRect(x: 0, y: topH + gap, width: deckSize.width, height: bottomH)
             )
         case .bottomLeft:
             return (
-                neighbor: CGRect(x: halfW + gap, y: halfH + gap, width: halfW, height: halfH),
-                wideRow:  CGRect(x: 0, y: 0, width: deckSize.width, height: halfH)
+                neighbor: CGRect(x: leftW + gap, y: topH + gap, width: rightW, height: bottomH),
+                wideRow:  CGRect(x: 0, y: 0, width: deckSize.width, height: topH)
             )
         case .bottomRight:
             return (
-                neighbor: CGRect(x: 0, y: halfH + gap, width: halfW, height: halfH),
-                wideRow:  CGRect(x: 0, y: 0, width: deckSize.width, height: halfH)
+                neighbor: CGRect(x: 0, y: topH + gap, width: leftW, height: bottomH),
+                wideRow:  CGRect(x: 0, y: 0, width: deckSize.width, height: topH)
             )
         default:
             return (.zero, .zero)
         }
     }
 
-    private static func computeEvenRow(blocks: [WorkspaceBlock], area: CGRect, gap: CGFloat) -> [UUID: CGRect] {
-        guard !blocks.isEmpty, area.width > 0, area.height > 0 else { return [:] }
+    private static func computeEvenRow(
+        blocks: [WorkspaceBlock],
+        area: CGRect,
+        gap: CGFloat
+    ) -> (frames: [UUID: CGRect], dividers: [DeckDivider]) {
+        guard !blocks.isEmpty, area.width > 0, area.height > 0 else { return ([:], []) }
         let cap = WorkspaceLayout.capacity(for: area.size)
         let cols = balancedCols(
             count: blocks.count,
@@ -759,20 +1001,130 @@ struct DeckMetrics {
             }
         }
 
+        // Row heights come from each row's anchor block (the first one). A
+        // weight of 1.0 everywhere preserves the legacy even-row behaviour.
         let totalGapY = CGFloat(max(0, rows.count - 1)) * gap
-        let cellH = max(160, (area.height - totalGapY) / CGFloat(max(1, rows.count)))
+        let usableH = max(0, area.height - totalGapY)
+        let rowWeights: [CGFloat] = rows.map { row in
+            CGFloat(row.first?.heightWeight ?? 1.0)
+        }
+        let rowWeightSum = max(rowWeights.reduce(0, +), 0.0001)
+        let rawRowHeights: [CGFloat] = rowWeights.map { w in
+            usableH * w / rowWeightSum
+        }
+        let rowHeights: [CGFloat] = rawRowHeights.map { max(160, $0) }
+
         var frames: [UUID: CGRect] = [:]
+        var dividers: [DeckDivider] = []
+        var cursorY = area.minY
         for (rowIdx, row) in rows.enumerated() {
             let blocksInRow = row.count
             let totalGapX = CGFloat(max(0, blocksInRow - 1)) * gap
-            let cellW = max(140, (area.width - totalGapX) / CGFloat(max(1, blocksInRow)))
+            let usableW = max(0, area.width - totalGapX)
+            let rowH = rowHeights[rowIdx]
+
+            // Column widths from per-block widthWeight. Full-row blocks ignore
+            // weights entirely; everyone else shares usableW proportionally.
+            let weights: [CGFloat] = row.map { CGFloat($0.widthWeight) }
+            let weightSum = max(weights.reduce(0, +), 0.0001)
+            let rawWidths: [CGFloat] = weights.map { w in usableW * w / weightSum }
+            let widths: [CGFloat] = rawWidths.map { max(140, $0) }
+
+            var cursorX = area.minX
             for (posInRow, block) in row.enumerated() {
-                let x = area.minX + CGFloat(posInRow) * (cellW + gap)
-                let y = area.minY + CGFloat(rowIdx) * (cellH + gap)
-                frames[block.id] = CGRect(x: x, y: y, width: cellW, height: cellH)
+                let cellW = widths[posInRow]
+                frames[block.id] = CGRect(x: cursorX, y: cursorY, width: cellW, height: rowH)
+                // Vertical divider between this block and the next in the row.
+                if posInRow < row.count - 1 {
+                    let dividerX = cursorX + cellW
+                    let rightID = row[posInRow + 1].id
+                    let rect = CGRect(x: dividerX, y: cursorY, width: gap, height: rowH)
+                    dividers.append(DeckDivider(
+                        kind: .columnGap(leftID: block.id, rightID: rightID),
+                        rect: rect,
+                        isVertical: true
+                    ))
+                }
+                cursorX += cellW + gap
             }
+
+            // Horizontal divider between this row and the next.
+            if rowIdx < rows.count - 1 {
+                let dividerY = cursorY + rowH
+                let topAnchorID = row.first!.id
+                let bottomAnchorID = rows[rowIdx + 1].first!.id
+                let rect = CGRect(x: area.minX, y: dividerY, width: area.width, height: gap)
+                dividers.append(DeckDivider(
+                    kind: .rowGap(topAnchorID: topAnchorID, bottomAnchorID: bottomAnchorID),
+                    rect: rect,
+                    isVertical: false
+                ))
+            }
+            cursorY += rowH + gap
         }
-        return frames
+        return (frames, dividers)
+    }
+
+    /// Build the draggable boundary divider(s) for a pinned block. Edge pins
+    /// yield one divider whose axis matches the edge; corner pins yield two,
+    /// one along each shared edge of the corner quadrant.
+    private static func pinDividers(
+        pin: BlockPin,
+        deckSize: CGSize,
+        gap: CGFloat,
+        fraction: CGFloat,
+        pinnedID: UUID
+    ) -> [DeckDivider] {
+        let leftW  = (deckSize.width  - gap) * fraction
+        let topH   = (deckSize.height - gap) * fraction
+        switch pin {
+        case .left, .right:
+            // Vertical divider at the seam. Position is just past the pinned
+            // block's right edge (or just before its left edge for .right).
+            let x: CGFloat = (pin == .left) ? leftW : ((deckSize.width - gap) - leftW)
+            let rect = CGRect(x: x, y: 0, width: gap, height: deckSize.height)
+            return [DeckDivider(
+                kind: .pinSplit(pinnedID: pinnedID, axis: .horizontal),
+                rect: rect,
+                isVertical: true
+            )]
+        case .top, .bottom:
+            let y: CGFloat = (pin == .top) ? topH : ((deckSize.height - gap) - topH)
+            let rect = CGRect(x: 0, y: y, width: deckSize.width, height: gap)
+            return [DeckDivider(
+                kind: .pinSplit(pinnedID: pinnedID, axis: .vertical),
+                rect: rect,
+                isVertical: false
+            )]
+        case .topLeft:
+            let vRect = CGRect(x: leftW, y: 0, width: gap, height: topH)
+            let hRect = CGRect(x: 0, y: topH, width: deckSize.width, height: gap)
+            return [
+                DeckDivider(kind: .pinSplit(pinnedID: pinnedID, axis: .horizontal), rect: vRect, isVertical: true),
+                DeckDivider(kind: .pinSplit(pinnedID: pinnedID, axis: .vertical),   rect: hRect, isVertical: false)
+            ]
+        case .topRight:
+            let vRect = CGRect(x: (deckSize.width - gap) - leftW, y: 0, width: gap, height: topH)
+            let hRect = CGRect(x: 0, y: topH, width: deckSize.width, height: gap)
+            return [
+                DeckDivider(kind: .pinSplit(pinnedID: pinnedID, axis: .horizontal), rect: vRect, isVertical: true),
+                DeckDivider(kind: .pinSplit(pinnedID: pinnedID, axis: .vertical),   rect: hRect, isVertical: false)
+            ]
+        case .bottomLeft:
+            let vRect = CGRect(x: leftW, y: topH + gap, width: gap, height: (deckSize.height - gap) - topH)
+            let hRect = CGRect(x: 0, y: topH, width: deckSize.width, height: gap)
+            return [
+                DeckDivider(kind: .pinSplit(pinnedID: pinnedID, axis: .horizontal), rect: vRect, isVertical: true),
+                DeckDivider(kind: .pinSplit(pinnedID: pinnedID, axis: .vertical),   rect: hRect, isVertical: false)
+            ]
+        case .bottomRight:
+            let vRect = CGRect(x: (deckSize.width - gap) - leftW, y: topH + gap, width: gap, height: (deckSize.height - gap) - topH)
+            let hRect = CGRect(x: 0, y: topH, width: deckSize.width, height: gap)
+            return [
+                DeckDivider(kind: .pinSplit(pinnedID: pinnedID, axis: .horizontal), rect: vRect, isVertical: true),
+                DeckDivider(kind: .pinSplit(pinnedID: pinnedID, axis: .vertical),   rect: hRect, isVertical: false)
+            ]
+        }
     }
 
     private static func balancedCols(count: Int, capCols: Int, capRows: Int, deckSize: CGSize) -> Int {

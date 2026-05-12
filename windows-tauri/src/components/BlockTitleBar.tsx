@@ -69,6 +69,15 @@ export function BlockTitleBar({
     setDraft(title);
   };
 
+  // The whole title bar is the drag handle when dragHandleProps is supplied.
+  // Interactive children (rename input, close button, dedicated grip) call
+  // stopPropagation on pointer events so they keep their own click behavior
+  // without starting a block drag.
+  const stopBarDrag = (e: React.PointerEvent | React.MouseEvent) => {
+    e.stopPropagation();
+  };
+  const barHandleProps = dragHandleProps ?? {};
+
   return (
     <div
       className="flex items-center gap-2 flex-none"
@@ -76,7 +85,11 @@ export function BlockTitleBar({
         padding: "8px 12px",
         background: bg,
         borderBottom: `1px solid ${border}`,
+        cursor: dragHandleProps ? "grab" : "default",
+        touchAction: dragHandleProps ? "none" : undefined,
+        userSelect: "none",
       }}
+      {...barHandleProps}
     >
       <Icon size={11} strokeWidth={2.2} color={meta.color} />
       {editing && onRename ? (
@@ -85,6 +98,8 @@ export function BlockTitleBar({
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={commit}
+          onPointerDown={stopBarDrag}
+          onMouseDown={stopBarDrag}
           onKeyDown={(e) => {
             if (e.key === "Enter") commit();
             else if (e.key === "Escape") cancel();
@@ -109,9 +124,9 @@ export function BlockTitleBar({
             fontSize: 12,
             fontWeight: 600,
             color: variant === "dark" ? "rgba(255,255,255,0.94)" : text.primary,
-            cursor: onRename ? "text" : "default",
+            cursor: dragHandleProps ? "grab" : onRename ? "text" : "default",
           }}
-          title={onRename ? "Double-click to rename" : undefined}
+          title={onRename ? "Double-click to rename, drag to move" : undefined}
         >
           {title}
         </span>
@@ -136,6 +151,8 @@ export function BlockTitleBar({
         {onClose && (
           <button
             onClick={onClose}
+            onPointerDown={stopBarDrag}
+            onMouseDown={stopBarDrag}
             aria-label="Close block"
             style={{
               padding: 2,
@@ -150,21 +167,19 @@ export function BlockTitleBar({
           </button>
         )}
         {dragHandleProps && (
-          <button
-            {...dragHandleProps}
-            aria-label="Drag block"
+          <span
+            aria-hidden="true"
             style={{
               padding: 2,
-              borderRadius: 4,
-              cursor: "grab",
               color:
                 variant === "dark"
                   ? "rgba(255,255,255,0.45)"
                   : text.tertiary,
+              pointerEvents: "none",
             }}
           >
             <Icons.gridDrag size={11} strokeWidth={2} />
-          </button>
+          </span>
         )}
       </div>
     </div>

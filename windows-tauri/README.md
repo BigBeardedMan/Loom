@@ -122,8 +122,12 @@ both the Mac DMG and the Windows NSIS installers for x64 and ARM64.
 Across both platforms the surface is:
 
 - Workspace shell — sidebar with rename, kind icons, per-workspace session
-  count; cockpit with dynamic blocks, drag-to-reorder, block rename,
-  full-row span toggle (right-click), close, status dot.
+  count; cockpit with dynamic blocks, drag-anywhere-on-the-titlebar to
+  reorder or pin (8-edge drop targets: left, right, top, bottom, plus four
+  corners), draggable seams between blocks and on pin boundaries for
+  per-block resize, double-click a seam to reset, right-click the deck for
+  Reset Grid Layout, block rename, full-row span toggle (right-click),
+  close, status dot.
 - Terminal pane — multi-pane splits (1 / 2-H / 2-V / 3-H / 3-V / 2×2 quad),
   per-pane header with cwd + OSC title, Ctrl+C button, foreground command
   polling, shell-integration history writer.
@@ -159,7 +163,6 @@ Across both platforms the surface is:
 Deferred to follow-ups:
 
 - Multi-window support
-- 8-edge drop targets + pin management for the cockpit grid
 - Notes Ctrl+F search
 - Auto-preview index per Preview block
 - Toast notifications, tray icon, jump lists

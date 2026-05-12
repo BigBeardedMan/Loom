@@ -5,9 +5,18 @@ import {
   saveLayout,
   newBlock,
   type Block,
+  type BlockPin,
   type Layout,
   defaultLayout,
 } from "../modules/workspace/LayoutPersistence";
+import {
+  WEIGHT_MIN,
+  WEIGHT_MAX,
+  PIN_FRACTION_MIN,
+  PIN_FRACTION_MAX,
+} from "../modules/workspace/deckMetrics";
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
 
 export type Panel =
   | "terminal"
@@ -48,8 +57,17 @@ type AppState = {
   addBlock: (kind: Panel) => Promise<void>;
   removeBlock: (id: string) => Promise<void>;
   reorderBlocks: (newOrder: Block[]) => Promise<void>;
+  swapBlocks: (a: string, b: string) => Promise<void>;
   resetLayout: () => Promise<void>;
   updateBlock: (id: string, patch: Partial<Block>) => Promise<void>;
+  setBlockPin: (id: string, pin: BlockPin | undefined) => Promise<void>;
+  toggleFullRow: (id: string) => Promise<void>;
+  applyBlockWeights: (
+    updates: { id: string; widthWeight?: number; heightWeight?: number }[]
+  ) => Promise<void>;
+  setPinFraction: (id: string, fraction: number) => Promise<void>;
+  resetSeam: (ids: string[]) => Promise<void>;
+  resetAllWeights: () => Promise<void>;
   setBlockStatus: (id: string, status: "idle" | "active" | "warning") => void;
   openPalette: () => void;
   closePalette: () => void;
@@ -208,6 +226,130 @@ export const useApp = create<AppState>((set, get) => ({
     if (!wsId || !current) return;
     const next: Layout = {
       blocks: current.blocks.map((b) => (b.id === id ? { ...b, ...patch } : b)),
+    };
+    set({ layout: next });
+    await saveLayout(wsId, next);
+  },
+
+  setBlockPin: async (id, pin) => {
+    const wsId = get().selectedWorkspaceId;
+    const current = get().layout;
+    if (!wsId || !current) return;
+    const next: Layout = {
+      blocks: current.blocks.map((b) => {
+        if (b.id === id) {
+          // Re-pinning to the same edge keeps the current pinFraction; any
+          // change clears it so the new edge starts at 50%.
+          const sameEdge = b.pin === pin;
+          return {
+            ...b,
+            pin,
+            pinFraction: sameEdge ? b.pinFraction : undefined,
+          };
+        }
+        // Only one block can be pinned at a time.
+        if (pin && b.pin) return { ...b, pin: undefined, pinFraction: undefined };
+        return b;
+      }),
+    };
+    set({ layout: next });
+    await saveLayout(wsId, next);
+  },
+
+  toggleFullRow: async (id) => {
+    const wsId = get().selectedWorkspaceId;
+    const current = get().layout;
+    if (!wsId || !current) return;
+    const next: Layout = {
+      blocks: current.blocks.map((b) =>
+        b.id === id ? { ...b, fullRowSpan: !b.fullRowSpan } : b
+      ),
+    };
+    set({ layout: next });
+    await saveLayout(wsId, next);
+  },
+
+  swapBlocks: async (a, b) => {
+    const wsId = get().selectedWorkspaceId;
+    const current = get().layout;
+    if (!wsId || !current) return;
+    const blocks = [...current.blocks];
+    const i = blocks.findIndex((x) => x.id === a);
+    const j = blocks.findIndex((x) => x.id === b);
+    if (i < 0 || j < 0 || i === j) return;
+    // Swapping clears pins on both ends so the user can re-pin intentionally.
+    const ai = { ...blocks[i], pin: undefined, pinFraction: undefined };
+    const aj = { ...blocks[j], pin: undefined, pinFraction: undefined };
+    blocks[i] = aj;
+    blocks[j] = ai;
+    const next: Layout = { blocks };
+    set({ layout: next });
+    await saveLayout(wsId, next);
+  },
+
+  applyBlockWeights: async (updates) => {
+    const wsId = get().selectedWorkspaceId;
+    const current = get().layout;
+    if (!wsId || !current) return;
+    const updateMap = new Map(updates.map((u) => [u.id, u]));
+    const next: Layout = {
+      blocks: current.blocks.map((b) => {
+        const u = updateMap.get(b.id);
+        if (!u) return b;
+        const patch: Partial<Block> = {};
+        if (u.widthWeight !== undefined) {
+          patch.widthWeight = clamp(u.widthWeight, WEIGHT_MIN, WEIGHT_MAX);
+        }
+        if (u.heightWeight !== undefined) {
+          patch.heightWeight = clamp(u.heightWeight, WEIGHT_MIN, WEIGHT_MAX);
+        }
+        return { ...b, ...patch };
+      }),
+    };
+    set({ layout: next });
+    await saveLayout(wsId, next);
+  },
+
+  setPinFraction: async (id, fraction) => {
+    const wsId = get().selectedWorkspaceId;
+    const current = get().layout;
+    if (!wsId || !current) return;
+    const next: Layout = {
+      blocks: current.blocks.map((b) =>
+        b.id === id && b.pin
+          ? { ...b, pinFraction: clamp(fraction, PIN_FRACTION_MIN, PIN_FRACTION_MAX) }
+          : b
+      ),
+    };
+    set({ layout: next });
+    await saveLayout(wsId, next);
+  },
+
+  resetSeam: async (ids) => {
+    const wsId = get().selectedWorkspaceId;
+    const current = get().layout;
+    if (!wsId || !current) return;
+    const idSet = new Set(ids);
+    const next: Layout = {
+      blocks: current.blocks.map((b) =>
+        idSet.has(b.id) ? { ...b, widthWeight: 1.0, heightWeight: 1.0 } : b
+      ),
+    };
+    set({ layout: next });
+    await saveLayout(wsId, next);
+  },
+
+  resetAllWeights: async () => {
+    const wsId = get().selectedWorkspaceId;
+    const current = get().layout;
+    if (!wsId || !current) return;
+    const next: Layout = {
+      blocks: current.blocks.map((b) => ({
+        ...b,
+        widthWeight: 1.0,
+        heightWeight: 1.0,
+        pinFraction: undefined,
+      })),
     };
     set({ layout: next });
     await saveLayout(wsId, next);
