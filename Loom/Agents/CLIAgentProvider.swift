@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import os
 
-private let cliLog = Logger(subsystem: "com.chasesims.Loom", category: "cli-agent")
+private let cliLog = Logger(subsystem: "com.chasesims.LoomTestingEdition", category: "cli-agent")
 
 /// Drives a chat-style CLI agent (Claude Code, Codex, or Gemini) as a
 /// subprocess so the embedded chat UI can use the user's existing CLI OAuth

@@ -1,7 +1,7 @@
 import Foundation
 import os
 
-private let llmLog = Logger(subsystem: "com.chasesims.Loom", category: "llm")
+private let llmLog = Logger(subsystem: "com.chasesims.LoomTestingEdition", category: "llm")
 
 struct LLMMessage: Hashable, Sendable {
     enum Role: String, Sendable { case user, assistant }

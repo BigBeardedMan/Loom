@@ -10,7 +10,7 @@ export function LoomLogoMark({ size = 20 }: Props) {
       height={size}
       viewBox="0 0 100 100"
       fill="none"
-      aria-label="Loom"
+      aria-label="Loom Testing Edition"
     >
       <rect width="100" height="100" rx="22.5" fill="#0a0a0a" />
       <g transform="translate(18.85 25.08) scale(0.89)">

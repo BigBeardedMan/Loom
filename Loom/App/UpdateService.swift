@@ -3,17 +3,19 @@ import Observation
 import AppKit
 import os
 
-private let updateLog = Logger(subsystem: "com.chasesims.Loom", category: "updates")
+private let updateLog = Logger(subsystem: "com.chasesims.LoomTestingEdition", category: "updates")
 
-/// Side-channel updater. A staged Loom.app sits at
-/// `~/Library/Application Support/Loom/staging/Loom.app`, with a sibling
-/// `manifest.json` describing it. The running app polls the manifest; when its
-/// version differs from the running bundle, the in-app "Update" button lights
-/// up. Clicking it spawns a detached helper that waits for this process to
-/// quit, swaps the staged bundle into `/Applications/Loom.app`, and relaunches.
+/// Side-channel updater for the Testing Edition. A staged
+/// `Loom Testing Edition.app` sits at
+/// `~/Library/Application Support/Loom Testing Edition/staging/`, with a
+/// sibling `manifest.json` describing it. The running app polls the manifest;
+/// when its build code differs from the running bundle's, the in-app "Update"
+/// button lights up. Clicking it spawns a detached helper that waits for this
+/// process to quit, swaps the staged bundle into
+/// `/Applications/Loom Testing Edition.app`, and relaunches.
 ///
-/// The whole point is to never `cp` over a live `/Applications/Loom.app` —
-/// macOS handles that poorly and crashes the running instance.
+/// The whole point is to never `cp` over a live installed bundle. macOS
+/// handles that poorly and crashes the running instance.
 struct StagedUpdate: Equatable {
     var version: String
     var build: String
@@ -55,17 +57,25 @@ final class UpdateService {
     /// we silently retry on the next tick.
     private let remotePollInterval: TimeInterval = 60
     /// Owner/repo for release polling. Public repo, no token required.
+    /// Testing Edition lives in the same repo as main Loom but under
+    /// `testing-<code>` tags marked as pre-release on GitHub, so the
+    /// main app's `/releases/latest` query never sees them.
     static let remoteRepo = "BigBeardedMan/Loom"
+    /// Tag prefix that marks a Testing Edition release. Anything not
+    /// starting with this is ignored even if it's newer.
+    static let testingTagPrefix = "testing-"
     /// Last release tag we've already pulled into staging. Prevents
     /// re-downloading the same .dmg every poll.
     private var lastFetchedTag: String?
 
-    /// `~/Library/Application Support/Loom`.
+    /// `~/Library/Application Support/Loom Testing Edition`. Separate from
+    /// main Loom's data folder so the two editions can coexist with their
+    /// own workspaces, settings, and staging dirs.
     static let appSupportRoot: URL = {
         let fm = FileManager.default
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("Loom", isDirectory: true)
+        return base.appendingPathComponent("Loom Testing Edition", isDirectory: true)
     }()
 
     static var stagingRoot: URL {
@@ -77,12 +87,12 @@ final class UpdateService {
     }
 
     static var stagedBundleURL: URL {
-        stagingRoot.appendingPathComponent("Loom.app")
+        stagingRoot.appendingPathComponent("Loom Testing Edition.app")
     }
 
     /// Where the user expects to launch from. We swap the staged bundle into
     /// this location.
-    static let installedBundleURL = URL(fileURLWithPath: "/Applications/Loom.app")
+    static let installedBundleURL = URL(fileURLWithPath: "/Applications/Loom Testing Edition.app")
 
     func start() {
         guard pollTimer == nil else { return }
@@ -160,9 +170,20 @@ final class UpdateService {
         defer { isFetchingRemote = false }
 
         do {
-            let release = try await GitHubReleaseFetcher.fetchLatest(repo: Self.remoteRepo)
-            let runningVersion = Self.runningVersionTriple().version
-            guard GitHubReleaseFetcher.isNewer(tag: release.versionTag, than: runningVersion) else {
+            // Testing Edition: walk recent releases (including pre-releases)
+            // and pick the newest one whose tag starts with `testing-`. The
+            // build code following the prefix is alphanumeric, so "is newer"
+            // becomes "is different" — any tag we haven't already staged is
+            // a candidate. Main-line `v*.*.*` releases are skipped entirely.
+            guard let release = try await GitHubReleaseFetcher.fetchLatestPrerelease(
+                repo: Self.remoteRepo,
+                tagPrefix: Self.testingTagPrefix
+            ) else {
+                lastRemoteError = nil
+                return
+            }
+            let runningCode = Self.runningVersionTriple().version
+            guard release.versionTag != runningCode else {
                 lastRemoteError = nil
                 return
             }

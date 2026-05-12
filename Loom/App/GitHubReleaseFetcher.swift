@@ -15,13 +15,21 @@ import Foundation
 /// hash doesn't match or the checksum asset is missing. Without this, an
 /// attacker who compromises the GitHub release (stolen PAT, MITM'd CDN)
 /// could replace the DMG with arbitrary code and Loom would silently install
-/// it at `/Applications/Loom.app`.
+/// it at `/Applications/Loom Testing Edition.app`.
 enum GitHubReleaseFetcher {
     struct Release {
-        /// Tag as published, e.g. "v1.0.0".
+        /// Tag as published. Main line uses `v1.0.0`; Testing Edition uses
+        /// `testing-kx72f9amb3` and similar.
         var tag: String
-        /// Tag with the leading "v" stripped, e.g. "1.0.0". Used for compare.
-        var versionTag: String { tag.hasPrefix("v") ? String(tag.dropFirst()) : tag }
+        /// Tag with the well-known prefix stripped. For `v1.0.0` this is
+        /// `1.0.0`; for `testing-kx72f9amb3` it's `kx72f9amb3`. The result
+        /// is what we compare against the running app's
+        /// `CFBundleShortVersionString`.
+        var versionTag: String {
+            if tag.hasPrefix("testing-") { return String(tag.dropFirst("testing-".count)) }
+            if tag.hasPrefix("v") { return String(tag.dropFirst()) }
+            return tag
+        }
         var assets: [Asset]
 
         /// First .dmg asset on the release (we publish exactly one per tag).
@@ -83,6 +91,38 @@ enum GitHubReleaseFetcher {
         }
 
         let payload = try JSONDecoder().decode(LatestReleasePayload.self, from: data)
+        let assets = payload.assets.compactMap { asset -> Asset? in
+            guard let url = URL(string: asset.browser_download_url) else { return nil }
+            return Asset(name: asset.name, url: url)
+        }
+        return Release(tag: payload.tag_name, assets: assets)
+    }
+
+    /// Walks the most recent 30 releases (including pre-releases, which is
+    /// what `/releases/latest` deliberately excludes) and returns the first
+    /// one whose tag starts with `tagPrefix`. The Testing Edition publishes
+    /// every build as a pre-release tagged `testing-<code>`, so this is how
+    /// the Testing app finds an update without ever seeing main-line `v*`
+    /// releases. Returns nil when no matching release exists.
+    static func fetchLatestPrerelease(repo: String, tagPrefix: String) async throws -> Release? {
+        let url = URL(string: "https://api.github.com/repos/\(repo)/releases?per_page=30")!
+        var request = URLRequest(url: url)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("Loom-Updater", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 10
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw FetcherError.malformedPayload
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw FetcherError.badStatus(http.statusCode)
+        }
+
+        let payloads = try JSONDecoder().decode([LatestReleasePayload].self, from: data)
+        guard let payload = payloads.first(where: { $0.tag_name.hasPrefix(tagPrefix) }) else {
+            return nil
+        }
         let assets = payload.assets.compactMap { asset -> Asset? in
             guard let url = URL(string: asset.browser_download_url) else { return nil }
             return Asset(name: asset.name, url: url)
@@ -174,14 +214,14 @@ enum GitHubReleaseFetcher {
             try? FileManager.default.removeItem(at: mountpoint)
         }
 
-        // 4. Find Loom.app in the mounted volume.
-        let mountedApp = mountpoint.appendingPathComponent("Loom.app")
+        // 4. Find Loom Testing Edition.app in the mounted volume.
+        let mountedApp = mountpoint.appendingPathComponent("Loom Testing Edition.app")
         guard FileManager.default.fileExists(atPath: mountedApp.path) else {
             throw FetcherError.missingAsset
         }
 
         // 5. Replace the staged bundle.
-        let stagedApp = stagingRoot.appendingPathComponent("Loom.app")
+        let stagedApp = stagingRoot.appendingPathComponent("Loom Testing Edition.app")
         if FileManager.default.fileExists(atPath: stagedApp.path) {
             try FileManager.default.removeItem(at: stagedApp)
         }

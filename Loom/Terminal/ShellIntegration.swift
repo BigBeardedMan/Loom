@@ -19,7 +19,7 @@ enum ShellIntegration {
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
         return base
-            .appendingPathComponent("Loom", isDirectory: true)
+            .appendingPathComponent("Loom Testing Edition", isDirectory: true)
             .appendingPathComponent("shell", isDirectory: true)
     }()
 

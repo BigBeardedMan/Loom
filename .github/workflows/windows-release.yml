@@ -1,14 +1,13 @@
-name: Windows Release
+name: Windows Release (Testing Edition)
 
 on:
   push:
     tags:
-      - "v*.*.*"
-      - "windows-v*.*.*"
+      - "testing-*"
   workflow_dispatch:
     inputs:
-      version:
-        description: "Version (e.g. 0.1.0)"
+      build_code:
+        description: "Build code (10 char alphanumeric, e.g. f1ac68e9b2)"
         required: true
 
 permissions:
@@ -34,6 +33,18 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Derive build code
+        id: build_code
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${{ inputs.build_code }}" ]]; then
+            CODE="${{ inputs.build_code }}"
+          else
+            CODE="${GITHUB_REF_NAME#testing-}"
+          fi
+          echo "value=$CODE" >> "$GITHUB_OUTPUT"
 
       - uses: pnpm/action-setup@v4
         with:
@@ -65,6 +76,10 @@ jobs:
 
       - name: Build Tauri (${{ matrix.target }})
         env:
+          # build.rs reads this into the binary as `LOOM_BUILD_CODE` so the
+          # About panel and updater show the same alphanumeric code as the
+          # tag. Cargo's version stays at the semver placeholder `1.0.0`.
+          LOOM_BUILD_CODE: ${{ steps.build_code.outputs.value }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm tauri build --target ${{ matrix.target }}
@@ -83,36 +98,30 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: loom-windows-${{ matrix.artifact_suffix }}
+          name: loom-testing-windows-${{ matrix.artifact_suffix }}
           path: windows-tauri/release-artifacts/*
           retention-days: 14
 
   release:
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/windows-v')
+    if: startsWith(github.ref, 'refs/tags/testing-')
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
-      - name: Build latest-windows.json
+      - name: Build latest-windows-testing.json
         shell: bash
         run: |
           set -euo pipefail
-          # Strip whichever tag prefix we got: either "v" (unified) or
-          # "windows-v" (legacy). The longer prefix has to match first.
-          if [[ "${GITHUB_REF_NAME}" == windows-v* ]]; then
-            VERSION="${GITHUB_REF_NAME#windows-v}"
-          else
-            VERSION="${GITHUB_REF_NAME#v}"
-          fi
+          BUILD_CODE="${GITHUB_REF_NAME#testing-}"
           NSIS_X64=$(find dist -name "*x64-setup.exe" | head -n1)
           NSIS_ARM=$(find dist -name "*arm64-setup.exe" | head -n1)
-          NOTES="Loom ${VERSION}"
-          cat > latest-windows.json <<EOF
+          NOTES="Loom Testing Edition ${BUILD_CODE}"
+          cat > latest-windows-testing.json <<EOF
           {
-            "version": "${VERSION}",
+            "version": "${BUILD_CODE}",
             "notes": "${NOTES}",
             "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "platforms": {
@@ -127,13 +136,13 @@ jobs:
             }
           }
           EOF
-          mv latest-windows.json dist/
-      - name: Publish release
+          mv latest-windows-testing.json dist/
+      - name: Publish pre-release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/**/*
+          prerelease: true
           generate_release_notes: true
-          # When the macOS local release.sh has already created the v$VERSION
-          # release with the DMG attached, this step appends our NSIS assets
-          # to it instead of erroring out.
+          # release-testing.sh creates the pre-release with the DMG; this
+          # step appends our NSIS assets to the same tag.
           fail_on_unmatched_files: false

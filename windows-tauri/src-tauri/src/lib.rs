@@ -84,7 +84,10 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
 
 #[tauri::command]
 fn app_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
+    // Testing Edition exposes the alphanumeric LOOM_BUILD_CODE baked in by
+    // build.rs. CARGO_PKG_VERSION stays at the placeholder semver `1.0.0`
+    // because Cargo refuses non-semver, but it's never shown to the user.
+    env!("LOOM_BUILD_CODE")
 }
 
 #[tauri::command]
@@ -92,7 +95,7 @@ fn window_open(app: AppHandle, workspace_id: Option<String>) -> tauri::Result<()
     let count = app.webview_windows().len();
     let label = format!("loom-{count}");
     let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
-        .title("Loom")
+        .title("Loom Testing Edition")
         .inner_size(1280.0, 800.0)
         .min_inner_size(900.0, 600.0)
         .resizable(true);

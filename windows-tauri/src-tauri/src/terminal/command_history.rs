@@ -1,7 +1,7 @@
 // Mirrors Loom/Terminal/CommandHistoryService.swift.
-// Reads %LOCALAPPDATA%\Loom\history.jsonl (written by the PowerShell shim
-// installed via shell_integration::shell_integration_install) and returns
-// the most recent commands as a struct list.
+// Reads %LOCALAPPDATA%\Loom Testing Edition\history.jsonl (written by the
+// PowerShell shim installed via shell_integration::shell_integration_install)
+// and returns the most recent commands as a struct list.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -38,7 +38,7 @@ struct StoredRecord {
 }
 
 fn history_path() -> Option<PathBuf> {
-    dirs::data_local_dir().map(|d| d.join("Loom").join("history.jsonl"))
+    dirs::data_local_dir().map(|d| d.join("Loom Testing Edition").join("history.jsonl"))
 }
 
 fn read_records(path: &PathBuf) -> Vec<CommandRecord> {

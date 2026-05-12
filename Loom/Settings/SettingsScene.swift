@@ -722,7 +722,7 @@ private struct AdvancedSettings: View {
                             .font(.caption)
                     }
                 }
-                Text("Loom's Agent block uses Claude Code's OAuth login — no key required. This is kept for future API-direct features. Stored in macOS Keychain (service `com.chasesims.Loom`).")
+                Text("Loom's Agent block uses Claude Code's OAuth login. No key required. This is kept for future API-direct features. Stored in macOS Keychain (service `com.chasesims.LoomTestingEdition`).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

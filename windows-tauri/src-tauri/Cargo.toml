@@ -1,7 +1,7 @@
 [package]
 name = "loom"
-version = "3.1.4"
-description = "Loom for Windows: integrated workspace cockpit with terminal, editor, AI agents, kanban, and notes."
+version = "1.0.0"
+description = "Loom Testing Edition for Windows: pre-release workspace cockpit, alphanumeric build code per cut."
 authors = ["BigBeardedMan"]
 edition = "2021"
 rust-version = "1.83"

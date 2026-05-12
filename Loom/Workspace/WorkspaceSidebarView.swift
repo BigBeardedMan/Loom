@@ -3,7 +3,7 @@ import SwiftData
 import AppKit
 import os
 
-private let sidebarLog = Logger(subsystem: "com.chasesims.Loom", category: "sidebar")
+private let sidebarLog = Logger(subsystem: "com.chasesims.LoomTestingEdition", category: "sidebar")
 
 struct WorkspaceSidebarView: View {
     @Query(sort: \Workspace.createdAt) private var workspaces: [Workspace]

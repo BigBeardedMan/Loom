@@ -123,7 +123,7 @@ final class CrashService {
             appropriateFor: nil,
             create: true
         ) else { return nil }
-        let logs = support.appendingPathComponent("Loom").appendingPathComponent("logs")
+        let logs = support.appendingPathComponent("Loom Testing Edition").appendingPathComponent("logs")
         return logs.appendingPathComponent(logFileName)
     }
 

@@ -2,10 +2,10 @@ import Foundation
 import Security
 import os
 
-private let keychainLog = Logger(subsystem: "com.chasesims.Loom", category: "keychain")
+private let keychainLog = Logger(subsystem: "com.chasesims.LoomTestingEdition", category: "keychain")
 
 enum KeychainStore {
-    static let service = "com.chasesims.Loom"
+    static let service = "com.chasesims.LoomTestingEdition"
 
     /// Stores `value` in the user's Keychain under (`service`, `account`).
     /// Items are scoped `WhenUnlockedThisDeviceOnly` so they never leak into an

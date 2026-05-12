@@ -1,4 +1,4 @@
-name: Loom
+name: LoomTestingEdition
 options:
   bundleIdPrefix: com.chasesims
   deploymentTarget:
@@ -10,8 +10,13 @@ options:
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "3.1.4"
-    CURRENT_PROJECT_VERSION: "53"
+    # MARKETING_VERSION is the user-visible build code on the Testing Edition
+    # branch. release-testing.sh overrides this at build time with the first
+    # 10 chars of the current git commit SHA, so every shipped build has a
+    # reproducible alphanumeric identifier. The placeholder here is what
+    # Xcode shows during local debug runs from the IDE.
+    MARKETING_VERSION: "kx72f9amb3"
+    CURRENT_PROJECT_VERSION: "1"
     CODE_SIGN_STYLE: Manual
     CODE_SIGN_IDENTITY: "Loom Local Codesign"
     DEVELOPMENT_TEAM: ""
@@ -24,7 +29,7 @@ packages:
     from: "1.2.0"
 
 targets:
-  Loom:
+  LoomTestingEdition:
     type: application
     platform: macOS
     sources:
@@ -42,6 +47,8 @@ targets:
       path: Loom/Info.plist
       properties:
         LSApplicationCategoryType: public.app-category.developer-tools
+        CFBundleName: "Loom Testing Edition"
+        CFBundleDisplayName: "Loom Testing Edition"
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSHumanReadableCopyright: "© 2026 BigBeardedMan"
@@ -52,7 +59,8 @@ targets:
         com.apple.security.network.client: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.chasesims.Loom
+        PRODUCT_NAME: "Loom Testing Edition"
+        PRODUCT_BUNDLE_IDENTIFIER: com.chasesims.LoomTestingEdition
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         GENERATE_INFOPLIST_FILE: NO

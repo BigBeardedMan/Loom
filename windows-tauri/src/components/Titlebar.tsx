@@ -71,7 +71,7 @@ export function Titlebar() {
             letterSpacing: -0.1,
           }}
         >
-          Loom
+          Loom Testing Edition
         </span>
       </a>
 

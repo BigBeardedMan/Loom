@@ -35,7 +35,7 @@ struct LoomApp: App {
     }()
 
     var body: some Scene {
-        WindowGroup("Loom") {
+        WindowGroup("Loom Testing Edition") {
             WorkspaceView()
                 .frame(minWidth: 1024, minHeight: 640)
                 .environment(layout)
@@ -71,7 +71,7 @@ struct LoomApp: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .appInfo) {
-                Button("About Loom") { showAboutPanel() }
+                Button("About Loom Testing Edition") { showAboutPanel() }
             }
             CommandGroup(replacing: .newItem) {
                 Button("New Workspace…") { /* surfaced via sidebar */ }
@@ -150,7 +150,7 @@ struct LoomApp: App {
             }
 
             CommandGroup(replacing: .help) {
-                Button("Loom Help") {
+                Button("Loom Testing Edition Help") {
                     if let url = URL(string: "https://github.com/BigBeardedMan/Loom/blob/main/GUIDE.md") {
                         NSWorkspace.shared.open(url)
                     }
@@ -247,7 +247,7 @@ struct LoomApp: App {
         }
 
         let options: [NSApplication.AboutPanelOptionKey: Any] = [
-            .applicationName: "Loom",
+            .applicationName: "Loom Testing Edition",
             .applicationVersion: version,
             .version: build,
             .credits: credits,

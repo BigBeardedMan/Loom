@@ -1,8 +1,8 @@
-# Loom PowerShell shell integration.
-# Writes JSONL command records to %LOCALAPPDATA%\Loom\history.jsonl.
+# Loom Testing Edition PowerShell shell integration.
+# Writes JSONL command records to %LOCALAPPDATA%\Loom Testing Edition\history.jsonl.
 # Mirrors the macOS zsh shim in Loom/Terminal/CommandHistoryService.swift.
 
-$loomDir = Join-Path $env:LOCALAPPDATA 'Loom'
+$loomDir = Join-Path $env:LOCALAPPDATA 'Loom Testing Edition'
 if (-not (Test-Path $loomDir)) { New-Item -ItemType Directory -Force -Path $loomDir | Out-Null }
 $loomHistoryPath = Join-Path $loomDir 'history.jsonl'
 $loomOutputDir = Join-Path $loomDir 'output'

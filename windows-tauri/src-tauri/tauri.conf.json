@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Loom",
-  "version": "3.1.4",
-  "identifier": "com.chasesims.Loom",
+  "productName": "Loom Testing Edition",
+  "version": "1.0.0",
+  "identifier": "com.chasesims.LoomTestingEdition",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Loom",
+        "title": "Loom Testing Edition",
         "width": 1400,
         "height": 900,
         "minWidth": 1024,
@@ -53,7 +53,7 @@
       "webviewInstallMode": { "type": "embedBootstrapper" },
       "wix": {
         "language": ["en-US"],
-        "upgradeCode": "FD7C8B4A-1F2E-4D6B-9C1A-3E8F0B2C7D11"
+        "upgradeCode": "9A2C7E5D-3F4B-4A1E-8D2C-5B6E7F8A9B0C"
       },
       "nsis": {
         "installerIcon": "icons/icon.ico",
@@ -70,7 +70,7 @@
     "updater": {
       "active": true,
       "endpoints": [
-        "https://github.com/BigBeardedMan/Loom/releases/latest/download/latest-windows.json"
+        "https://github.com/BigBeardedMan/Loom/releases/latest/download/latest-windows-testing.json"
       ],
       "dialog": false,
       "pubkey": ""

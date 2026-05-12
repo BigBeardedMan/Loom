@@ -12,7 +12,7 @@ enum LayoutPersistence {
         let fm = FileManager.default
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        let dir = base.appendingPathComponent("Loom", isDirectory: true)
+        let dir = base.appendingPathComponent("Loom Testing Edition", isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("layout.json")
     }()

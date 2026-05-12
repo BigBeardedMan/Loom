@@ -32,7 +32,7 @@ pub fn install_hook() {
     std::panic::set_hook(Box::new(move |info| {
         let mut msg = String::new();
         let _ = writeln!(msg, "Loom panic at {}", Local::now().to_rfc3339());
-        let _ = writeln!(msg, "Version: {}", env!("CARGO_PKG_VERSION"));
+        let _ = writeln!(msg, "Version: {}", env!("LOOM_BUILD_CODE"));
         let _ = writeln!(msg, "Arch: {}", std::env::consts::ARCH);
         let _ = writeln!(
             msg,
@@ -91,7 +91,7 @@ pub fn consume_prior_crash() {
     let _ = fs::rename(path, &archived);
 
     let report = CrashReport {
-        version: env!("CARGO_PKG_VERSION").to_string(),
+        version: env!("LOOM_BUILD_CODE").to_string(),
         arch: std::env::consts::ARCH.to_string(),
         timestamp: Local::now().to_rfc3339(),
         body,
@@ -110,7 +110,7 @@ pub fn crash_get_last() -> Option<CrashReport> {
 #[tauri::command]
 pub fn crash_record_frontend(message: String) -> Result<(), String> {
     let report = CrashReport {
-        version: env!("CARGO_PKG_VERSION").to_string(),
+        version: env!("LOOM_BUILD_CODE").to_string(),
         arch: std::env::consts::ARCH.to_string(),
         timestamp: Local::now().to_rfc3339(),
         body: format!("[frontend] {message}"),

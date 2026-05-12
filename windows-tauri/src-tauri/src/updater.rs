@@ -1,5 +1,5 @@
 // Custom updater: detect arch → check GitHub Releases → download matching
-// NSIS installer → save under %APPDATA%\Loom\staging\ → prompt → run installer.
+// NSIS installer → save under %APPDATA%\com.chasesims.LoomTestingEdition\staging\ → run installer.
 // Replaces the tauri-plugin-updater flow (left registered but unused).
 
 use futures_util::StreamExt;
@@ -85,19 +85,7 @@ struct GhRelease {
     assets: Vec<GhAsset>,
 }
 
-fn parse_semver(s: &str) -> (u32, u32, u32) {
-    let trimmed = s.trim_start_matches("v");
-    let parts: Vec<&str> = trimmed.split('.').collect();
-    let to_num = |p: Option<&&str>| -> u32 {
-        p.and_then(|s| s.split('-').next().unwrap_or("0").parse::<u32>().ok())
-            .unwrap_or(0)
-    };
-    (to_num(parts.first()), to_num(parts.get(1)), to_num(parts.get(2)))
-}
-
-fn is_newer(latest: &str, current: &str) -> bool {
-    parse_semver(latest) > parse_semver(current)
-}
+const TESTING_TAG_PREFIX: &str = "testing-";
 
 fn arch_token(arch: &str) -> &'static str {
     match arch {
@@ -108,28 +96,36 @@ fn arch_token(arch: &str) -> &'static str {
 
 #[tauri::command]
 pub async fn update_check() -> Result<Option<UpdateInfo>, String> {
+    // Testing Edition: walk the last 30 releases (including pre-releases —
+    // /releases/latest deliberately filters them out) and pick the newest
+    // one tagged `testing-<code>`. Build codes are alphanumeric so the
+    // comparison degenerates from semver-ordered to "is different": any
+    // tag we aren't already running counts as an update.
     let url = format!(
-        "https://api.github.com/repos/{}/{}/releases/latest",
+        "https://api.github.com/repos/{}/{}/releases?per_page=30",
         REPO_OWNER, REPO_NAME
     );
     let client = reqwest::Client::builder()
-        .user_agent(format!("Loom/{}", env!("CARGO_PKG_VERSION")))
+        .user_agent(format!("LoomTestingEdition/{}", env!("LOOM_BUILD_CODE")))
         .build()
         .map_err(|e| e.to_string())?;
     let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("GitHub API: HTTP {}", resp.status()));
     }
-    let release: GhRelease = resp.json().await.map_err(|e| e.to_string())?;
+    let releases: Vec<GhRelease> = resp.json().await.map_err(|e| e.to_string())?;
+    let release = match releases.into_iter().find(|r| r.tag_name.starts_with(TESTING_TAG_PREFIX)) {
+        Some(r) => r,
+        None => return Ok(None),
+    };
 
     let latest_ver = release
         .tag_name
-        .strip_prefix("windows-v")
-        .or_else(|| release.tag_name.strip_prefix("v"))
+        .strip_prefix(TESTING_TAG_PREFIX)
         .unwrap_or(&release.tag_name)
         .to_string();
-    let current = env!("CARGO_PKG_VERSION");
-    if !is_newer(&latest_ver, current) {
+    let current = env!("LOOM_BUILD_CODE");
+    if latest_ver == current {
         return Ok(None);
     }
 
@@ -173,7 +169,7 @@ pub async fn update_download_and_stage(
     let target = staging.join(&asset_name);
 
     let client = reqwest::Client::builder()
-        .user_agent(format!("Loom/{}", env!("CARGO_PKG_VERSION")))
+        .user_agent(format!("LoomTestingEdition/{}", env!("LOOM_BUILD_CODE")))
         .build()
         .map_err(|e| e.to_string())?;
     let resp = client.get(&asset_url).send().await.map_err(|e| e.to_string())?;
@@ -247,7 +243,7 @@ set INSTALL_RC=%ERRORLEVEL%\r\n\
 echo installer exit code: %INSTALL_RC% >> \"%LOGFILE%\"\r\n\
 if not \"%INSTALL_RC%\"==\"0\" (\r\n\
     echo silent install failed, opening release page >> \"%LOGFILE%\"\r\n\
-    start \"\" \"https://github.com/BigBeardedMan/Loom/releases/latest\"\r\n\
+    start \"\" \"https://github.com/BigBeardedMan/Loom/releases?q=prerelease%3Atrue&expanded=true\"\r\n\
     goto cleanup\r\n\
 )\r\n\
 echo settling 2s before relaunch >> \"%LOGFILE%\"\r\n\

@@ -989,7 +989,7 @@ function ShellPanel() {
       <H2>Shell Integration</H2>
       <Hint>
         Installs a PowerShell profile hook recording every command to{" "}
-        <code style={{ fontFamily: "var(--font-mono)" }}>%LOCALAPPDATA%\Loom\history.jsonl</code>{" "}
+        <code style={{ fontFamily: "var(--font-mono)" }}>%LOCALAPPDATA%\Loom Testing Edition\history.jsonl</code>{" "}
         for the Commands pane and the agent.
       </Hint>
       <button
@@ -1093,13 +1093,13 @@ function AdvancedPanel() {
   const revealData = async () => {
     try {
       const { open } = await import("@tauri-apps/plugin-shell");
-      const appdata = "%APPDATA%\\com.chasesims.Loom";
+      const appdata = "%APPDATA%\\com.chasesims.LoomTestingEdition";
       await open(appdata);
     } catch {
       // Fallback: open via env path encoding so Explorer expands the variable.
       try {
         const { open } = await import("@tauri-apps/plugin-shell");
-        await open("file:///%APPDATA%/com.chasesims.Loom");
+        await open("file:///%APPDATA%/com.chasesims.LoomTestingEdition");
       } catch {}
     }
   };
@@ -1109,8 +1109,8 @@ function AdvancedPanel() {
       <section>
         <H2>Advanced</H2>
         <Hint>
-          Data lives in <code style={{ fontFamily: "var(--font-mono)" }}>%APPDATA%\com.chasesims.Loom\loom.db</code> (SQLite) and Windows
-          Credential Manager (API keys). Logs in <code style={{ fontFamily: "var(--font-mono)" }}>%APPDATA%\com.chasesims.Loom\logs\</code>.
+          Data lives in <code style={{ fontFamily: "var(--font-mono)" }}>%APPDATA%\com.chasesims.LoomTestingEdition\loom.db</code> (SQLite) and Windows
+          Credential Manager (API keys). Logs in <code style={{ fontFamily: "var(--font-mono)" }}>%APPDATA%\com.chasesims.LoomTestingEdition\logs\</code>.
         </Hint>
         <div className="flex flex-wrap gap-2">
           <button
@@ -1284,12 +1284,12 @@ function AboutPanel() {
   }, []);
   return (
     <div>
-      <H2>About Loom</H2>
+      <H2>About Loom Testing Edition</H2>
       <div style={{ fontSize: 13, color: text.muted, marginBottom: 8 }}>
-        Version <span style={{ fontFamily: "var(--font-mono)", color: text.primary }}>{version}</span>
+        Build <span style={{ fontFamily: "var(--font-mono)", color: text.primary }}>{version}</span>
       </div>
       <Hint>
-        Workspace cockpit for Windows. Built with Tauri + Rust + React. Mirrors the macOS Loom feature surface.
+        Pre-release channel for the Windows workspace cockpit. Build codes are alphanumeric (first 10 chars of the source commit SHA) and the app installs alongside the main Loom build.
       </Hint>
     </div>
   );
