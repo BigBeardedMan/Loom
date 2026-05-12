@@ -46,12 +46,16 @@ Win11 ARM produces both ARM and x64 MSI/NSIS in one VM.
 
 ### B. GitHub Actions (zero local setup)
 
-Tag the repo with `windows-v0.x.y`. The workflow at `.github/workflows/windows-release.yml` runs on `windows-2022` and `windows-11-arm64` runners and attaches MSIs + NSIS installers to a GitHub Release plus a `latest-windows.json` updater manifest.
+As of v3.0.0, Loom uses unified `vX.Y.Z` tags for both Mac and Windows. The workflow at `.github/workflows/windows-release.yml` runs on `windows-2022` and `windows-11-arm64` runners and appends NSIS installers + `latest-windows.json` to the same GitHub Release the Mac local build publishes its DMG to.
 
 ```bash
-git tag windows-v0.1.0
-git push origin windows-v0.1.0
+# From the repo root (Mac):
+bin/release.sh
+# This bumps the tag, pushes it, builds + uploads the DMG, and the Windows
+# CI build kicks off on the same tag and uploads the NSIS installers.
 ```
+
+Legacy `windows-v*.*.*` tags still trigger the workflow for older release flows; new releases should use the unified `v*` scheme.
 
 ### Why not cross-compile from macOS?
 
@@ -80,7 +84,7 @@ See [TESTING.md](./TESTING.md) for the VMware Fusion + Win11 ARM setup and full 
 
 ## Releases
 
-Tag the repo with `windows-v0.x.y` to trigger `.github/workflows/windows-release.yml`. The workflow builds on `windows-2022` and `windows-11-arm64` runners and attaches MSIs + NSIS to a GitHub Release.
+Unified `vX.Y.Z` tags trigger `.github/workflows/windows-release.yml`. The workflow builds on `windows-2022` and `windows-11-arm64` runners and appends NSIS installers + `latest-windows.json` to the unified GitHub Release (the Mac DMG is built locally by `bin/release.sh` and attached to the same release).
 
 ## Project layout
 
@@ -108,15 +112,14 @@ windows-tauri/
 
 ## Feature parity with macOS
 
-As of windows-v1.1.0 the port is at or beyond 1:1 parity with macOS Loom.
-v1.1.0 closed out the deferred polish (local-endpoint wiring in the agent
-pane, Notes Ctrl+F search, auto-preview index per Preview block, pin
-management, first-run onboarding, system tray icon, toast notifications,
-multi-window via Ctrl+Shift+N or the ⌘K palette) and shipped alongside
-macOS Loom v2.5.0 which backported crash reporting, editor file watching,
-and editor syntax highlighting from this port.
+As of v3.0.0 Loom is one product with one version across both platforms.
+The split-versioning era (macOS at 2.x, Windows at 1.x) ended once macOS
+2.5.0 backported the three Windows-side features that closed the parity
+loop (crash reporter, editor file watcher, editor syntax highlighting).
+Going forward, every `vX.Y.Z` tag publishes a single GitHub Release with
+both the Mac DMG and the Windows NSIS installers for x64 and ARM64.
 
-Across both releases the surface is:
+Across both platforms the surface is:
 
 - Workspace shell — sidebar with rename, kind icons, per-workspace session
   count; cockpit with dynamic blocks, drag-to-reorder, block rename,

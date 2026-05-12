@@ -96,11 +96,13 @@ Run through these on first install:
 
 ## CI builds (no VM needed)
 
-Push a tag starting with `windows-v` to trigger `.github/workflows/windows-release.yml`. The workflow builds both architectures on Microsoft-hosted runners and publishes a GitHub Release with MSI/NSIS artifacts plus a `latest-windows.json` manifest the in-app updater polls.
+Push a unified `vX.Y.Z` tag (or a legacy `windows-v*` tag) to trigger `.github/workflows/windows-release.yml`. The workflow builds both architectures on Microsoft-hosted runners and appends NSIS installers + a `latest-windows.json` manifest to the GitHub Release the in-app updater polls. As of v3.0.0 the same release also carries the Mac DMG, so the macOS local build and the Windows CI build land in one artifact set.
 
 ```bash
-git tag windows-v0.1.0
-git push origin windows-v0.1.0
+# Driven by bin/release.sh from the repo root on macOS.
+# To trigger CI alone (Windows-only iteration):
+git tag v3.0.1
+git push origin v3.0.1
 ```
 
 ## Troubleshooting

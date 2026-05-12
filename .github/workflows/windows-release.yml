@@ -3,6 +3,7 @@ name: Windows Release
 on:
   push:
     tags:
+      - "v*.*.*"
       - "windows-v*.*.*"
   workflow_dispatch:
     inputs:
@@ -89,7 +90,7 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/windows-v')
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/windows-v')
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -99,10 +100,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#windows-v}"
+          # Strip whichever tag prefix we got: either "v" (unified) or
+          # "windows-v" (legacy). The longer prefix has to match first.
+          if [[ "${GITHUB_REF_NAME}" == windows-v* ]]; then
+            VERSION="${GITHUB_REF_NAME#windows-v}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
           NSIS_X64=$(find dist -name "*x64-setup.exe" | head -n1)
           NSIS_ARM=$(find dist -name "*arm64-setup.exe" | head -n1)
-          NOTES="Loom Windows ${VERSION}"
+          NOTES="Loom ${VERSION}"
           cat > latest-windows.json <<EOF
           {
             "version": "${VERSION}",
@@ -126,3 +133,7 @@ jobs:
         with:
           files: dist/**/*
           generate_release_notes: true
+          # When the macOS local release.sh has already created the v$VERSION
+          # release with the DMG attached, this step appends our NSIS assets
+          # to it instead of erroring out.
+          fail_on_unmatched_files: false

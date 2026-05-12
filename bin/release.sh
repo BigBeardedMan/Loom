@@ -57,9 +57,12 @@ if git rev-parse --verify "$TAG" >/dev/null 2>&1; then
   exit 1
 fi
 
+# The unified release flow can race Windows CI: if CI publishes first, we
+# upload to the existing release instead of creating it.
+REUSE_EXISTING_RELEASE=0
 if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
-  echo "error: release $TAG already exists on $REPO. bump MARKETING_VERSION first." >&2
-  exit 1
+  echo "note: release $TAG already exists on $REPO (likely created by Windows CI); appending DMG."
+  REUSE_EXISTING_RELEASE=1
 fi
 
 # --- Build ------------------------------------------------------------------
@@ -140,11 +143,18 @@ Loom ${VERSION} (build ${BUILD})
 Already running Loom? It auto-checks GitHub every 60 seconds. The **Update** pill in the top bar lights up when a newer release is staged — click it to swap in the new build.
 EOF
 
-echo "==> gh release create $TAG"
-gh release create "$TAG" "$DMG_PATH" "$CHECKSUM_PATH" \
-  -R "$REPO" \
-  -t "Loom ${VERSION}" \
-  -F "$NOTES_FILE"
+if [[ "$REUSE_EXISTING_RELEASE" -eq 1 ]]; then
+  echo "==> gh release upload $TAG (append to existing release)"
+  gh release upload "$TAG" "$DMG_PATH" "$CHECKSUM_PATH" \
+    -R "$REPO" \
+    --clobber
+else
+  echo "==> gh release create $TAG"
+  gh release create "$TAG" "$DMG_PATH" "$CHECKSUM_PATH" \
+    -R "$REPO" \
+    -t "Loom ${VERSION}" \
+    -F "$NOTES_FILE"
+fi
 
 rm -f "$NOTES_FILE"
 
