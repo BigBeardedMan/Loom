@@ -152,9 +152,12 @@ Across both platforms the surface is:
 - Updater — arch-aware (handles ARM64 emulation), downloads matching NSIS
   installer to `%APPDATA%\com.chasesims.Loom\staging\` with live progress.
   One click on the green Update pill runs the full flow: download, silent
-  NSIS `/S` install via a detached `%TEMP%\loom-update-<pid>.bat` helper
-  that waits for the running Loom to exit, then relaunches the fresh
-  build. No installer wizard, no uninstall step.
+  NSIS `/S` install via a hidden `%TEMP%\loom-update-<pid>.bat` helper that
+  waits for the running Loom to exit, settles 5s for file locks, then
+  relaunches the fresh build. The helper mirrors every step into
+  `%TEMP%\loom-update-<pid>.log`; if the silent install returns a non-zero
+  exit code (UAC denied, AV quarantine), the helper opens the GitHub
+  release page in the default browser as a fallback.
 - Crash reporter — Rust panic hook + React ErrorBoundary surface a modal
   on next launch with copy + "Report on GitHub" deep link.
 - Keyboard — Ctrl+K palette, Ctrl+T add terminal, Ctrl+W close, Ctrl+N

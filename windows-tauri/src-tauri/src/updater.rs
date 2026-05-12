@@ -208,9 +208,16 @@ pub fn update_run_installer(
 
     // Goal: one-click in-place update. Spawn a detached helper that
     // (1) waits for this Loom.exe to exit so NSIS can overwrite the binary,
-    // (2) runs the NSIS installer silently with /S, and
-    // (3) relaunches the freshly-installed Loom.exe. No wizard, no
-    // post-install user action. Mirrors what auto-updaters in other apps do.
+    // (2) runs the NSIS installer silently with /S,
+    // (3) relaunches the freshly-installed Loom.exe.
+    //
+    // Everything the helper does is mirrored to %TEMP%\loom-update-<pid>.log
+    // so when (not if) it fails on someone else's machine we can ask for the
+    // log instead of guessing. Two reliability tweaks past the v3.1.1 helper:
+    // a longer post-exit settle (5s) so Loom.exe's handles fully release
+    // before NSIS overwrites it, and a fallback that opens the GitHub
+    // release page in the user's browser if the silent installer returns a
+    // non-zero exit code (most often UAC denied or AV quarantined).
     #[cfg(windows)]
     {
         let exe = std::env::current_exe()
@@ -221,20 +228,34 @@ pub fn update_run_installer(
         let temp = std::env::temp_dir();
         let batch_path = temp.join(format!("loom-update-{}.bat", parent_pid));
 
-        // Self-deleting batch: poll tasklist for the parent PID, run the
-        // installer silently, relaunch Loom, then delete itself.
         let script = format!(
             "@echo off\r\n\
+set LOGFILE=%TEMP%\\loom-update-{pid}.log\r\n\
+echo === loom updater %DATE% %TIME% === > \"%LOGFILE%\"\r\n\
+echo waiting for pid {pid} to exit >> \"%LOGFILE%\"\r\n\
 :waitloop\r\n\
 tasklist /FI \"PID eq {pid}\" 2>nul | findstr /C:\" {pid} \" >nul\r\n\
 if not errorlevel 1 (\r\n\
     timeout /t 1 /nobreak >nul\r\n\
     goto waitloop\r\n\
 )\r\n\
-timeout /t 1 /nobreak >nul\r\n\
-\"{installer}\" /S\r\n\
+echo pid {pid} exited, settling 5s for file locks >> \"%LOGFILE%\"\r\n\
+timeout /t 5 /nobreak >nul\r\n\
+echo running: \"{installer}\" /S >> \"%LOGFILE%\"\r\n\
+\"{installer}\" /S >> \"%LOGFILE%\" 2>&1\r\n\
+set INSTALL_RC=%ERRORLEVEL%\r\n\
+echo installer exit code: %INSTALL_RC% >> \"%LOGFILE%\"\r\n\
+if not \"%INSTALL_RC%\"==\"0\" (\r\n\
+    echo silent install failed, opening release page >> \"%LOGFILE%\"\r\n\
+    start \"\" \"https://github.com/BigBeardedMan/Loom/releases/latest\"\r\n\
+    goto cleanup\r\n\
+)\r\n\
+echo settling 2s before relaunch >> \"%LOGFILE%\"\r\n\
 timeout /t 2 /nobreak >nul\r\n\
+echo relaunching: \"{exe}\" >> \"%LOGFILE%\"\r\n\
 start \"\" \"{exe}\"\r\n\
+echo done >> \"%LOGFILE%\"\r\n\
+:cleanup\r\n\
 (goto) 2>nul & del \"%~f0\"\r\n",
             pid = parent_pid,
             installer = installer_path.replace('"', ""),
@@ -244,13 +265,18 @@ start \"\" \"{exe}\"\r\n\
         fs::write(&batch_path, script).map_err(|e| format!("write helper: {e}"))?;
 
         use std::os::windows::process::CommandExt;
-        // CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS — survives parent exit.
-        const DETACHED_PROCESS: u32 = 0x00000008;
+        // CREATE_NO_WINDOW gives cmd a hidden console (the black boxes the
+        // v3.1.1 helper flashed were a missing flag, not a real failure).
+        // CREATE_NEW_PROCESS_GROUP keeps the helper alive after Loom exits.
+        // DETACHED_PROCESS and CREATE_NO_WINDOW are mutually exclusive in
+        // CreateProcess (the latter is ignored when the former is set), so
+        // we drop DETACHED_PROCESS to keep the window hidden.
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
         Command::new("cmd")
             .arg("/c")
             .arg(&batch_path)
-            .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+            .creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP)
             .spawn()
             .map_err(|e| format!("spawn helper: {e}"))?;
     }
