@@ -110,7 +110,11 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   selectWorkspace: async (id) => {
-    set({ selectedWorkspaceId: id });
+    // Picking a workspace always lands on the deck. Without clearing the
+    // usage selection, the workspace swap happens silently behind the usage
+    // dashboard and the click feels like a no-op until the user toggles the
+    // pill off.
+    set({ selectedWorkspaceId: id, selectedUsageTool: id ? null : get().selectedUsageTool });
     if (id) {
       localStorage.setItem(SELECTED_WS_KEY, id);
       ipc.workspace.touchLastOpened(id).catch(() => {});

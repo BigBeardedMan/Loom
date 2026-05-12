@@ -162,6 +162,11 @@ struct WorkspaceSidebarView: View {
 
     private func selectWorkspace(_ ws: Workspace) {
         selectedWorkspaceID = ws.id
+        // Picking a workspace always lands on the deck, even if the user was
+        // mid-look at a usage dashboard. Without this, the workspace switch
+        // happens silently behind the usage overlay and the click feels like
+        // a no-op until they remember to toggle the pill off.
+        selectedUsageTool = nil
         // Coalesce lastOpenedAt writes during rapid switching so a click
         // doesn't queue a SwiftData save (and the @Query invalidation it
         // triggers) per click. One save once the user settles is plenty for
