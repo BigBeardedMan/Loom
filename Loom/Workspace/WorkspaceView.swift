@@ -303,10 +303,25 @@ struct WorkspaceView: View {
                         // Identity is keyed on `kind` (stable across weight
                         // changes) so an in-flight drag isn't torn down each
                         // time the seam's rect shifts.
+                        //
+                        // Hit zone is padded `dividerHitPad` past the visible
+                        // 12pt gap on each side of the seam. The block shadow
+                        // (y:12, radius:18) bleeds well past the 12pt gap, so
+                        // users aim for what *looks* like the seam and miss
+                        // the tighter rect. The hairline indicator stays
+                        // centered on the actual gap.
                         if draggingBlockID == nil {
                             ForEach(metrics.dividers, id: \.kind) { divider in
+                                let pad = DeckMetrics.dividerHitPad
                                 DividerGripView(divider: divider, metrics: metrics, deckSize: geo.size)
-                                    .frame(width: divider.rect.width, height: divider.rect.height)
+                                    .frame(
+                                        width: divider.isVertical
+                                            ? divider.rect.width + pad * 2
+                                            : divider.rect.width,
+                                        height: divider.isVertical
+                                            ? divider.rect.height
+                                            : divider.rect.height + pad * 2
+                                    )
                                     .position(x: divider.rect.midX, y: divider.rect.midY)
                             }
                         }
@@ -822,6 +837,10 @@ struct DeckDivider: Hashable {
 
 @MainActor
 struct DeckMetrics {
+    /// Extra padding added to each side of a divider's visible rect when
+    /// building its hit zone. Matches the perceptual gap, which the block
+    /// shadow widens past the literal 12pt gap.
+    static let dividerHitPad: CGFloat = 6
     let containerSize: CGSize
     let gap: CGFloat
     let frames: [UUID: CGRect]
