@@ -225,6 +225,8 @@ private struct EndpointEditor: View {
     @State private var testStatus: TestStatus = .idle
     @State private var testMessage: String = ""
     @State private var lmsCLI = LMStudioCLI()
+    @State private var discoveredModels: [String] = []
+    @State private var isDiscoveringModels: Bool = false
 
     enum TestStatus { case idle, running, ok, failed }
 
@@ -250,9 +252,12 @@ private struct EndpointEditor: View {
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.body, design: .monospaced))
 
-                TextField(modelFieldLabel, text: $defaultModel, prompt: Text(modelFieldHint))
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(.body, design: .monospaced))
+                HStack(spacing: 6) {
+                    TextField(modelFieldLabel, text: $defaultModel, prompt: Text(modelFieldHint))
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+                    modelPicker
+                }
 
                 Toggle("Requires auth token", isOn: $requiresAuth)
                 if requiresAuth {
@@ -306,6 +311,88 @@ private struct EndpointEditor: View {
             if newKind == .lmstudio {
                 Task { await lmsCLI.refresh() }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var modelPicker: some View {
+        Menu {
+            if isDiscoveringModels {
+                Text("Fetching…").foregroundStyle(.secondary)
+            } else if discoveredModels.isEmpty {
+                Text("No models loaded on the server")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(discoveredModels, id: \.self) { id in
+                    Button(id) { defaultModel = id }
+                }
+            }
+            Divider()
+            Button {
+                Task { await discoverModels() }
+            } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+            }
+        } label: {
+            Image(systemName: "chevron.down.circle")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Fetch available models from the server")
+        .task(id: baseURL + kind.rawValue) {
+            await discoverModels()
+        }
+    }
+
+    /// Hit the server's models endpoint and populate `discoveredModels` with
+    /// the ids. Path differs by kind: OpenAI-compatible (LM Studio included)
+    /// uses `<base>/models`; Ollama uses `<base>/api/tags`.
+    private func discoverModels() async {
+        let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed) else {
+            discoveredModels = []
+            return
+        }
+        isDiscoveringModels = true
+        defer { isDiscoveringModels = false }
+
+        let endpoint: URL
+        switch kind {
+        case .ollama:
+            endpoint = url.appendingPathComponent("api/tags")
+        case .openAICompatible, .lmstudio:
+            endpoint = url.appendingPathComponent("models")
+        }
+
+        var request = URLRequest(url: endpoint)
+        request.timeoutInterval = 4
+        if requiresAuth, !authToken.isEmpty {
+            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "authorization")
+        }
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                discoveredModels = []
+                return
+            }
+            switch kind {
+            case .ollama:
+                struct OllamaResp: Decodable {
+                    let models: [Item]
+                    struct Item: Decodable { let name: String }
+                }
+                let resp = try JSONDecoder().decode(OllamaResp.self, from: data)
+                discoveredModels = resp.models.map(\.name)
+            case .openAICompatible, .lmstudio:
+                struct OpenAIResp: Decodable {
+                    let data: [Item]
+                    struct Item: Decodable { let id: String }
+                }
+                let resp = try JSONDecoder().decode(OpenAIResp.self, from: data)
+                discoveredModels = resp.data.map(\.id)
+            }
+        } catch {
+            discoveredModels = []
         }
     }
 

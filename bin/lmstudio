@@ -284,6 +284,27 @@ class TaskSink:
 
 # ---------- LM Studio chat completions --------------------------------------
 
+def fetch_loaded_models(base_url):
+    """Query /v1/models. LM Studio only returns currently-loaded models there,
+    which is exactly what we want for auto-pick. Returns a list of model id
+    strings, or raises with a friendly message on transport failure."""
+    req = urllib.request.Request(
+        f"{base_url.rstrip('/')}/models",
+        headers={"Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.URLError as e:
+        raise RuntimeError(
+            f"Could not reach LM Studio at {base_url}. "
+            f"Start the server: LM Studio > Developer > Local Server > Start.\n"
+            f"Underlying error: {e.reason}"
+        ) from None
+    data = payload.get("data") or []
+    return [entry["id"] for entry in data if "id" in entry]
+
+
 def chat_completion(base_url, model, messages, tools, max_tokens=None):
     """Single, non-streaming completion request. LM Studio returns the OpenAI
     chat.completions shape. We stay non-streaming so tool_calls are present
@@ -412,10 +433,24 @@ def main():
     args = parser.parse_args()
 
     if not args.model:
-        print("error: --model is required (or set LMSTUDIO_MODEL). "
-              "Find it in LM Studio > Developer > the active model identifier.",
-              file=sys.stderr)
-        sys.exit(2)
+        try:
+            loaded = fetch_loaded_models(args.base_url)
+        except RuntimeError as e:
+            print(f"error: {e}", file=sys.stderr)
+            sys.exit(2)
+        if len(loaded) == 1:
+            args.model = loaded[0]
+            print(f"(auto-selected model: {args.model})")
+        elif len(loaded) == 0:
+            print("error: no model is loaded in LM Studio. Open the app, pick a "
+                  "model in Chat, or run `lms load <model>`.", file=sys.stderr)
+            sys.exit(2)
+        else:
+            print("error: multiple models loaded. Pass --model or set "
+                  "LMSTUDIO_MODEL to one of:", file=sys.stderr)
+            for m in loaded:
+                print(f"  {m}", file=sys.stderr)
+            sys.exit(2)
 
     workspace = Path(args.workspace).resolve()
     if not workspace.is_dir():
