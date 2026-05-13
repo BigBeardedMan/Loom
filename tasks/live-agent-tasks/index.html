@@ -1128,10 +1128,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#codex-caveat" class="md-nav__link">
+  <a href="#clearing-sessions" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Codex caveat
+        Clearing sessions
       
     </span>
   </a>
@@ -2187,10 +2187,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#codex-caveat" class="md-nav__link">
+  <a href="#clearing-sessions" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Codex caveat
+        Clearing sessions
       
     </span>
   </a>
@@ -2284,8 +2284,14 @@
 <p>The poll keeps running regardless of the window — it's purely a display filter.</p>
 <h2 id="privacy">Privacy<a class="headerlink" href="#privacy" title="Permanent link">&para;</a></h2>
 <p>Loom only reads files under <code>~/.claude/tasks/</code> and <code>~/.codex/sessions/</code>. Nothing leaves your machine. The polling service uses standard FileManager calls and does not watch via FSEvents (which would require a separate privacy entitlement).</p>
-<h2 id="codex-caveat">Codex caveat<a class="headerlink" href="#codex-caveat" title="Permanent link">&para;</a></h2>
-<p>Codex's plan lives inside the same rollout JSONL as the rest of the conversation, so the per-session × button is hidden for Codex groups. "Clear all" only deletes Claude task files, never Codex rollouts.</p>
+<h2 id="clearing-sessions">Clearing sessions<a class="headerlink" href="#clearing-sessions" title="Permanent link">&para;</a></h2>
+<p>Every session in the Tasks pane has a × button, and the trash icon in the header runs "Clear all". What happens on disk depends on the source:</p>
+<ul>
+<li><strong>Claude Code</strong> task JSON files are deleted (the session directory stays so the lock file is undisturbed). If the session is still live it rewrites its tasks on the next turn; truly stuck/zombie sessions stay gone.</li>
+<li><strong>Codex</strong> rollout files are left untouched — they hold the conversation history, so deleting them would destroy more than the plan. Instead Loom records a dismissal timestamp keyed to the session and hides the group until the rollout file's mtime advances past that mark. An active Codex session reappears after its next event; a stuck session stays cleared.</li>
+<li><strong>Gemini</strong> is currently never collected from disk, so there's nothing to clear; the same dismissal mechanism applies if a future Gemini source is added.</li>
+</ul>
+<p>Dismissals persist across launches via <code>UserDefaults</code> key <code>loom.tasks.dismissedSessions</code>.</p>
 
 
 
