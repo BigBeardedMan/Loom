@@ -19,16 +19,16 @@ import Foundation
 enum GitHubReleaseFetcher {
     struct Release {
         /// Tag as published. Main line uses `v1.0.0`; Testing Edition uses
-        /// `testing-kx72f9amb3` and similar.
+        /// `testing-3.3.0` and similar.
         var tag: String
         /// Tag with the well-known prefix stripped. For `v1.0.0` this is
-        /// `1.0.0`; for `testing-kx72f9amb3` it's `kx72f9amb3`. The result
-        /// is what we compare against the running app's
-        /// `CFBundleShortVersionString`.
+        /// `1.0.0`; for `testing-3.3.0` it's `3.3.0`. The result is what we
+        /// compare against the running app's `CFBundleShortVersionString`.
         var versionTag: String {
-            if tag.hasPrefix("testing-") { return String(tag.dropFirst("testing-".count)) }
-            if tag.hasPrefix("v") { return String(tag.dropFirst()) }
-            return tag
+            var t = tag
+            if t.hasPrefix("testing-") { t = String(t.dropFirst("testing-".count)) }
+            if t.hasPrefix("v") { t = String(t.dropFirst()) }
+            return t
         }
         var assets: [Asset]
 

@@ -1,15 +1,17 @@
 #!/bin/zsh
-# Loom Testing Edition release. Stamps the build with the first 10 chars of
-# the current git HEAD SHA as the user-visible "build code", packages a Mac
-# DMG, tags as testing-<code>, and creates a GitHub pre-release. Windows CI
-# picks the same tag up and appends NSIS installers.
+# Loom Testing Edition release. Reads MARKETING_VERSION from project.yml as
+# the user-visible semver, packages a Mac DMG, tags as testing-<version>,
+# and creates a GitHub pre-release. Windows CI picks the same tag up and
+# appends NSIS installers.
 #
 #   bin/release-testing.sh           # run from the repo root, on the
 #                                    # loom-testing-edition branch
 #
-# Build codes are alphanumeric on purpose. There is no semver ordering on
-# the Testing Edition: every cut is just "different from the last." The
-# updater compares codes for equality, not ordering.
+# Versions follow semver and are always one or more minors ahead of the
+# latest stable Loom release (so the in-app update pill never shows a code
+# that looks lower than what's on main). Bump MARKETING_VERSION in
+# project.yml before running this script. The pre-release flag keeps these
+# builds out of the stable app's /releases/latest query.
 #
 # Requirements:
 #   - xcodegen, xcodebuild        (dev tools)
@@ -34,20 +36,25 @@ if [[ "$BRANCH" != "loom-testing-edition" ]]; then
   exit 1
 fi
 
-# --- Build code -------------------------------------------------------------
-# First 10 chars of the current commit SHA. Naturally mixed alphanumeric
-# (git short SHAs are lowercase hex), reproducible from the repo, never
-# collides with a semver release tag.
+# --- Version ---------------------------------------------------------------
+# Read MARKETING_VERSION out of project.yml. Single source of truth: the
+# value Xcode stamps into the bundle is the same value we tag with on GitHub
+# and show in the update pill.
 
-BUILD_CODE=$(git rev-parse HEAD | cut -c1-10)
-TAG="testing-${BUILD_CODE}"
+VERSION=$(awk -F'"' '/^[[:space:]]+MARKETING_VERSION:[[:space:]]*"/{print $2; exit}' project.yml)
+TAG="testing-${VERSION}"
 
-if [[ -z "$BUILD_CODE" ]]; then
-  echo "error: could not derive build code from git HEAD" >&2
+if [[ -z "$VERSION" ]]; then
+  echo "error: could not read MARKETING_VERSION from project.yml" >&2
   exit 1
 fi
 
-echo "==> Loom Testing Edition ${BUILD_CODE} (tag ${TAG})"
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "error: MARKETING_VERSION '$VERSION' is not MAJOR.MINOR.PATCH semver" >&2
+  exit 1
+fi
+
+echo "==> Loom Testing Edition ${VERSION} (tag ${TAG})"
 
 # --- Pre-flight -------------------------------------------------------------
 
@@ -62,7 +69,7 @@ if ! gh api user >/dev/null 2>&1; then
 fi
 
 if git rev-parse --verify "$TAG" >/dev/null 2>&1; then
-  echo "error: tag $TAG already exists locally. Run on a fresh commit." >&2
+  echo "error: tag $TAG already exists locally. Bump MARKETING_VERSION in project.yml." >&2
   exit 1
 fi
 
@@ -77,14 +84,14 @@ fi
 echo "==> xcodegen"
 xcodegen generate >/dev/null
 
-echo "==> xcodebuild Release (MARKETING_VERSION=${BUILD_CODE})"
+echo "==> xcodebuild Release (MARKETING_VERSION=${VERSION})"
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   xcodebuild \
     -project LoomTestingEdition.xcodeproj \
     -scheme LoomTestingEdition \
     -configuration Release \
     -quiet \
-    "MARKETING_VERSION=${BUILD_CODE}" \
+    "MARKETING_VERSION=${VERSION}" \
     build
 
 BUILT=$(find "$DERIVED_BASE" -maxdepth 6 -type d -name "Loom Testing Edition.app" -path "*/Build/Products/Release/*" -print -quit)
@@ -97,7 +104,7 @@ echo "==> built: $BUILT"
 # --- Package .dmg -----------------------------------------------------------
 
 mkdir -p "$RELEASE_DIR"
-DMG_NAME="LoomTestingEdition-${BUILD_CODE}.dmg"
+DMG_NAME="LoomTestingEdition-${VERSION}.dmg"
 DMG_PATH="${RELEASE_DIR}/${DMG_NAME}"
 
 [[ -f "$DMG_PATH" ]] && rm -f "$DMG_PATH"
@@ -127,25 +134,22 @@ echo "==> sha256: $(awk '{print $1}' "$CHECKSUM_PATH")"
 # --- Tag + push -------------------------------------------------------------
 
 echo "==> git tag $TAG"
-git tag -a "$TAG" -m "Loom Testing Edition $BUILD_CODE"
+git tag -a "$TAG" -m "Loom Testing Edition $VERSION"
 git push origin "$TAG"
 
 # --- GitHub release ---------------------------------------------------------
 
 NOTES_FILE=$(mktemp -t loom-testing-notes)
 cat >"$NOTES_FILE" <<EOF
-Loom Testing Edition \`${BUILD_CODE}\`
+Loom Testing Edition \`${VERSION}\`
 
 Pre-release channel. Installs alongside the main Loom build with its own
 bundle ID, data folder, and Keychain service.
 
 ## Install
-1. Download \`${DMG_NAME}\` (Mac) or \`LoomTestingEdition_${BUILD_CODE}_<arch>-setup.exe\` (Windows) below.
+1. Download \`${DMG_NAME}\` (Mac) or \`LoomTestingEdition_${VERSION}_<arch>-setup.exe\` (Windows) below.
 2. Open it and drag **Loom Testing Edition** into your Applications folder.
 3. First launch on Mac: right-click **Loom Testing Edition → Open** to bypass Gatekeeper.
-
-## What the build code means
-\`${BUILD_CODE}\` is the first 10 chars of commit \`$(git rev-parse HEAD)\` on \`loom-testing-edition\`. Codes don't compare ordered; any code different from yours is offered as an update.
 EOF
 
 if [[ "$REUSE_EXISTING_RELEASE" -eq 1 ]]; then
@@ -157,7 +161,7 @@ else
   echo "==> gh release create $TAG (pre-release)"
   gh release create "$TAG" "$DMG_PATH" "$CHECKSUM_PATH" \
     -R "$REPO" \
-    -t "Loom Testing Edition ${BUILD_CODE}" \
+    -t "Loom Testing Edition ${VERSION}" \
     --prerelease \
     -F "$NOTES_FILE"
 fi

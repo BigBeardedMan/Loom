@@ -171,10 +171,10 @@ final class UpdateService {
 
         do {
             // Testing Edition: walk recent releases (including pre-releases)
-            // and pick the newest one whose tag starts with `testing-`. The
-            // build code following the prefix is alphanumeric, so "is newer"
-            // becomes "is different" — any tag we haven't already staged is
-            // a candidate. Main-line `v*.*.*` releases are skipped entirely.
+            // and pick the newest one whose tag starts with `testing-`. Tags
+            // are semver (e.g. `testing-3.3.0`) and we offer the update only
+            // when the published version is strictly newer than what's
+            // running. Main-line `v*.*.*` releases are skipped entirely.
             guard let release = try await GitHubReleaseFetcher.fetchLatestPrerelease(
                 repo: Self.remoteRepo,
                 tagPrefix: Self.testingTagPrefix
@@ -182,8 +182,8 @@ final class UpdateService {
                 lastRemoteError = nil
                 return
             }
-            let runningCode = Self.runningVersionTriple().version
-            guard release.versionTag != runningCode else {
+            let runningVersion = Self.runningVersionTriple().version
+            guard GitHubReleaseFetcher.isNewer(tag: release.versionTag, than: runningVersion) else {
                 lastRemoteError = nil
                 return
             }

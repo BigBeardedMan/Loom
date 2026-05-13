@@ -98,9 +98,11 @@ fn arch_token(arch: &str) -> &'static str {
 pub async fn update_check() -> Result<Option<UpdateInfo>, String> {
     // Testing Edition: walk the last 30 releases (including pre-releases —
     // /releases/latest deliberately filters them out) and pick the newest
-    // one tagged `testing-<code>`. Build codes are alphanumeric so the
-    // comparison degenerates from semver-ordered to "is different": any
-    // tag we aren't already running counts as an update.
+    // one tagged `testing-<version>`. Versions are semver (e.g. `3.3.0`);
+    // we use plain string inequality below because the published tag is the
+    // single source of truth, and Windows CI tags the same value the Mac
+    // release script does. Downgrades would only happen if the user yanks
+    // a release and republishes an older version, which is a manual choice.
     let url = format!(
         "https://api.github.com/repos/{}/{}/releases?per_page=30",
         REPO_OWNER, REPO_NAME

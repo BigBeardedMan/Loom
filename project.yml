@@ -10,12 +10,12 @@ options:
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    # MARKETING_VERSION is the user-visible build code on the Testing Edition
-    # branch. release-testing.sh overrides this at build time with the first
-    # 10 chars of the current git commit SHA, so every shipped build has a
-    # reproducible alphanumeric identifier. The placeholder here is what
-    # Xcode shows during local debug runs from the IDE.
-    MARKETING_VERSION: "kx72f9amb3"
+    # MARKETING_VERSION is the user-visible semver on the Testing Edition
+    # branch. Always one or more minors ahead of the latest stable Loom
+    # release, so the pill never shows a code lower than what's on main.
+    # Bump this manually before each testing release; release-testing.sh
+    # reads it back out and tags the GitHub pre-release `testing-<version>`.
+    MARKETING_VERSION: "3.3.0"
     CURRENT_PROJECT_VERSION: "1"
     CODE_SIGN_STYLE: Manual
     CODE_SIGN_IDENTITY: "Loom Local Codesign"
