@@ -73,6 +73,7 @@ nav:
       - agents/claude-code.md
       - agents/anthropic-api.md
       - agents/local-llms.md
+      - agents/lmstudio-cli.md
       - agents/custom-providers.md
   - Tasks:
       - tasks/overview.md

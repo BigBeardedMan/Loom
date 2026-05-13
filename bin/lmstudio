@@ -1,0 +1,460 @@
+#!/usr/bin/env python3
+"""
+lmstudio - interactive agent CLI backed by LM Studio's OpenAI-compatible
+local server. Mirrors the agent loop in Loom's AgentOrchestrator:
+read_file, edit_file, write_file, list_dir, run_bash, update_tasks.
+
+Tasks are written to ~/.loom/tasks/<session-id>/<task-id>.json so Loom's
+Tasks pane surfaces them automatically via LiveAgentTasksService.
+
+Usage:
+    lmstudio                          # interactive REPL
+    lmstudio "refactor this file"     # one-shot
+    lmstudio --model qwen2.5-coder-7b-instruct "..."
+    lmstudio --base-url http://localhost:1234/v1 ...
+    lmstudio --allow-bash "fix the failing test"
+
+Configuration via env vars (CLI flags override):
+    LMSTUDIO_BASE_URL  default http://localhost:1234/v1
+    LMSTUDIO_MODEL     required if not set on the LM Studio server
+    LMSTUDIO_BASH      1 to enable run_bash, 0 to disable (default 0)
+
+Stdlib only - no pip install required.
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+DEFAULT_BASE_URL = "http://localhost:1234/v1"
+DEFAULT_MAX_TURNS = 30
+TASK_ROOT = Path.home() / ".loom" / "tasks"
+
+SYSTEM_PROMPT = """You are an interactive coding agent running in a terminal,
+backed by a local LM Studio model. You have these tools:
+
+- read_file(path) - read a UTF-8 file in the current workspace
+- write_file(path, content) - create or overwrite a file
+- edit_file(path, old_string, new_string) - surgical text edit
+- list_dir(path) - list directory entries
+- run_bash(command, timeout_seconds?) - shell command, when enabled
+- update_tasks(tasks) - replace the visible task list. Use it to plan
+  multi-step work and reflect progress. Each task has subject, activeForm,
+  and status (one of pending, in_progress, completed, cancelled).
+
+Workflow:
+1. For non-trivial requests, call update_tasks first with a plan.
+2. As you work, call update_tasks again to flip statuses.
+3. When the work is done, answer in plain text (no tool calls) - that
+   ends the loop. The orchestrator will mark any leftover tasks done.
+
+Paths must be relative to the current working directory. Stay inside it -
+the runner enforces that boundary."""
+
+
+def now_iso():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+# ---------- Tool schemas (OpenAI function-calling format) -------------------
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read a UTF-8 text file inside the current workspace. Returns the full contents (capped at 32000 chars).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path relative to the workspace root."}
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "Create or overwrite a UTF-8 text file in the workspace.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_file",
+            "description": "Replace an exact substring in a file. Use for small, surgical edits.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "old_string": {"type": "string"},
+                    "new_string": {"type": "string"},
+                },
+                "required": ["path", "old_string", "new_string"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_dir",
+            "description": "List entries in a directory inside the workspace.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Empty string for the workspace root."}
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_bash",
+            "description": "Execute a shell command in the workspace (disabled unless --allow-bash).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                    "timeout_seconds": {"type": "integer", "default": 30},
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_tasks",
+            "description": "Replace the visible task list. Plan multi-step work and reflect progress.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tasks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "subject": {"type": "string"},
+                                "activeForm": {"type": "string"},
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["pending", "in_progress", "completed", "cancelled"],
+                                },
+                            },
+                            "required": ["subject", "status"],
+                        },
+                    }
+                },
+                "required": ["tasks"],
+            },
+        },
+    },
+]
+
+
+# ---------- Workspace-bounded path resolution -------------------------------
+
+def resolve_in_workspace(workspace: Path, rel: str) -> Path:
+    target = (workspace / rel).resolve()
+    root = workspace.resolve()
+    if target != root and root not in target.parents:
+        raise ValueError(f"path is outside the workspace: {rel}")
+    return target
+
+
+# ---------- Tool implementations --------------------------------------------
+
+def tool_read_file(workspace, args):
+    path = resolve_in_workspace(workspace, args["path"])
+    if not path.is_file():
+        raise FileNotFoundError(f"not found: {args['path']}")
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if len(text) > 32000:
+        return text[:32000] + "\n\n...(truncated at 32000 chars)"
+    return text
+
+
+def tool_write_file(workspace, args):
+    path = resolve_in_workspace(workspace, args["path"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(args["content"], encoding="utf-8")
+    return f"Wrote {len(args['content'])} bytes to {args['path']}"
+
+
+def tool_edit_file(workspace, args):
+    path = resolve_in_workspace(workspace, args["path"])
+    if not path.is_file():
+        raise FileNotFoundError(f"not found: {args['path']}")
+    text = path.read_text(encoding="utf-8")
+    if args["old_string"] not in text:
+        raise ValueError("old_string not found in file")
+    new_text = text.replace(args["old_string"], args["new_string"], 1)
+    path.write_text(new_text, encoding="utf-8")
+    return f"Replaced 1 occurrence in {args['path']}"
+
+
+def tool_list_dir(workspace, args):
+    path = resolve_in_workspace(workspace, args.get("path", ""))
+    if not path.is_dir():
+        raise NotADirectoryError(f"not a directory: {args.get('path', '')}")
+    return "\n".join(sorted(p.name for p in path.iterdir()))
+
+
+def tool_run_bash(workspace, args, allow_bash):
+    if not allow_bash:
+        raise PermissionError("run_bash disabled. Pass --allow-bash to enable.")
+    command = args["command"]
+    timeout = max(1, min(int(args.get("timeout_seconds", 30)), 300))
+    proc = subprocess.run(
+        ["/bin/zsh", "-lic", command],
+        cwd=str(workspace),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    header = f"$ {command}\n[exit {proc.returncode}]\n"
+    body = proc.stdout + proc.stderr
+    if len(body) > 16000:
+        body = body[:16000] + "\n...(truncated)"
+    return header + body
+
+
+# ---------- Task list persistence ------------------------------------------
+
+class TaskSink:
+    """Writes one JSON file per task under ~/.loom/tasks/<session>/.
+
+    Schema matches Claude Code's TodoWrite output: each file is
+    {id, subject, activeForm, status, source, sessionID, updatedAt} so
+    Loom's LiveAgentTasksService can read both with a single decoder.
+    """
+
+    def __init__(self, session_id):
+        self.session_id = session_id
+        self.dir = TASK_ROOT / session_id
+        self.dir.mkdir(parents=True, exist_ok=True)
+
+    def replace(self, tasks):
+        # Clear any stale files from a previous update so deletions stick.
+        for old in self.dir.glob("*.json"):
+            old.unlink()
+        for index, t in enumerate(tasks):
+            task_id = str(index)
+            payload = {
+                "id": task_id,
+                "subject": t["subject"],
+                "activeForm": t.get("activeForm") or t["subject"],
+                "status": t["status"],
+                "description": "",
+                "updatedAt": now_iso(),
+            }
+            (self.dir / f"{task_id}.json").write_text(
+                json.dumps(payload, indent=2),
+                encoding="utf-8",
+            )
+        return len(tasks)
+
+    def mark_remaining_complete(self):
+        for path in sorted(self.dir.glob("*.json")):
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if data["status"] in ("pending", "in_progress"):
+                data["status"] = "completed"
+                data["updatedAt"] = now_iso()
+                path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+# ---------- LM Studio chat completions --------------------------------------
+
+def chat_completion(base_url, model, messages, tools, max_tokens=None):
+    """Single, non-streaming completion request. LM Studio returns the OpenAI
+    chat.completions shape. We stay non-streaming so tool_calls are present
+    in one piece - simpler than reassembling SSE deltas."""
+    payload = {
+        "model": model,
+        "messages": messages,
+        "tools": tools,
+        "tool_choice": "auto",
+        "stream": False,
+    }
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+
+    req = urllib.request.Request(
+        f"{base_url.rstrip('/')}/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"LM Studio HTTP {e.code}: {body}") from None
+    except urllib.error.URLError as e:
+        raise RuntimeError(
+            f"Could not reach LM Studio at {base_url}. "
+            f"Start the server: LM Studio > Developer > Local Server > Start.\n"
+            f"Underlying error: {e.reason}"
+        ) from None
+
+
+# ---------- Agent loop ------------------------------------------------------
+
+def run_turn(workspace, base_url, model, user_message, allow_bash, sink,
+             session_id, max_turns, transcript):
+    """One user turn = many model turns until the model answers without a
+    tool call. Returns the final assistant text."""
+    transcript.append({"role": "user", "content": user_message})
+
+    for turn in range(1, max_turns + 1):
+        result = chat_completion(base_url, model, transcript, TOOLS)
+        msg = result["choices"][0]["message"]
+        assistant_text = msg.get("content") or ""
+        tool_calls = msg.get("tool_calls") or []
+
+        # Keep the assistant turn in the transcript verbatim - including any
+        # tool_calls - so the model can refer back to its own reasoning.
+        assistant_entry = {"role": "assistant", "content": assistant_text}
+        if tool_calls:
+            assistant_entry["tool_calls"] = tool_calls
+        transcript.append(assistant_entry)
+
+        if assistant_text:
+            print(assistant_text)
+
+        if not tool_calls:
+            sink.mark_remaining_complete()
+            return assistant_text
+
+        for call in tool_calls:
+            name = call["function"]["name"]
+            raw_args = call["function"].get("arguments") or "{}"
+            try:
+                args = json.loads(raw_args)
+            except json.JSONDecodeError:
+                args = {}
+            print(f"\n  [{name}] {json.dumps(args, separators=(',', ':'))[:120]}")
+
+            try:
+                if name == "read_file":
+                    result_text = tool_read_file(workspace, args)
+                elif name == "write_file":
+                    result_text = tool_write_file(workspace, args)
+                elif name == "edit_file":
+                    result_text = tool_edit_file(workspace, args)
+                elif name == "list_dir":
+                    result_text = tool_list_dir(workspace, args)
+                elif name == "run_bash":
+                    result_text = tool_run_bash(workspace, args, allow_bash)
+                elif name == "update_tasks":
+                    count = sink.replace(args.get("tasks", []))
+                    result_text = f"Task list updated ({count} task{'' if count == 1 else 's'})."
+                    for t in args.get("tasks", []):
+                        marker = {"pending": ".", "in_progress": ">", "completed": "x", "cancelled": "-"}.get(t["status"], "?")
+                        print(f"    [{marker}] {t['subject']}")
+                else:
+                    result_text = f"Error: unknown tool {name}"
+            except Exception as e:
+                result_text = f"Error: {e}"
+                print(f"    -> error: {e}")
+            else:
+                preview = result_text.split("\n")[0][:120]
+                print(f"    -> {preview}")
+
+            transcript.append({
+                "role": "tool",
+                "tool_call_id": call["id"],
+                "content": result_text,
+            })
+
+    print(f"\n(stopped: hit max_turns={max_turns})", file=sys.stderr)
+    return ""
+
+
+# ---------- Entrypoint ------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="lmstudio",
+        description="Interactive agent CLI backed by LM Studio.",
+    )
+    parser.add_argument("prompt", nargs="*", help="One-shot prompt. Omit for REPL.")
+    parser.add_argument("--base-url", default=os.environ.get("LMSTUDIO_BASE_URL", DEFAULT_BASE_URL))
+    parser.add_argument("--model", default=os.environ.get("LMSTUDIO_MODEL", ""))
+    parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS)
+    parser.add_argument("--workspace", default=os.getcwd(), help="Workspace root. Defaults to $PWD.")
+    parser.add_argument(
+        "--allow-bash",
+        action="store_true",
+        default=os.environ.get("LMSTUDIO_BASH", "0") == "1",
+        help="Enable run_bash tool. Off by default.",
+    )
+    args = parser.parse_args()
+
+    if not args.model:
+        print("error: --model is required (or set LMSTUDIO_MODEL). "
+              "Find it in LM Studio > Developer > the active model identifier.",
+              file=sys.stderr)
+        sys.exit(2)
+
+    workspace = Path(args.workspace).resolve()
+    if not workspace.is_dir():
+        print(f"error: workspace is not a directory: {workspace}", file=sys.stderr)
+        sys.exit(2)
+
+    session_id = uuid.uuid4().hex[:8]
+    sink = TaskSink(session_id)
+    transcript = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+    print(f"lmstudio session {session_id}  model={args.model}  workspace={workspace}")
+    print(f"tasks: ~/.loom/tasks/{session_id}/  bash: {'on' if args.allow_bash else 'off'}")
+    print("type /quit or Ctrl-D to exit.\n")
+
+    one_shot = " ".join(args.prompt).strip()
+    if one_shot:
+        run_turn(workspace, args.base_url, args.model, one_shot,
+                 args.allow_bash, sink, session_id, args.max_turns, transcript)
+        return
+
+    while True:
+        try:
+            user_in = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        if not user_in:
+            continue
+        if user_in in ("/quit", "/exit"):
+            return
+        try:
+            run_turn(workspace, args.base_url, args.model, user_in,
+                     args.allow_bash, sink, session_id, args.max_turns, transcript)
+        except KeyboardInterrupt:
+            print("\n(interrupted)")
+        except Exception as e:
+            print(f"error: {e}", file=sys.stderr)
+        print()
+
+
+if __name__ == "__main__":
+    main()

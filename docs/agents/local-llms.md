@@ -45,6 +45,8 @@ These tools all expose an OpenAI-shaped HTTP API. Pick one, start its server, th
    - **Requires auth:** off.
 4. **Save**.
 
+> Prefer a terminal? The [`lmstudio` CLI](lmstudio-cli.md) ships with Loom and gives you a `claude`-style agent loop in any terminal, backed by the same LM Studio server. Tasks flow into Loom's Tasks pane automatically.
+
 ### llama.cpp
 
 ```bash

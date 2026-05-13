@@ -111,8 +111,9 @@ struct LiveAgentTaskGroup: Identifiable, Hashable {
 /// Claude Code writes per-task JSON files at `~/.claude/tasks/<session>/<id>.json`.
 /// Codex emits an `update_plan` function call inside its rollout JSONL at
 /// `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`; we surface the
-/// latest plan from each active rollout. Gemini CLI does not currently log
-/// plan or task state to disk in any format we can read.
+/// latest plan from each active rollout. Our own `lmstudio` CLI mirrors the
+/// Claude layout under `~/.loom/tasks/<session>/<id>.json`. Gemini CLI does
+/// not currently log plan or task state to disk in any format we can read.
 @Observable
 @MainActor
 final class LiveAgentTasksService {
@@ -135,6 +136,10 @@ final class LiveAgentTasksService {
     private let codexSessionsRoot: URL = {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex/sessions", isDirectory: true)
+    }()
+    private let loomTasksRoot: URL = {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".loom/tasks", isDirectory: true)
     }()
     private var refreshInFlight: Bool = false
 
@@ -172,10 +177,16 @@ final class LiveAgentTasksService {
         refreshInFlight = true
         let claudeRoot = claudeTasksRoot
         let codexRoot = codexSessionsRoot
+        let loomRoot = loomTasksRoot
         let cutoff = Date().addingTimeInterval(-activeWindow)
         Task { [weak self] in
             let sorted = await Task.detached(priority: .utility) {
-                Self.collectAllGroups(claudeRoot: claudeRoot, codexRoot: codexRoot, cutoff: cutoff)
+                Self.collectAllGroups(
+                    claudeRoot: claudeRoot,
+                    codexRoot: codexRoot,
+                    loomRoot: loomRoot,
+                    cutoff: cutoff
+                )
             }.value
             guard let self else { return }
             self.refreshInFlight = false
@@ -205,8 +216,14 @@ final class LiveAgentTasksService {
     }
 
     private func deleteTaskFiles(for group: LiveAgentTaskGroup) {
-        guard group.source == .claude else { return }
-        let sessionDir = claudeTasksRoot.appendingPathComponent(group.sessionID, isDirectory: true)
+        let rootForGroup: URL?
+        switch group.source {
+        case .claude:   rootForGroup = claudeTasksRoot
+        case .lmstudio: rootForGroup = loomTasksRoot
+        default:        rootForGroup = nil
+        }
+        guard let root = rootForGroup else { return }
+        let sessionDir = root.appendingPathComponent(group.sessionID, isDirectory: true)
         let fm = FileManager.default
         let entries = (try? fm.contentsOfDirectory(at: sessionDir, includingPropertiesForKeys: nil, options: [])) ?? []
         for url in entries where url.pathExtension == "json" {
@@ -223,12 +240,71 @@ final class LiveAgentTasksService {
     nonisolated static func collectAllGroups(
         claudeRoot: URL,
         codexRoot: URL,
+        loomRoot: URL,
         cutoff: Date
     ) -> [LiveAgentTaskGroup] {
         var collected: [LiveAgentTaskGroup] = []
         collected.append(contentsOf: collectClaudeGroups(root: claudeRoot, cutoff: cutoff))
         collected.append(contentsOf: collectCodexGroups(root: codexRoot, cutoff: cutoff))
+        collected.append(contentsOf: collectLoomGroups(root: loomRoot, cutoff: cutoff))
         return collected.sorted { $0.lastActivity > $1.lastActivity }
+    }
+
+    // MARK: - Loom (lmstudio CLI)
+
+    /// `~/.loom/tasks/<session>/<id>.json` mirrors the Claude layout exactly,
+    /// so we reuse the same scanner and just stamp `source = .lmstudio`. Our
+    /// `lmstudio` CLI is the writer.
+    nonisolated static func collectLoomGroups(root: URL, cutoff: Date) -> [LiveAgentTaskGroup] {
+        var collected: [LiveAgentTaskGroup] = []
+        for session in activeClaudeSessions(root: root, cutoff: cutoff) {
+            let tasks = readLoomTasks(in: session)
+            guard !tasks.isEmpty else { continue }
+            collected.append(LiveAgentTaskGroup(
+                sessionID: session.id,
+                source: .lmstudio,
+                lastActivity: session.mostRecentMtime,
+                tasks: tasks
+            ))
+        }
+        return collected
+    }
+
+    nonisolated private static func readLoomTasks(in session: ClaudeSessionRef) -> [LiveAgentTask] {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(
+            at: session.url,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        let decoder = JSONDecoder()
+        var tasks: [LiveAgentTask] = []
+        for url in entries where url.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: url) else { continue }
+            guard let payload = try? decoder.decode(ClaudeTaskFile.self, from: data) else { continue }
+            let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .now
+            let status = LiveAgentTaskStatus(rawValue: payload.status ?? "pending") ?? .pending
+            if status == .deleted { continue }
+            let composite = "lmstudio:\(session.id):\(payload.id)"
+            tasks.append(LiveAgentTask(
+                id: composite,
+                source: .lmstudio,
+                sessionID: session.id,
+                taskID: payload.id,
+                subject: payload.subject ?? "(no subject)",
+                description: payload.description ?? "",
+                activeForm: payload.activeForm ?? "",
+                status: status,
+                updatedAt: mtime
+            ))
+        }
+        return tasks.sorted { lhs, rhs in
+            if lhs.status.sortPriority != rhs.status.sortPriority {
+                return lhs.status.sortPriority < rhs.status.sortPriority
+            }
+            return lhs.updatedAt > rhs.updatedAt
+        }
     }
 
     // MARK: - Claude
