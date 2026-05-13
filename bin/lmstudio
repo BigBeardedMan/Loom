@@ -27,18 +27,30 @@ Stdlib only. No pip install required.
 import argparse
 import json
 import os
+import select
 import shutil
 import subprocess
 import sys
+import termios
 import urllib.error
 import urllib.request
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+# readline gives us up/down history, Ctrl-A/E line editing, and persistent
+# history across sessions via input(). macOS ships libedit under the
+# readline import name; the basic API used here works on both.
+try:
+    import readline  # noqa: F401  (importing makes input() use it)
+    _HAS_READLINE = True
+except ImportError:
+    _HAS_READLINE = False
+
 DEFAULT_BASE_URL = "http://localhost:1234/v1"
 DEFAULT_MAX_TURNS = 30
 TASK_ROOT = Path.home() / ".loom" / "tasks"
+HISTORY_FILE = Path.home() / ".config" / "loom" / "lmstudio-history"
 USE_COLOR = sys.stdout.isatty() and "NO_COLOR" not in os.environ
 
 
@@ -108,13 +120,28 @@ def hr(char="─"):
 # ---------- Banner ---------------------------------------------------------
 
 TIPS = [
-    "press Ctrl-C to stop the current turn; Ctrl-D or /quit to exit",
+    "↑ / ↓ to walk through previous prompts (history persisted in ~/.config/loom/lmstudio-history)",
+    "Esc during a running turn stops it; Ctrl-D or /quit to exit",
     "pass --allow-bash to enable the run_bash tool",
     "task list flows into Loom's Tasks pane via ~/.loom/tasks/",
     "set LMSTUDIO_MODEL to pin a specific model across sessions",
     "thinking shown in dim italic when the model emits <think>...</think>",
     "coder-tuned 7B+ models (Qwen2.5-Coder, DeepSeek-Coder-V2) hold tool-calling best",
 ]
+
+
+def draw_prompt_box():
+    """Top + bottom border for the input area, drawn around input() so the
+    prompt feels like a contained text field (a la Claude Code). We can't
+    add a live right border without raw-mode line editing, so the result is
+    a U-shape: full top and bottom rules, side bars only on the prompt row."""
+    width = max(40, min(term_width() - 2, 96))
+    bar = "─" * (width - 2)
+    return (
+        style("╭" + bar + "╮", BCYAN),
+        style("│ ", BCYAN) + style(GLYPH_PROMPT + " ", BCYAN, BOLD),
+        style("╰" + bar + "╯", BCYAN),
+    )
 
 
 def draw_banner(model, workspace, allow_bash, session_id):
@@ -432,6 +459,83 @@ def fetch_loaded_models(base_url):
     return [entry["id"] for entry in data if "id" in entry]
 
 
+# ---------- Esc-to-interrupt --------------------------------------------
+
+class EscInterrupt(Exception):
+    """Raised when the user hits Esc during a running turn. Caught at the
+    REPL boundary so the turn unwinds cleanly without exiting the process."""
+
+
+class EscWatcher:
+    """Puts stdin into cbreak mode for the lifetime of a `with` block so we
+    can poll for a single Esc keystroke without waiting for Enter.
+
+    Why not just trap SIGINT? Ctrl-C already works and we keep it; this gives
+    the user a second, lower-stakes way to bail out of a long generation that
+    matches the ergonomics in Claude Code / Codex - press Esc, the current
+    turn unwinds, you're back at the prompt with history intact.
+
+    Stays a no-op when stdin isn't a TTY (CI, pipes, --no-banner-style
+    invocations) so the script stays scriptable."""
+
+    def __init__(self):
+        self.enabled = sys.stdin.isatty()
+        self.fd = None
+        self.old = None
+
+    def __enter__(self):
+        if not self.enabled:
+            return self
+        try:
+            self.fd = sys.stdin.fileno()
+            self.old = termios.tcgetattr(self.fd)
+            new = list(self.old)
+            # Flip off ICANON (line buffering) and ECHO. Keep ISIG so Ctrl-C
+            # still raises SIGINT. Output (OPOST) untouched, so streamed text
+            # renders with normal newline translation.
+            new[3] = new[3] & ~(termios.ICANON | termios.ECHO)
+            termios.tcsetattr(self.fd, termios.TCSANOW, new)
+        except (termios.error, OSError):
+            self.enabled = False
+            self.old = None
+        return self
+
+    def __exit__(self, *args):
+        if self.old is None:
+            return
+        try:
+            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old)
+            # Drain anything the user typed during generation so it doesn't
+            # leak into the next prompt as phantom input.
+            termios.tcflush(self.fd, termios.TCIFLUSH)
+        except (termios.error, OSError):
+            pass
+
+    def check(self):
+        """True if Esc was pressed since the last call. Non-blocking. Drains
+        and discards any other characters typed during the turn so we don't
+        confuse subsequent input."""
+        if not self.enabled:
+            return False
+        saw_esc = False
+        try:
+            while True:
+                ready, _, _ = select.select([self.fd], [], [], 0)
+                if not ready:
+                    break
+                try:
+                    ch = os.read(self.fd, 64)
+                except (OSError, BlockingIOError):
+                    break
+                if not ch:
+                    break
+                if b"\x1b" in ch:
+                    saw_esc = True
+        except (OSError, ValueError):
+            return saw_esc
+        return saw_esc
+
+
 # ---------- Streaming chat completion -------------------------------------
 
 class ThinkStreamer:
@@ -647,21 +751,28 @@ def run_turn(workspace, base_url, model, user_message, allow_bash, sink,
         had_content = False
         error_message = None
 
-        for kind, data in stream_completion(base_url, model, transcript, TOOLS):
-            if kind == "content":
-                if not had_content:
-                    # Indent the assistant's narration so it visually nests
-                    # under the user prompt.
-                    sys.stdout.write("  ")
-                had_content = True
-                streamer.feed(data)
-            elif kind == "tool_call":
-                finished_tool_calls.append(data)
-            elif kind == "error":
-                error_message = data
-                break
-            elif kind == "done":
-                break
+        with EscWatcher() as esc:
+            stream = stream_completion(base_url, model, transcript, TOOLS)
+            try:
+                for kind, data in stream:
+                    if esc.check():
+                        raise EscInterrupt
+                    if kind == "content":
+                        if not had_content:
+                            sys.stdout.write("  ")
+                        had_content = True
+                        streamer.feed(data)
+                    elif kind == "tool_call":
+                        finished_tool_calls.append(data)
+                    elif kind == "error":
+                        error_message = data
+                        break
+                    elif kind == "done":
+                        break
+            finally:
+                # Always close the generator so the underlying HTTP response
+                # tears down promptly on Esc / error / normal completion.
+                stream.close()
 
         assistant_text = streamer.finish()
         if had_content and not assistant_text.endswith("\n"):
@@ -787,44 +898,78 @@ def main():
         draw_banner(args.model, workspace, args.allow_bash, session_id)
         draw_tips()
 
+    _load_history()
+
     one_shot = " ".join(args.prompt).strip()
     if one_shot:
-        prompt_glyph = style(GLYPH_PROMPT, BCYAN)
-        print(f"{prompt_glyph} {one_shot}\n")
+        top, lead, bot = draw_prompt_box()
+        print(top)
+        print(f"{lead}{one_shot}")
+        print(bot)
+        print()
         try:
             run_turn(workspace, args.base_url, args.model, one_shot,
                      args.allow_bash, sink, session_id, args.max_turns, transcript)
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, EscInterrupt):
             print(style("\n  (interrupted)", YELLOW))
         return
 
-    prompt_glyph = style(GLYPH_PROMPT, BCYAN)
     while True:
+        top, lead, bot = draw_prompt_box()
+        print(top)
         try:
-            user_in = input(f"{prompt_glyph} ").strip()
+            user_in = input(lead).strip()
         except EOFError:
-            print()
+            print(bot)
             return
         except KeyboardInterrupt:
-            # Empty Ctrl-C at the prompt should clear the line, not exit.
+            # Empty Ctrl-C at the prompt clears the line - matches shell behavior.
             print()
             continue
+        # Close the bottom of the box once input is in.
+        print(bot)
         if not user_in:
             continue
         if user_in in ("/quit", "/exit"):
+            _save_history()
             return
         if user_in == "/help":
             draw_tips()
             continue
+        _save_history()
         print()
         try:
             run_turn(workspace, args.base_url, args.model, user_in,
                      args.allow_bash, sink, session_id, args.max_turns, transcript)
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, EscInterrupt):
             print(style("\n  (interrupted)", YELLOW))
         except Exception as e:
             print(style(f"  {GLYPH_ERR} error: {e}", RED), file=sys.stderr)
         print()
+
+
+def _load_history():
+    if not _HAS_READLINE:
+        return
+    try:
+        HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        readline.read_history_file(str(HISTORY_FILE))
+    except (FileNotFoundError, OSError):
+        pass
+    try:
+        readline.set_history_length(1000)
+    except Exception:
+        pass
+
+
+def _save_history():
+    if not _HAS_READLINE:
+        return
+    try:
+        HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        readline.write_history_file(str(HISTORY_FILE))
+    except OSError:
+        pass
 
 
 if __name__ == "__main__":
