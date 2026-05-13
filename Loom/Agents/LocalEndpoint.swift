@@ -9,6 +9,7 @@ struct LocalEndpoint: Codable, Identifiable, Hashable, Sendable {
     enum Kind: String, Codable, Hashable, Sendable, CaseIterable, Identifiable {
         case ollama
         case openAICompatible
+        case lmstudio
 
         var id: String { rawValue }
 
@@ -16,6 +17,7 @@ struct LocalEndpoint: Codable, Identifiable, Hashable, Sendable {
             switch self {
             case .ollama:           return "Ollama"
             case .openAICompatible: return "OpenAI-compatible"
+            case .lmstudio:         return "LM Studio"
             }
         }
 
@@ -23,6 +25,7 @@ struct LocalEndpoint: Codable, Identifiable, Hashable, Sendable {
             switch self {
             case .ollama:           return "http://localhost:11434"
             case .openAICompatible: return "http://localhost:1234/v1"
+            case .lmstudio:         return "http://localhost:1234/v1"
             }
         }
 
@@ -30,6 +33,7 @@ struct LocalEndpoint: Codable, Identifiable, Hashable, Sendable {
             switch self {
             case .ollama:           return "auto-discovered via /api/tags"
             case .openAICompatible: return "set the model id used in chat requests"
+            case .lmstudio:         return "auto-discovered via /api/v0/models"
             }
         }
     }

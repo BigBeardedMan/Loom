@@ -8,6 +8,7 @@ struct AgentDescriptor: Identifiable, Hashable {
         case gemini
         case ollama
         case openAICompatible
+        case lmstudio
 
         var label: String {
             switch self {
@@ -16,13 +17,14 @@ struct AgentDescriptor: Identifiable, Hashable {
             case .gemini:           return "Gemini"
             case .ollama:           return "Ollama"
             case .openAICompatible: return "Local"
+            case .lmstudio:         return "LM Studio"
             }
         }
 
         var isLocalHTTP: Bool {
             switch self {
-            case .ollama, .openAICompatible: return true
-            default:                         return false
+            case .ollama, .openAICompatible, .lmstudio: return true
+            default:                                    return false
             }
         }
     }
@@ -234,6 +236,36 @@ final class AgentRegistry {
                 displayName: model,
                 vendor: .openAICompatible,
                 model: model,
+                group: group,
+                endpointID: endpoint.id
+            )]
+
+        case .lmstudio:
+            let models = await LMStudioProvider.fetchModels(baseURL: url)
+            if !models.isEmpty {
+                return models.map { entry in
+                    AgentDescriptor(
+                        id: "lmstudio:\(endpoint.id.uuidString):\(entry.id)",
+                        cliName: "",
+                        displayName: entry.displayLabel,
+                        vendor: .lmstudio,
+                        model: entry.id,
+                        group: group,
+                        endpointID: endpoint.id
+                    )
+                }
+            }
+            // Server down or no models loaded yet. Surface the configured
+            // default model so the endpoint still appears in the picker, the
+            // same fallback shape Ollama uses above.
+            let fallback = endpoint.defaultModel.trimmingCharacters(in: .whitespaces)
+            guard !fallback.isEmpty else { return [] }
+            return [AgentDescriptor(
+                id: "lmstudio:\(endpoint.id.uuidString):\(fallback)",
+                cliName: "",
+                displayName: fallback,
+                vendor: .lmstudio,
+                model: fallback,
                 group: group,
                 endpointID: endpoint.id
             )]

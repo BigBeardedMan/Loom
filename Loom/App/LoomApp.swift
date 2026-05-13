@@ -56,6 +56,9 @@ struct LoomApp: App {
                     layout.startLiveAgentPolling()
                     await agentRegistry.refresh(localEndpoints: localEndpoints.endpoints)
                 }
+                .onOpenURL { url in
+                    URLSchemeHandler.handle(url)
+                }
                 .sheet(item: Binding(
                     get: { crashService.pendingReport },
                     set: { newValue in

@@ -15,6 +15,10 @@ struct SettingsView: View {
                 .tabItem { Label("Providers", systemImage: "server.rack") }
                 .padding(20)
 
+            AgentSettings()
+                .tabItem { Label("Agent", systemImage: "wand.and.stars") }
+                .padding(20)
+
             MCPSettings()
                 .tabItem { Label("MCP", systemImage: "powerplug") }
                 .padding(20)
@@ -27,7 +31,7 @@ struct SettingsView: View {
                 .tabItem { Label("Advanced", systemImage: "gearshape.2") }
                 .padding(20)
         }
-        .frame(width: 620, height: 460)
+        .frame(width: 640, height: 480)
     }
 }
 
@@ -161,7 +165,7 @@ private struct ProvidersSettings: View {
 
     private func endpointRow(_ endpoint: LocalEndpoint) -> some View {
         HStack(alignment: .center, spacing: 10) {
-            Image(systemName: endpoint.kind == .ollama ? "cube.box" : "network")
+            Image(systemName: endpointIcon(for: endpoint.kind))
                 .foregroundStyle(.secondary)
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 2) {
@@ -192,6 +196,14 @@ private struct ProvidersSettings: View {
     private func refreshAgents() {
         Task { await registry.refresh(localEndpoints: store.endpoints) }
     }
+
+    private func endpointIcon(for kind: LocalEndpoint.Kind) -> String {
+        switch kind {
+        case .ollama:           return "shippingbox"
+        case .openAICompatible: return "network"
+        case .lmstudio:         return "cpu"
+        }
+    }
 }
 
 private struct EndpointEditor: View {
@@ -212,6 +224,7 @@ private struct EndpointEditor: View {
     @State private var authToken: String = ""
     @State private var testStatus: TestStatus = .idle
     @State private var testMessage: String = ""
+    @State private var lmsCLI = LMStudioCLI()
 
     enum TestStatus { case idle, running, ok, failed }
 
@@ -228,7 +241,7 @@ private struct EndpointEditor: View {
                     }
                 }
                 .onChange(of: kind) { _, newKind in
-                    if baseURL.isEmpty || isDefaultBaseURL(for: oppositeKind(newKind)) {
+                    if baseURL.isEmpty || isOnAnyDefault() {
                         baseURL = newKind.defaultBaseURL
                     }
                 }
@@ -268,6 +281,10 @@ private struct EndpointEditor: View {
                 Spacer()
             }
 
+            if kind == .lmstudio {
+                lmStudioServerSection
+            }
+
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel)
@@ -278,8 +295,108 @@ private struct EndpointEditor: View {
             }
         }
         .padding(20)
-        .frame(width: 480)
-        .onAppear(perform: prefill)
+        .frame(width: 520)
+        .onAppear {
+            prefill()
+            if kind == .lmstudio {
+                Task { await lmsCLI.refresh() }
+            }
+        }
+        .onChange(of: kind) { _, newKind in
+            if newKind == .lmstudio {
+                Task { await lmsCLI.refresh() }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var lmStudioServerSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("LM Studio Server")
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer()
+                serverStatusBadge
+            }
+
+            HStack(spacing: 8) {
+                Button("Start Server") {
+                    Task { await lmsCLI.startServer() }
+                }
+                .disabled(lmsCLI.status == .lmsMissing)
+                Button("Start as Daemon") {
+                    Task { await lmsCLI.daemonUp() }
+                }
+                .disabled(lmsCLI.status == .lmsMissing)
+                .help("Headless server that survives Loom quitting")
+                Button("Stop") {
+                    Task { await lmsCLI.stopServer() }
+                }
+                .disabled(lmsCLI.status == .lmsMissing)
+                Spacer()
+                Button("Refresh") {
+                    Task { await lmsCLI.refresh() }
+                }
+                .buttonStyle(.borderless)
+            }
+
+            if lmsCLI.status == .lmsMissing {
+                Text("`lms` CLI not found on PATH. Install LM Studio from lmstudio.ai and open it once to enable the CLI.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else if !lmsCLI.installedModels.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Installed models (\(lmsCLI.installedModels.count))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(lmsCLI.installedModels, id: \.self) { id in
+                                HStack(spacing: 6) {
+                                    Image(systemName: lmsCLI.loadedModels.contains(id) ? "circle.fill" : "circle")
+                                        .font(.system(size: 7))
+                                        .foregroundStyle(lmsCLI.loadedModels.contains(id) ? .green : .secondary)
+                                    Text(id)
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                    Spacer()
+                                    if !lmsCLI.loadedModels.contains(id) {
+                                        Button("Load") {
+                                            Task { await lmsCLI.loadModel(id) }
+                                        }
+                                        .buttonStyle(.borderless)
+                                        .font(.system(size: 10))
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                    .frame(maxHeight: 100)
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.gray.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    @ViewBuilder
+    private var serverStatusBadge: some View {
+        switch lmsCLI.status {
+        case .unknown:
+            Text("Checking…").font(.caption).foregroundStyle(.secondary)
+        case .stopped:
+            Label("Stopped", systemImage: "circle")
+                .font(.caption).foregroundStyle(.secondary)
+        case .running(let port):
+            Label("Running on :\(port)", systemImage: "circle.fill")
+                .font(.caption).foregroundStyle(.green)
+        case .lmsMissing:
+            Label("lms not installed", systemImage: "exclamationmark.triangle")
+                .font(.caption).foregroundStyle(.orange)
+        }
     }
 
     private var canSave: Bool {
@@ -288,11 +405,19 @@ private struct EndpointEditor: View {
     }
 
     private var modelFieldLabel: String {
-        kind == .ollama ? "Default model (optional)" : "Model"
+        switch kind {
+        case .ollama:           return "Default model (optional)"
+        case .lmstudio:         return "Default model (optional)"
+        case .openAICompatible: return "Model"
+        }
     }
 
     private var modelFieldHint: String {
-        kind == .ollama ? "llama3.2:3b — only used if /api/tags fails" : "lmstudio-community/Llama-3.1-8B-Instruct"
+        switch kind {
+        case .ollama:           return "llama3.2:3b — only used if /api/tags fails"
+        case .lmstudio:         return "qwen3-coder-30b — only used if /api/v0/models fails"
+        case .openAICompatible: return "lmstudio-community/Llama-3.1-8B-Instruct"
+        }
     }
 
     @ViewBuilder
@@ -340,8 +465,12 @@ private struct EndpointEditor: View {
         ))
     }
 
-    private func oppositeKind(_ k: LocalEndpoint.Kind) -> LocalEndpoint.Kind {
-        k == .ollama ? .openAICompatible : .ollama
+    /// Detect "user hasn't customized the URL" so swapping the Kind picker can
+    /// auto-fill the new default. Checks against every kind's default to handle
+    /// the three-way switch (ollama / openAICompatible / lmstudio).
+    private func isOnAnyDefault() -> Bool {
+        let trimmed = baseURL.trimmingCharacters(in: .whitespaces)
+        return LocalEndpoint.Kind.allCases.contains { trimmed == $0.defaultBaseURL }
     }
 
     private func isDefaultBaseURL(for k: LocalEndpoint.Kind) -> Bool {
@@ -370,6 +499,8 @@ private struct EndpointEditor: View {
             result = await testOllama(url: url)
         case .openAICompatible:
             result = await testOpenAI(url: url, token: requiresAuth ? authToken : nil)
+        case .lmstudio:
+            result = await testLMStudio(url: url)
         }
 
         switch result {
@@ -413,6 +544,18 @@ private struct EndpointEditor: View {
         } catch {
             return .failure(error.localizedDescription)
         }
+    }
+
+    private func testLMStudio(url: URL) async -> TestResult {
+        let models = await LMStudioProvider.fetchModels(baseURL: url)
+        if models.isEmpty {
+            return .failure("Server reachable but no models installed")
+        }
+        let loaded = models.filter(\.loaded).count
+        if loaded > 0 {
+            return .ok("\(models.count) installed, \(loaded) loaded")
+        }
+        return .ok("\(models.count) installed, 0 loaded")
     }
 }
 
@@ -697,6 +840,186 @@ private struct MCPSettings: View {
         draftArgs = ""
         saveError = nil
     }
+}
+
+// MARK: - Agent
+
+private struct AgentSettings: View {
+    @AppStorage("loom.agent.maxTurns") private var maxTurns: Int = 30
+    @AppStorage("loom.agent.allowBash") private var allowBash: Bool = false
+    @State private var helperStatus: HelperStatus = .unknown
+    @State private var helperError: String?
+
+    enum HelperStatus { case unknown, installed(URL), missing }
+
+    var body: some View {
+        Form {
+            Section("Agent Loop") {
+                Stepper(value: $maxTurns, in: 3...100, step: 1) {
+                    Text("Max turns per run: \(maxTurns)")
+                }
+                Text("How many tool-call rounds the agent can take before stopping. Lower this if a local model gets stuck looping; raise it for harder multi-file refactors.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Allow run_bash tool", isOn: $allowBash)
+                Text("Lets the agent execute shell commands in the workspace. Off by default. Local code models will sometimes try aggressive cleanup commands. Turn on only when you trust the model and the workspace.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Terminal Helper") {
+                HStack {
+                    helperStatusLabel
+                    Spacer()
+                    Button("Install Helper") {
+                        installHelper()
+                    }
+                    .disabled(installedHelperURL() != nil)
+                    Button("Uninstall") {
+                        uninstallHelper()
+                    }
+                    .disabled(installedHelperURL() == nil)
+                }
+
+                Text("Installs a `loom` command at ~/.local/bin so you can launch agent runs from any terminal: `loom \"fix the failing tests\"`. Add ~/.local/bin to your PATH if it isn't already.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if let helperError {
+                    Text(helperError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+
+            Section("Recommended Local Models") {
+                modelRow("qwen3-coder-30b", note: "Best all-around code model. Strong tool calling.")
+                modelRow("gpt-oss-20b", note: "OpenAI's open weights. Lower RAM than Qwen3-Coder.")
+                modelRow("deepseek-coder-v2", note: "Strong reasoning. Better for tricky refactors.")
+                Text("Pull these from inside LM Studio's Models tab. Loom auto-detects what's installed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { refreshHelperStatus() }
+    }
+
+    @ViewBuilder
+    private var helperStatusLabel: some View {
+        switch helperStatus {
+        case .unknown:
+            Text("Checking…").foregroundStyle(.secondary)
+        case .installed(let url):
+            Label("Installed at \(url.path)", systemImage: "checkmark.seal.fill")
+                .foregroundStyle(.green)
+                .font(.system(size: 11))
+        case .missing:
+            Label("Not installed", systemImage: "minus.circle")
+                .foregroundStyle(.secondary)
+                .font(.system(size: 11))
+        }
+    }
+
+    private func modelRow(_ name: String, note: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "cpu")
+                .foregroundStyle(.purple)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name).font(.system(size: 12, design: .monospaced))
+                Text(note).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+    }
+
+    private func refreshHelperStatus() {
+        if let url = installedHelperURL() {
+            helperStatus = .installed(url)
+        } else {
+            helperStatus = .missing
+        }
+    }
+
+    private func installedHelperURL() -> URL? {
+        let target = helperTargetURL()
+        return FileManager.default.fileExists(atPath: target.path) ? target : nil
+    }
+
+    private func helperTargetURL() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".local/bin/loom")
+    }
+
+    private func installHelper() {
+        helperError = nil
+        let target = helperTargetURL()
+        do {
+            let dir = target.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try Self.helperScriptSource.write(to: target, atomically: true, encoding: .utf8)
+            let attrs: [FileAttributeKey: Any] = [.posixPermissions: NSNumber(value: 0o755)]
+            try FileManager.default.setAttributes(attrs, ofItemAtPath: target.path)
+            refreshHelperStatus()
+        } catch {
+            helperError = error.localizedDescription
+        }
+    }
+
+    private func uninstallHelper() {
+        helperError = nil
+        let target = helperTargetURL()
+        do {
+            try FileManager.default.removeItem(at: target)
+            refreshHelperStatus()
+        } catch {
+            helperError = error.localizedDescription
+        }
+    }
+
+    /// The body of `~/.local/bin/loom`. Posts a `loom://` URL to LaunchServices
+    /// so the running Loom app picks it up via .onOpenURL. Uses python3 for
+    /// URL encoding because it's pre-installed on every macOS the app supports.
+    private static let helperScriptSource: String = """
+    #!/usr/bin/env bash
+    # Loom terminal helper. Triggers an agent run inside the Loom macOS app.
+    # Usage: loom "your prompt here"
+    #        loom --workspace /path/to/project "your prompt"
+    set -e
+
+    workspace="$PWD"
+    prompt=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --workspace)
+                workspace="$2"; shift 2 ;;
+            --agent)
+                agent="$2"; shift 2 ;;
+            -h|--help)
+                echo "Usage: loom [--workspace DIR] [--agent ID] \\"prompt\\""; exit 0 ;;
+            *)
+                if [ -z "$prompt" ]; then prompt="$1"; else prompt="$prompt $1"; fi
+                shift ;;
+        esac
+    done
+
+    if [ -z "$prompt" ] && [ ! -t 0 ]; then
+        prompt="$(cat)"
+    fi
+
+    if [ -z "$prompt" ]; then
+        echo "Usage: loom [--workspace DIR] [--agent ID] \\"prompt\\"" >&2
+        exit 1
+    fi
+
+    enc() { python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$1"; }
+    url="loom://run?prompt=$(enc "$prompt")&workspace=$(enc "$workspace")"
+    [ -n "$agent" ] && url="$url&agent=$(enc "$agent")"
+    /usr/bin/open "$url"
+    """
 }
 
 // MARK: - Advanced

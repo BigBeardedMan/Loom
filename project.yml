@@ -52,6 +52,11 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSHumanReadableCopyright: "© 2026 BigBeardedMan"
+        CFBundleURLTypes:
+          - CFBundleTypeRole: Editor
+            CFBundleURLName: com.chasesims.Loom.url
+            CFBundleURLSchemes:
+              - loom
     entitlements:
       path: Loom/Loom.entitlements
       properties:

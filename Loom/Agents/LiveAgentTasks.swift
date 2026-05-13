@@ -6,28 +6,40 @@ enum AgentSource: String, Codable, Hashable {
     case claude
     case codex
     case gemini
+    case lmstudio
+    case ollama
+    case openAICompatible
 
     var label: String {
         switch self {
-        case .claude: return "Claude Code"
-        case .codex:  return "Codex"
-        case .gemini: return "Gemini"
+        case .claude:           return "Claude Code"
+        case .codex:            return "Codex"
+        case .gemini:           return "Gemini"
+        case .lmstudio:         return "LM Studio"
+        case .ollama:           return "Ollama"
+        case .openAICompatible: return "Local"
         }
     }
 
     var systemImage: String {
         switch self {
-        case .claude: return "sparkles"
-        case .codex:  return "chevron.left.forwardslash.chevron.right"
-        case .gemini: return "diamond"
+        case .claude:           return "sparkles"
+        case .codex:            return "chevron.left.forwardslash.chevron.right"
+        case .gemini:           return "diamond"
+        case .lmstudio:         return "cpu"
+        case .ollama:           return "shippingbox"
+        case .openAICompatible: return "server.rack"
         }
     }
 
     var brandColor: Color {
         switch self {
-        case .claude: return Color(red: 0.95, green: 0.39, blue: 0.18)
-        case .codex:  return Color(red: 0.23, green: 0.86, blue: 0.46)
-        case .gemini: return Color(red: 0.18, green: 0.50, blue: 0.96)
+        case .claude:           return Color(red: 0.95, green: 0.39, blue: 0.18)
+        case .codex:            return Color(red: 0.23, green: 0.86, blue: 0.46)
+        case .gemini:           return Color(red: 0.18, green: 0.50, blue: 0.96)
+        case .lmstudio:         return Color(red: 0.62, green: 0.40, blue: 0.95)
+        case .ollama:           return Color(red: 0.85, green: 0.85, blue: 0.85)
+        case .openAICompatible: return Color(red: 0.55, green: 0.65, blue: 0.75)
         }
     }
 }

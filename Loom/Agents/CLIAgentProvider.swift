@@ -90,7 +90,7 @@ final class CLIAgentProvider {
             return try await sendOneShot(tool: "gemini", arguments: [
                 "-p", prompt
             ], cwd: cwd)
-        case .ollama, .openAICompatible:
+        case .ollama, .openAICompatible, .lmstudio:
             throw ProviderError.unsupportedVendor(vendor.label)
         }
     }

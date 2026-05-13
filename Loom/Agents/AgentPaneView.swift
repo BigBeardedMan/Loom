@@ -35,6 +35,15 @@ struct AgentPaneView: View {
     @State private var error: String?
     @State private var streamTask: Task<Void, Never>?
     @State private var pendingProposals: [ItemProposal]?
+    @State private var orchestrator: AgentOrchestrator?
+    @State private var orchestratorTask: Task<Void, Never>?
+
+    /// Persisted across panes: when on, local-HTTP providers run through
+    /// `AgentOrchestrator` (multi-turn loop, tool calls, task list) instead
+    /// of single-shot streaming. Off by default since plain chat is what
+    /// users expect when they pick a model from the picker.
+    @AppStorage("loom.agent.mode") private var agentMode: Bool = false
+    @AppStorage("loom.agent.allowBash") private var allowBash: Bool = false
 
     private let cwd: URL?
 
@@ -92,6 +101,34 @@ struct AgentPaneView: View {
             inputBar
         }
         .background(Color(red: 0.018, green: 0.022, blue: 0.026))
+        .onReceive(NotificationCenter.default.publisher(for: .loomURLAgentRun)) { note in
+            handleAgentRunNotification(note)
+        }
+    }
+
+    /// Triggered by `loom://run?...` URLs forwarded through `URLSchemeHandler`.
+    /// Switches to the requested agent (if any), turns Agent Mode on for HTTP
+    /// providers, and sends the prompt. Multiple agent panes may exist; the
+    /// notification fires in all of them but `send()` no-ops when already
+    /// busy, so only one will actually start.
+    private func handleAgentRunNotification(_ note: Notification) {
+        guard let info = note.userInfo,
+              let prompt = info["prompt"] as? String,
+              !prompt.isEmpty,
+              !isWaiting else { return }
+
+        if let agentID = info["agent"] as? String,
+           !agentID.isEmpty,
+           registry.agents.contains(where: { $0.id == agentID }) {
+            registry.selectedAgentID = agentID
+        }
+
+        if selectedAgent.vendor.isLocalHTTP {
+            agentMode = true
+        }
+
+        draft = prompt
+        send()
     }
 
     private var header: some View {
@@ -164,7 +201,7 @@ struct AgentPaneView: View {
             return String(cliProvider.sessionID.prefix(8))
         case .codex, .gemini:
             return "stateless"
-        case .ollama, .openAICompatible:
+        case .ollama, .openAICompatible, .lmstudio:
             return ""
         }
     }
@@ -329,6 +366,7 @@ struct AgentPaneView: View {
         switch selectedAgent.vendor {
         case .claude, .codex, .gemini:    return "AGENT"
         case .ollama, .openAICompatible:  return "LOCAL"
+        case .lmstudio:                   return "LM STUDIO"
         }
     }
 
@@ -368,10 +406,29 @@ struct AgentPaneView: View {
 
     private var inputBar: some View {
         HStack(alignment: .bottom, spacing: 8) {
+            if selectedAgent.vendor.isLocalHTTP {
+                Button {
+                    agentMode.toggle()
+                } label: {
+                    Image(systemName: agentMode ? "wand.and.stars" : "wand.and.stars.inverse")
+                        .font(.system(size: 14))
+                        .foregroundStyle(agentMode
+                            ? Color(red: 0.62, green: 0.40, blue: 0.95)
+                            : Color.white.opacity(0.35))
+                }
+                .buttonStyle(.plain)
+                .help(agentMode
+                    ? "Agent Mode on — model can call tools and track tasks"
+                    : "Agent Mode off — single-shot chat")
+                .disabled(isWaiting)
+            }
+
             TextField(
                 "",
                 text: $draft,
-                prompt: Text("Ask the agent…").foregroundColor(.white.opacity(0.4)),
+                prompt: Text(agentMode && selectedAgent.vendor.isLocalHTTP
+                    ? "Tell the agent what to do…"
+                    : "Ask the agent…").foregroundColor(.white.opacity(0.4)),
                 axis: .vertical
             )
             .textFieldStyle(.plain)
@@ -404,6 +461,9 @@ struct AgentPaneView: View {
         cliProvider.cancel()
         streamTask?.cancel()
         streamTask = nil
+        orchestratorTask?.cancel()
+        orchestratorTask = nil
+        orchestrator?.cancel()
         streaming.cancel()
         pendingProposals = nil
         isWaiting = false
@@ -421,10 +481,116 @@ struct AgentPaneView: View {
         isWaiting = true
 
         if selectedAgent.vendor.isLocalHTTP {
-            sendViaLocalHTTP(prompt: prompt)
+            if agentMode {
+                sendViaOrchestrator(prompt: prompt)
+            } else {
+                sendViaLocalHTTP(prompt: prompt)
+            }
         } else {
             sendViaCLI(prompt: prompt)
         }
+    }
+
+    private func sendViaOrchestrator(prompt: String) {
+        guard let endpointID = selectedAgent.endpointID,
+              let endpoint = endpoints.endpoints.first(where: { $0.id == endpointID }),
+              let url = endpoint.resolvedBaseURL,
+              let model = selectedAgent.model else {
+            error = "Local endpoint is no longer configured. Open Settings → Providers."
+            streaming.cancel()
+            isWaiting = false
+            return
+        }
+
+        let provider: LLMProvider
+        let agentSource: AgentSource
+        switch endpoint.kind {
+        case .lmstudio:
+            provider = LMStudioProvider(baseURL: url, model: model)
+            agentSource = .lmstudio
+        case .openAICompatible:
+            // OpenAI-compat providers don't emit tool-use events today, so
+            // Agent Mode falls back to a single-turn loop. Show a soft hint.
+            provider = OpenAICompatibleProvider(baseURL: url, model: model, apiKey: endpoints.authToken(for: endpoint))
+            agentSource = .openAICompatible
+        case .ollama:
+            provider = OllamaProvider(baseURL: url, model: model)
+            agentSource = .ollama
+        }
+
+        let workspaceURL = cwd ?? URL(fileURLWithPath: workspace.folderPath, isDirectory: true)
+        let runner = AgentToolRunner(
+            workspaceRoot: workspace.folderPath.isEmpty ? nil : workspaceURL,
+            allowBash: allowBash
+        )
+        let runtime = AgentOrchestrator(provider: provider, toolRunner: runner, source: agentSource)
+        orchestrator = runtime
+
+        orchestratorTask = Task { @MainActor in
+            await runtime.run(
+                prompt: prompt,
+                system: agentSystemPrompt
+            ) { event in
+                handleOrchestratorEvent(event)
+            }
+            orchestratorTask = nil
+            isWaiting = false
+        }
+    }
+
+    private func handleOrchestratorEvent(_ event: AgentOrchestrator.AgentEvent) {
+        switch event {
+        case .textDelta(let chunk):
+            streaming.append(chunk)
+        case .turnStarted(let index):
+            if index > 1 {
+                streaming.append("\n\n— turn \(index) —\n")
+            }
+        case .turnFinished:
+            break
+        case .taskListUpdated:
+            break
+        case .toolStarted(let name, let arguments):
+            let preview = String(arguments.prefix(120))
+            streaming.append("\n[tool] \(name) \(preview)\n")
+        case .toolFinished(let record):
+            let prefix = record.succeeded ? "[ok]" : "[ERR]"
+            let preview = String(record.result.prefix(400))
+            streaming.append("\(prefix) \(record.name): \(preview)\n")
+        case .completed(let finalText):
+            _ = streaming.finish()
+            commitAssistantMessage(text: finalText.isEmpty ? "(done)" : finalText, toolProposals: nil)
+        case .failed(let message):
+            streaming.cancel()
+            error = message
+        case .cancelled:
+            streaming.cancel()
+        }
+    }
+
+    /// System prompt specialized for agent-mode runs. Reuses the workspace
+    /// context block but adds tool-calling guidance so local code models
+    /// understand when to invoke read_file / edit_file / run_bash and when
+    /// to update the task list.
+    private var agentSystemPrompt: String? {
+        let base = workspaceSystemPrompt ?? ""
+        let agentInstructions = """
+        You are an autonomous coding agent running locally inside Loom.
+
+        Tools available:
+        - read_file(path) — read a file inside the workspace
+        - list_dir(path) — list a directory inside the workspace
+        - edit_file(path, old_string, new_string) — surgical text edit
+        - write_file(path, content) — create or overwrite a file
+        - run_bash(command) — run a shell command (\(allowBash ? "enabled" : "DISABLED — do not call"))
+        - update_tasks(tasks) — replace the visible task list. Use it to plan multi-step work and reflect progress.
+
+        Workflow:
+        1. For non-trivial requests, first call update_tasks with a plan.
+        2. As you work, call update_tasks again to mark tasks in_progress / completed.
+        3. When the user's request is done, answer in plain text with no tool calls. That ends the loop.
+        """
+        return base.isEmpty ? agentInstructions : "\(base)\n\n\(agentInstructions)"
     }
 
     private func sendViaCLI(prompt: String) {
@@ -484,6 +650,9 @@ struct AgentPaneView: View {
             stream = provider.stream(messages: history, system: workspaceSystemPrompt)
         case .openAICompatible:
             let provider = OpenAICompatibleProvider(baseURL: url, model: model, apiKey: token)
+            stream = provider.stream(messages: history, system: workspaceSystemPrompt)
+        case .lmstudio:
+            let provider = LMStudioProvider(baseURL: url, model: model)
             stream = provider.stream(messages: history, system: workspaceSystemPrompt)
         }
 
