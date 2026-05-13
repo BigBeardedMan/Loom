@@ -1,94 +1,178 @@
 #!/usr/bin/env python3
 """
-lmstudio - interactive agent CLI backed by LM Studio's OpenAI-compatible
-local server. Mirrors the agent loop in Loom's AgentOrchestrator with
-read_file, write_file, edit_file, list_dir, run_bash, update_tasks tools.
+lmstudio - interactive agent shell backed by LM Studio's OpenAI-compatible
+local server. Mirrors Loom's in-app AgentOrchestrator (read/write/edit/
+list/bash/update_tasks) and adds:
 
-The shell renders model thinking, tool calls, and the live task list inline
-so the terminal reads like a session log. Tasks are also written to
-~/.loom/tasks/<session-id>/<task-id>.json so Loom's Tasks pane picks them
-up automatically.
+  - Slash commands  (/clear, /model, /bash, /cwd, /cost, /save, /resume,
+                     /system, /sh, /tasks, /yolo, /theme, /help)
+  - @file mentions with tab completion
+  - Permission prompts (y/n/a) for write_file, edit_file, run_bash
+  - Status footer above the boxed input
+  - Auto-loaded project context (CLAUDE.md / AGENTS.md / GUIDE.md / README.md)
+  - Inline unified diff for write_file / edit_file
+  - Persistent session save / resume
+  - Themes (default, mono, cyberpunk, solarized)
+  - Ctrl-R reverse history search
+  - JSON event stream output for scripting (--json)
+  - Subagent dispatch tool (spawn_agent)
+  - MCP server tool discovery (--mcp <stdio command>)
 
-Usage:
-    lmstudio                          # interactive REPL
-    lmstudio "refactor this file"     # one-shot
-    lmstudio --model qwen3-coder "..."
-    lmstudio --allow-bash "..."
-
-Config (env vars override; CLI flags override env):
-    LMSTUDIO_BASE_URL   default http://localhost:1234/v1
-    LMSTUDIO_MODEL      auto-discovered if a single model is loaded
-    LMSTUDIO_BASH       1 to enable run_bash, 0 to disable (default 0)
-    NO_COLOR            disables ANSI styling (per https://no-color.org)
-
-Stdlib only. No pip install required.
+Stdlib only. Tasks are mirrored to ~/.loom/tasks/<session>/<id>.json so
+Loom's Tasks pane picks them up.
 """
 
 import argparse
+import difflib
 import json
 import os
+import re
 import select
 import shutil
+import signal
 import subprocess
 import sys
 import termios
+import threading
+import time
 import urllib.error
 import urllib.request
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-# readline gives us up/down history, Ctrl-A/E line editing, and persistent
-# history across sessions via input(). macOS ships libedit under the
-# readline import name; the basic API used here works on both.
 try:
-    import readline  # noqa: F401  (importing makes input() use it)
+    import readline
     _HAS_READLINE = True
 except ImportError:
     _HAS_READLINE = False
 
+
+# =============================================================================
+# Paths + constants
+# =============================================================================
+
 DEFAULT_BASE_URL = "http://localhost:1234/v1"
 DEFAULT_MAX_TURNS = 30
 TASK_ROOT = Path.home() / ".loom" / "tasks"
+SESSION_ROOT = Path.home() / ".loom" / "sessions"
 HISTORY_FILE = Path.home() / ".config" / "loom" / "lmstudio-history"
-USE_COLOR = sys.stdout.isatty() and "NO_COLOR" not in os.environ
+CONTEXT_FILES = ["CLAUDE.md", "AGENTS.md", "GUIDE.md", "README.md"]
+CONTEXT_CAP_BYTES = 5_000
 
 
-# ---------- ANSI styling ---------------------------------------------------
+# =============================================================================
+# Themes
+# =============================================================================
 
-class C:
-    """ANSI escape codes. All resolve to empty strings when stdout isn't a
-    TTY or NO_COLOR is set, so log redirection stays clean."""
+# A theme is just a mapping of semantic role -> ANSI codes (without the
+# leading ESC[ or trailing m, just the ; -joined numbers). The empty string
+# means "no styling," used by the mono theme and the no-TTY path.
+_BASE_NO_COLOR = {
+    "border": "", "headline": "", "key": "", "value": "", "dim": "",
+    "thinking": "", "tool": "", "ok": "", "err": "",
+    "task_pending": "", "task_progress": "", "task_done": "",
+    "task_cancel": "", "tip": "", "prompt": "", "footer": "",
+    "diff_add": "", "diff_del": "", "warning": "",
+}
 
-    @staticmethod
-    def _w(code):
-        return f"\033[{code}m" if USE_COLOR else ""
+_THEMES = {
+    "default": {
+        "border":        "96",                 # bright cyan
+        "headline":      "1;96",               # bold bright cyan
+        "key":           "1",                  # bold
+        "value":         "96",                 # bright cyan
+        "dim":           "2",
+        "thinking":      "2;3;33",             # dim italic yellow
+        "tool":          "96",                 # bright cyan
+        "ok":            "92",                 # bright green
+        "err":           "31",                 # red
+        "task_pending":  "90",                 # gray
+        "task_progress": "1;96",
+        "task_done":     "2;92",
+        "task_cancel":   "90",
+        "tip":           "2;95",
+        "prompt":        "1;96",
+        "footer":        "2;36",
+        "diff_add":      "32",
+        "diff_del":      "31",
+        "warning":       "1;33",
+    },
+    "mono": _BASE_NO_COLOR,
+    "cyberpunk": {
+        "border":        "95",                 # bright magenta
+        "headline":      "1;95",
+        "key":           "1;95",
+        "value":         "96",
+        "dim":           "2;94",
+        "thinking":      "2;3;93",
+        "tool":          "93",                 # yellow
+        "ok":            "1;92",
+        "err":           "1;91",
+        "task_pending":  "94",
+        "task_progress": "1;93",
+        "task_done":     "2;92",
+        "task_cancel":   "94",
+        "tip":           "95",
+        "prompt":        "1;95",
+        "footer":        "2;94",
+        "diff_add":      "92",
+        "diff_del":      "91",
+        "warning":       "1;93",
+    },
+    "solarized": {
+        "border":        "33",                 # solarized base yellow
+        "headline":      "1;33",
+        "key":           "1;37",
+        "value":         "36",
+        "dim":           "2;37",
+        "thinking":      "2;3;33",
+        "tool":          "36",
+        "ok":            "32",
+        "err":           "31",
+        "task_pending":  "37",
+        "task_progress": "1;36",
+        "task_done":     "2;32",
+        "task_cancel":   "37",
+        "tip":           "35",
+        "prompt":        "1;36",
+        "footer":        "2;33",
+        "diff_add":      "32",
+        "diff_del":      "31",
+        "warning":       "1;33",
+    },
+}
 
-    RESET = property(lambda self: C._w("0"))
+_active_theme = _THEMES["default"]
+_use_color = True
 
 
-def style(s, *codes):
-    if not USE_COLOR:
+def set_theme(name):
+    global _active_theme
+    _active_theme = _THEMES.get(name, _THEMES["default"])
+
+
+def configure_styling(*, use_color):
+    """Disable ANSI codes when stdout isn't a TTY, NO_COLOR is set, or
+    --theme mono is selected. Call once at startup before any output."""
+    global _use_color
+    _use_color = use_color
+
+
+def style(s, key):
+    """Wrap s in the ANSI codes for the named theme role. No-op when
+    coloring is off."""
+    if not _use_color or not key:
         return s
-    return "\033[" + ";".join(codes) + "m" + s + "\033[0m"
+    code = _active_theme.get(key, "")
+    if not code:
+        return s
+    return f"\033[{code}m{s}\033[0m"
 
 
-BOLD = "1"
-DIM = "2"
-ITALIC = "3"
-CYAN = "36"
-BCYAN = "96"
-GREEN = "32"
-BGREEN = "92"
-YELLOW = "33"
-RED = "31"
-MAGENTA = "35"
-BMAGENTA = "95"
-BLUE = "94"
-GRAY = "90"
-
-
-# ---------- Glyphs ---------------------------------------------------------
+# =============================================================================
+# Glyphs
+# =============================================================================
 
 GLYPH_SESSION = "✦"
 GLYPH_THINK = "◇"
@@ -96,168 +180,468 @@ GLYPH_TOOL = "⟳"
 GLYPH_OK = "✓"
 GLYPH_ERR = "✗"
 GLYPH_PROMPT = "❯"
-GLYPH_TASK_PENDING = "○"
-GLYPH_TASK_PROGRESS = "▶"
-GLYPH_TASK_DONE = "✓"
-GLYPH_TASK_CANCEL = "⊘"
+GLYPH_WARN = "⚠"
+GLYPH_SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 TASK_GLYPHS = {
-    "pending": (GLYPH_TASK_PENDING, GRAY),
-    "in_progress": (GLYPH_TASK_PROGRESS, BCYAN),
-    "completed": (GLYPH_TASK_DONE, BGREEN),
-    "cancelled": (GLYPH_TASK_CANCEL, GRAY),
+    "pending":     ("○", "task_pending"),
+    "in_progress": ("▶", "task_progress"),
+    "completed":   ("✓", "task_done"),
+    "cancelled":   ("⊘", "task_cancel"),
 }
 
 
-def term_width(default=80):
-    return shutil.get_terminal_size((default, 24)).columns
+# =============================================================================
+# Layout helpers
+# =============================================================================
+
+def term_width():
+    return shutil.get_terminal_size((80, 24)).columns
 
 
-def hr(char="─"):
-    return char * max(20, min(term_width(), 100))
+def box_width():
+    """Box width that always fits in the current terminal, recomputed each
+    call so resize-between-turns just works on the next draw. Mid-input
+    resize still leaves the in-flight box mis-sized; SIGWINCH redraws the
+    prompt area for the next turn."""
+    return max(40, min(term_width() - 4, 92))
 
 
-# ---------- Banner ---------------------------------------------------------
+def _visible_len(s):
+    """Length of s minus any ANSI escape sequences. Used for padding rows
+    that mix styled and unstyled fragments."""
+    return len(re.sub(r"\033\[[0-9;]*m", "", s))
+
+
+# =============================================================================
+# Banner / tips / boxed prompt
+# =============================================================================
 
 TIPS = [
-    "↑ / ↓ to walk through previous prompts (history persisted in ~/.config/loom/lmstudio-history)",
-    "Esc during a running turn stops it; Ctrl-D or /quit to exit",
-    "pass --allow-bash to enable the run_bash tool",
+    "↑ / ↓ walk through previous prompts · Ctrl-R reverse-search history",
+    "Esc during a running turn stops it · Ctrl-D or /quit to exit",
+    "type @path/to/file to inline a file's contents (Tab completes)",
+    "slash commands: /help, /clear, /model, /bash, /cwd, /save, /resume, /cost",
     "task list flows into Loom's Tasks pane via ~/.loom/tasks/",
-    "set LMSTUDIO_MODEL to pin a specific model across sessions",
-    "thinking shown in dim italic when the model emits <think>...</think>",
-    "coder-tuned 7B+ models (Qwen2.5-Coder, DeepSeek-Coder-V2) hold tool-calling best",
+    "themes: --theme default | mono | cyberpunk | solarized",
+    "non-interactive: --json streams structured events for scripting",
 ]
 
 
-def draw_prompt_box():
-    """Top + bottom border for the input area, drawn around input() so the
-    prompt feels like a contained text field (a la Claude Code). We can't
-    add a live right border without raw-mode line editing, so the result is
-    a U-shape: full top and bottom rules, side bars only on the prompt row."""
-    width = max(40, min(term_width() - 2, 96))
+def draw_banner(model, workspace, allow_bash, session_id, theme_name,
+                context_files):
+    width = box_width()
     bar = "─" * (width - 2)
-    return (
-        style("╭" + bar + "╮", BCYAN),
-        style("│ ", BCYAN) + style(GLYPH_PROMPT + " ", BCYAN, BOLD),
-        style("╰" + bar + "╯", BCYAN),
+    side = style("│", "border")
+    print(style("╭" + bar + "╮", "border"))
+
+    headline_inner = (
+        f" {style(GLYPH_SESSION, 'border')} "
+        f"{style('lmstudio', 'headline')}  "
+        f"{style('local LM Studio agent', 'dim')}"
     )
+    headline_visible = _visible_len(headline_inner)
+    pad = max(0, width - 2 - headline_visible)
+    print(f"{side}{headline_inner}{' ' * pad}{side}")
+    print(f"{side}{' ' * (width - 2)}{side}")
 
-
-def draw_banner(model, workspace, allow_bash, session_id):
-    width = max(60, min(term_width() - 2, 96))
-    bar = "─" * (width - 2)
-    top = style("╭" + bar + "╮", BCYAN)
-    bot = style("╰" + bar + "╯", BCYAN)
-    side = style("│", BCYAN)
-
-    def row(label, value, value_style=None):
+    def row(label, value, value_key="value"):
+        # Inner content: " <label-10> <value>". Outer side bars consume
+        # 2 of the `width` columns; the inner area is (width - 2) cols.
         padded_label = label.ljust(10)
-        if value_style:
-            value_styled = style(value, *value_style)
-        else:
-            value_styled = value
-        raw = f" {padded_label}{value} "
-        pad = width - len(raw)
-        if pad < 0:
-            pad = 0
-        return f"{side} {style(padded_label, BOLD)}{value_styled}{' ' * pad}{side}"
+        styled_label = style(padded_label, "key")
+        styled_value = style(value, value_key) if value_key else value
+        inner = f" {styled_label}{styled_value}"
+        pad = max(0, width - 2 - _visible_len(inner))
+        return f"{side}{inner}{' ' * pad}{side}"
 
-    headline = f" {style(GLYPH_SESSION, BCYAN)} {style('lmstudio', BOLD, BCYAN)}  {style('local LM Studio agent', DIM)}"
-    raw_headline = f" {GLYPH_SESSION} lmstudio  local LM Studio agent"
-    headline_pad = width - len(raw_headline) - 2
-    headline_full = f"{side}{headline}{' ' * max(headline_pad, 0)}{side}"
-
-    blank = side + " " * (width - 2) + side
-    bash_label = "on" if allow_bash else "off"
-    bash_style = [BGREEN] if allow_bash else [GRAY]
-
-    lines = [
-        top,
-        headline_full,
-        blank,
-        row("workspace", str(workspace)),
-        row("model", model, [BCYAN]),
-        row("bash", bash_label, bash_style),
-        row("session", session_id, [DIM]),
-        bot,
-    ]
-    print("\n".join(lines))
+    print(row("workspace", str(workspace)))
+    print(row("model", model, "value"))
+    print(row("bash", "on" if allow_bash else "off",
+              "ok" if allow_bash else "task_pending"))
+    print(row("theme", theme_name, "value"))
+    if context_files:
+        print(row("context", ", ".join(context_files), "dim"))
+    print(row("session", session_id, "dim"))
+    print(style("╰" + bar + "╯", "border"))
 
 
 def draw_tips():
     print()
-    print(style(" Tips", BOLD, MAGENTA))
+    print(style(" Tips", "tip"))
     for tip in TIPS:
-        print(f"   {style('•', MAGENTA)} {style(tip, DIM)}")
+        bullet = style("•", "tip")
+        print(f"   {bullet} {style(tip, 'dim')}")
     print()
 
-
-# ---------- Task list rendering --------------------------------------------
 
 def draw_task_list(tasks):
     if not tasks:
         return
-    width = max(40, min(term_width() - 2, 96))
+    width = box_width()
     title = f" Tasks ({len(tasks)}) "
-    bar = "─" * (width - 2 - len(title))
-    print(style(f"┌─{title}{bar}┐", MAGENTA))
+    bar = "─" * max(0, width - 2 - len(title))
+    print(style(f"┌─{title}{bar}┐", "border"))
     for i, t in enumerate(tasks, 1):
-        glyph, color = TASK_GLYPHS.get(t["status"], (GLYPH_TASK_PENDING, GRAY))
-        subject = t["subject"]
-        active = t.get("activeForm") or subject
-        display = active if t["status"] == "in_progress" else subject
-        max_text = width - 8
-        if len(display) > max_text:
-            display = display[: max_text - 1] + "…"
-        index = style(f"{i:>2}", DIM)
-        marker = style(glyph, color)
-        if t["status"] == "completed":
-            line = f"│ {index} {marker} {style(display, DIM)}"
-        elif t["status"] == "in_progress":
-            line = f"│ {index} {marker} {style(display, BOLD)}"
+        glyph, role = TASK_GLYPHS.get(t["status"], TASK_GLYPHS["pending"])
+        active = t.get("activeForm") or t["subject"]
+        text = active if t["status"] == "in_progress" else t["subject"]
+        max_text = width - 10
+        if len(text) > max_text:
+            text = text[: max_text - 1] + "…"
+        index = style(f"{i:>2}", "dim")
+        marker = style(glyph, role)
+        body_text = (style(text, "dim") if t["status"] == "completed"
+                     else (style(text, "key") if t["status"] == "in_progress"
+                           else text))
+        line = f"│ {index} {marker} {body_text}"
+        pad = max(0, width - 1 - _visible_len(line))
+        print(line + " " * pad + style("│", "border"))
+    print(style("└" + "─" * (width - 2) + "┘", "border"))
+
+
+def draw_diff(path, old, new):
+    """Inline unified diff for a single file change. Capped at 12 visible
+    diff lines plus a "… N more" footer when longer."""
+    if old == new:
+        return
+    diff = list(difflib.unified_diff(
+        old.splitlines(), new.splitlines(),
+        fromfile=str(path), tofile=str(path),
+        lineterm="", n=2,
+    ))
+    body = [line for line in diff if line.startswith(("+", "-", " "))
+            and not line.startswith(("+++", "---"))]
+    if not body:
+        return
+    cap = 12
+    shown = body[:cap]
+    remaining = len(body) - cap
+    for line in shown:
+        if line.startswith("+"):
+            print("    " + style(line, "diff_add"))
+        elif line.startswith("-"):
+            print("    " + style(line, "diff_del"))
         else:
-            line = f"│ {index} {marker} {display}"
-        # account for ANSI escape lengths when padding
-        visible_len = len(f"  {i:>2} {glyph} {display}") + 1
-        pad = width - visible_len - 1
-        line += " " * max(pad, 0) + style("│", MAGENTA)
-        print(line)
-    print(style("└" + "─" * (width - 2) + "┘", MAGENTA))
+            print("    " + style(line, "dim"))
+    if remaining > 0:
+        print("    " + style(f"… {remaining} more line{'s' if remaining != 1 else ''}",
+                              "dim"))
 
 
-# ---------- System prompt --------------------------------------------------
-
-SYSTEM_PROMPT = """You are an interactive coding agent running in a terminal,
-backed by a local LM Studio model. You have these tools:
-
-- read_file(path) - read a UTF-8 file in the current workspace
-- write_file(path, content) - create or overwrite a file
-- edit_file(path, old_string, new_string) - surgical text edit
-- list_dir(path) - list directory entries
-- run_bash(command, timeout_seconds?) - shell command, when enabled
-- update_tasks(tasks) - replace the visible task list. Each task has
-  subject, activeForm (present-continuous), and status (pending,
-  in_progress, completed, cancelled).
-
-Workflow:
-1. For non-trivial requests, call update_tasks first with a plan.
-2. Flip each task to in_progress before working on it, and to completed
-   immediately when done. Keep at most one task in_progress at a time.
-3. When the work is done, answer in plain text (no tool calls). That
-   ends the loop and any leftover tasks are marked completed.
-
-Paths must be relative to the current working directory. Stay inside it;
-the runner enforces that boundary.
-
-If you want to reason through something before answering or calling a
-tool, wrap your reasoning in <think>...</think>. The shell renders that
-content dimmed so the user can follow without it cluttering output."""
+def draw_prompt_box():
+    width = box_width()
+    bar = "─" * (width - 2)
+    top = style("╭" + bar + "╮", "border")
+    bottom = style("╰" + bar + "╯", "border")
+    lead = style("│ ", "border") + style(GLYPH_PROMPT + " ", "prompt")
+    return top, lead, bottom
 
 
-# ---------- Tool schemas ---------------------------------------------------
+def draw_status_footer(state):
+    """One-line status drawn above the prompt box. Approximate token count
+    (4 chars ≈ 1 token), wall-clock elapsed, model id, cwd, bash flag."""
+    elapsed = int(time.time() - state.started_at)
+    if elapsed < 60:
+        elapsed_s = f"{elapsed}s"
+    elif elapsed < 3600:
+        elapsed_s = f"{elapsed // 60}m{elapsed % 60:02d}s"
+    else:
+        elapsed_s = f"{elapsed // 3600}h{(elapsed % 3600) // 60:02d}m"
+    cwd_s = _shorten_path(state.workspace)
+    tokens_s = f"{state.approx_tokens:,} tok"
+    bash_s = "bash on" if state.allow_bash else "bash off"
+    parts = [state.model, cwd_s, tokens_s, elapsed_s, bash_s]
+    if state.context_files:
+        parts.insert(2, f"context: {len(state.context_files)}")
+    line = " " + style(" · ".join(parts), "footer")
+    print(line)
 
-TOOLS = [
+
+def _shorten_path(p):
+    p = str(p)
+    home = str(Path.home())
+    if p.startswith(home):
+        p = "~" + p[len(home):]
+    if len(p) > 40:
+        parts = p.split("/")
+        if len(parts) > 4:
+            p = "/".join(parts[:2]) + "/…/" + "/".join(parts[-2:])
+    return p
+
+
+# =============================================================================
+# Esc-to-interrupt
+# =============================================================================
+
+class EscInterrupt(Exception):
+    """Raised when the user hits Esc during a running turn."""
+
+
+class EscWatcher:
+    """Puts stdin into cbreak for the lifetime of a `with` block so Esc
+    can be polled non-blockingly between SSE chunks. Stays a no-op when
+    stdin isn't a TTY so the script is still scriptable."""
+
+    def __init__(self):
+        self.enabled = sys.stdin.isatty()
+        self.fd = None
+        self.old = None
+
+    def __enter__(self):
+        if not self.enabled:
+            return self
+        try:
+            self.fd = sys.stdin.fileno()
+            self.old = termios.tcgetattr(self.fd)
+            new = list(self.old)
+            new[3] = new[3] & ~(termios.ICANON | termios.ECHO)
+            termios.tcsetattr(self.fd, termios.TCSANOW, new)
+        except (termios.error, OSError):
+            self.enabled = False
+            self.old = None
+        return self
+
+    def __exit__(self, *args):
+        if self.old is None:
+            return
+        try:
+            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old)
+            termios.tcflush(self.fd, termios.TCIFLUSH)
+        except (termios.error, OSError):
+            pass
+
+    def check(self):
+        if not self.enabled:
+            return False
+        saw_esc = False
+        try:
+            while True:
+                ready, _, _ = select.select([self.fd], [], [], 0)
+                if not ready:
+                    break
+                try:
+                    ch = os.read(self.fd, 64)
+                except (OSError, BlockingIOError):
+                    break
+                if not ch:
+                    break
+                if b"\x1b" in ch:
+                    saw_esc = True
+        except (OSError, ValueError):
+            return saw_esc
+        return saw_esc
+
+
+# =============================================================================
+# Spinner
+# =============================================================================
+
+class Spinner:
+    """Background thread that animates a Braille spinner with a status
+    label until `stop()` is called or the first content delta arrives.
+    Renders inline above the assistant's narration."""
+
+    def __init__(self, label="thinking"):
+        self.label = label
+        self._stop = threading.Event()
+        self._thread = None
+        self._cleared = threading.Event()
+
+    def __enter__(self):
+        if not sys.stdout.isatty():
+            return self
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *args):
+        self.stop()
+
+    def _run(self):
+        idx = 0
+        sys.stdout.write("  ")
+        while not self._stop.is_set():
+            glyph = GLYPH_SPINNER[idx % len(GLYPH_SPINNER)]
+            sys.stdout.write("\r  " + style(glyph, "tool")
+                             + " " + style(self.label + "…", "dim"))
+            sys.stdout.flush()
+            idx += 1
+            if self._stop.wait(0.08):
+                break
+        # Clear the spinner line so the streamed content starts clean.
+        sys.stdout.write("\r" + " " * 40 + "\r")
+        sys.stdout.flush()
+        self._cleared.set()
+
+    def stop(self):
+        if not self._thread:
+            return
+        self._stop.set()
+        self._cleared.wait(timeout=0.3)
+        self._thread = None
+
+
+# =============================================================================
+# Permission prompts
+# =============================================================================
+
+DANGEROUS_TOOLS = {"run_bash", "write_file", "edit_file"}
+
+
+class PermissionManager:
+    """Asks the user before letting the agent run dangerous tools. Per-
+    session allowlist; persisted only in memory. `--yolo` (or
+    LMSTUDIO_YOLO=1, or `/yolo on`) disables prompts entirely."""
+
+    def __init__(self, yolo=False):
+        self.yolo = yolo
+        self.allowed_forever = set()
+
+    def gate(self, tool_name, args):
+        if self.yolo:
+            return True
+        if tool_name not in DANGEROUS_TOOLS:
+            return True
+        if tool_name in self.allowed_forever:
+            return True
+        # Render a one-line preview of what's about to happen.
+        summary = self._summarize(tool_name, args)
+        print()
+        print(f"  {style(GLYPH_WARN, 'warning')} {style('Allow', 'warning')} "
+              f"{style(tool_name, 'key')} {summary}?")
+        print(f"  {style('[y] yes once   [n] no   [a] yes (always this session)', 'dim')}")
+        try:
+            answer = input(style("  → ", "prompt")).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return False
+        if answer == "a":
+            self.allowed_forever.add(tool_name)
+            return True
+        if answer == "y":
+            return True
+        return False
+
+    @staticmethod
+    def _summarize(tool, args):
+        if tool == "run_bash":
+            cmd = args.get("command", "")
+            return style(cmd[:80] + ("…" if len(cmd) > 80 else ""), "value")
+        if tool in ("write_file", "edit_file"):
+            return style(args.get("path", "?"), "value")
+        return ""
+
+
+# =============================================================================
+# Workspace-bounded path resolution
+# =============================================================================
+
+def resolve_in_workspace(workspace: Path, rel: str) -> Path:
+    target = (workspace / rel).resolve()
+    root = workspace.resolve()
+    if target != root and root not in target.parents:
+        raise ValueError(f"path is outside the workspace: {rel}")
+    return target
+
+
+# =============================================================================
+# Built-in tool implementations
+# =============================================================================
+
+def tool_read_file(state, args):
+    path = resolve_in_workspace(state.workspace, args["path"])
+    if not path.is_file():
+        raise FileNotFoundError(f"not found: {args['path']}")
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if len(text) > 32000:
+        return text[:32000] + "\n\n...(truncated at 32000 chars)"
+    return text
+
+
+def tool_write_file(state, args):
+    path = resolve_in_workspace(state.workspace, args["path"])
+    old = path.read_text(encoding="utf-8") if path.is_file() else ""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(args["content"], encoding="utf-8")
+    state.last_diff = (args["path"], old, args["content"])
+    return f"Wrote {len(args['content'])} bytes to {args['path']}"
+
+
+def tool_edit_file(state, args):
+    path = resolve_in_workspace(state.workspace, args["path"])
+    if not path.is_file():
+        raise FileNotFoundError(f"not found: {args['path']}")
+    text = path.read_text(encoding="utf-8")
+    if args["old_string"] not in text:
+        raise ValueError("old_string not found in file")
+    new_text = text.replace(args["old_string"], args["new_string"], 1)
+    path.write_text(new_text, encoding="utf-8")
+    state.last_diff = (args["path"], text, new_text)
+    return f"Replaced 1 occurrence in {args['path']}"
+
+
+def tool_list_dir(state, args):
+    path = resolve_in_workspace(state.workspace, args.get("path", ""))
+    if not path.is_dir():
+        raise NotADirectoryError(f"not a directory: {args.get('path', '')}")
+    return "\n".join(sorted(p.name for p in path.iterdir()))
+
+
+def tool_run_bash(state, args):
+    command = args["command"]
+    timeout = max(1, min(int(args.get("timeout_seconds", 30)), 300))
+    proc = subprocess.run(
+        ["/bin/zsh", "-lic", command],
+        cwd=str(state.workspace),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    header = f"$ {command}\n[exit {proc.returncode}]\n"
+    body = proc.stdout + proc.stderr
+    if len(body) > 16000:
+        body = body[:16000] + "\n...(truncated)"
+    return header + body
+
+
+def tool_spawn_agent(state, args):
+    """Dispatches a focused subprompt to a fresh `lmstudio` subprocess with
+    its own transcript and a custom system message. Returns the child's
+    final assistant message. Useful for delegating expensive subtasks
+    (research, test-writing) without polluting the parent context."""
+    role = args.get("role", "subagent")
+    prompt = args["prompt"]
+    system = args.get("system", f"You are a focused {role} subagent. "
+                                "Answer briefly with the final result.")
+    cmd = [
+        sys.argv[0], "--no-banner", "--json",
+        "--workspace", str(state.workspace),
+        "--base-url", state.base_url, "--model", state.model,
+        "--system", system,
+    ]
+    if state.allow_bash:
+        cmd.append("--allow-bash")
+    if state.yolo:
+        cmd.append("--yolo")
+    cmd.append(prompt)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    final = ""
+    for line in proc.stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") == "completed":
+            final = event.get("text") or final
+    return final or proc.stdout or "(subagent returned no output)"
+
+
+# =============================================================================
+# Tool registry
+# =============================================================================
+
+BUILTIN_TOOL_SCHEMAS = [
     {"type": "function", "function": {"name": "read_file",
         "description": "Read a UTF-8 text file inside the current workspace.",
         "parameters": {"type": "object", "properties": {
@@ -292,83 +676,35 @@ TOOLS = [
                 "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "cancelled"]}},
                 "required": ["subject", "status"]}}},
             "required": ["tasks"]}}},
+    {"type": "function", "function": {"name": "spawn_agent",
+        "description": "Dispatch a subagent to handle a focused subtask. Returns its final answer.",
+        "parameters": {"type": "object", "properties": {
+            "prompt": {"type": "string"},
+            "role": {"type": "string"},
+            "system": {"type": "string"}},
+            "required": ["prompt"]}}},
 ]
 
 
-# ---------- Workspace-bounded path resolution -----------------------------
-
-def resolve_in_workspace(workspace: Path, rel: str) -> Path:
-    target = (workspace / rel).resolve()
-    root = workspace.resolve()
-    if target != root and root not in target.parents:
-        raise ValueError(f"path is outside the workspace: {rel}")
-    return target
-
-
-# ---------- Tool implementations ------------------------------------------
-
-def tool_read_file(workspace, args):
-    path = resolve_in_workspace(workspace, args["path"])
-    if not path.is_file():
-        raise FileNotFoundError(f"not found: {args['path']}")
-    text = path.read_text(encoding="utf-8", errors="replace")
-    if len(text) > 32000:
-        return text[:32000] + "\n\n...(truncated at 32000 chars)"
-    return text
+BUILTIN_TOOL_FUNCS = {
+    "read_file": tool_read_file,
+    "write_file": tool_write_file,
+    "edit_file": tool_edit_file,
+    "list_dir": tool_list_dir,
+    "run_bash": tool_run_bash,
+    "spawn_agent": tool_spawn_agent,
+}
 
 
-def tool_write_file(workspace, args):
-    path = resolve_in_workspace(workspace, args["path"])
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(args["content"], encoding="utf-8")
-    return f"Wrote {len(args['content'])} bytes to {args['path']}"
+# =============================================================================
+# Task list persistence  (-> Loom Tasks pane)
+# =============================================================================
 
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
-def tool_edit_file(workspace, args):
-    path = resolve_in_workspace(workspace, args["path"])
-    if not path.is_file():
-        raise FileNotFoundError(f"not found: {args['path']}")
-    text = path.read_text(encoding="utf-8")
-    if args["old_string"] not in text:
-        raise ValueError("old_string not found in file")
-    new_text = text.replace(args["old_string"], args["new_string"], 1)
-    path.write_text(new_text, encoding="utf-8")
-    return f"Replaced 1 occurrence in {args['path']}"
-
-
-def tool_list_dir(workspace, args):
-    path = resolve_in_workspace(workspace, args.get("path", ""))
-    if not path.is_dir():
-        raise NotADirectoryError(f"not a directory: {args.get('path', '')}")
-    return "\n".join(sorted(p.name for p in path.iterdir()))
-
-
-def tool_run_bash(workspace, args, allow_bash):
-    if not allow_bash:
-        raise PermissionError("run_bash disabled. Pass --allow-bash to enable.")
-    command = args["command"]
-    timeout = max(1, min(int(args.get("timeout_seconds", 30)), 300))
-    proc = subprocess.run(
-        ["/bin/zsh", "-lic", command],
-        cwd=str(workspace),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
-    header = f"$ {command}\n[exit {proc.returncode}]\n"
-    body = proc.stdout + proc.stderr
-    if len(body) > 16000:
-        body = body[:16000] + "\n...(truncated)"
-    return header + body
-
-
-# ---------- Task list persistence -----------------------------------------
 
 class TaskSink:
-    """Writes one JSON file per task under ~/.loom/tasks/<session>/. Schema
-    matches Claude Code's TodoWrite output so LiveAgentTasksService picks
-    them up with the same decoder."""
-
     def __init__(self, session_id):
         self.session_id = session_id
         self.dir = TASK_ROOT / session_id
@@ -408,11 +744,292 @@ class TaskSink:
                     t["status"] = "completed"
 
 
-def _now_iso():
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+# =============================================================================
+# @file mention expansion + tab completion
+# =============================================================================
+
+_MENTION_RE = re.compile(r"@([^\s\"'`<>]+)")
 
 
-# ---------- Discovery / config --------------------------------------------
+def expand_mentions(text, workspace):
+    """Resolve @path tokens by inlining file contents as a tagged block at
+    the end of the user message. Bad paths are left as plain text."""
+    matches = list(_MENTION_RE.finditer(text))
+    if not matches:
+        return text
+    blocks = []
+    for m in matches:
+        rel = m.group(1)
+        try:
+            path = resolve_in_workspace(workspace, rel)
+        except ValueError:
+            continue
+        if not path.is_file():
+            continue
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if len(content) > 32000:
+            content = content[:32000] + "\n…(truncated)"
+        blocks.append(f"<file path=\"{rel}\">\n{content}\n</file>")
+    if not blocks:
+        return text
+    return text + "\n\n" + "\n\n".join(blocks)
+
+
+def install_completer(workspace, slash_commands):
+    """Wire readline tab completion for @paths and /commands."""
+    if not _HAS_READLINE:
+        return
+
+    def completer(text, state_idx):
+        buf = readline.get_line_buffer()
+        begin = readline.get_begidx()
+        token = buf[begin:readline.get_endidx()]
+        candidates = []
+        if token.startswith("@"):
+            prefix = token[1:]
+            base = workspace
+            sub = ""
+            if "/" in prefix:
+                sub, _, prefix = prefix.rpartition("/")
+                base = (workspace / sub).resolve()
+                if not base.is_dir() or workspace.resolve() not in (base, *base.parents):
+                    return None
+            try:
+                entries = sorted(base.iterdir(),
+                                 key=lambda p: (not p.is_dir(), p.name))
+            except OSError:
+                return None
+            for entry in entries:
+                if entry.name.startswith("."):
+                    continue
+                if entry.name.startswith(prefix):
+                    rel = entry.name + ("/" if entry.is_dir() else "")
+                    full = f"@{sub}/{rel}" if sub else f"@{rel}"
+                    candidates.append(full)
+        elif token.startswith("/"):
+            for cmd in slash_commands:
+                if cmd.startswith(token):
+                    candidates.append(cmd + " ")
+        try:
+            return candidates[state_idx]
+        except IndexError:
+            return None
+
+    try:
+        readline.set_completer(completer)
+        readline.set_completer_delims(" \t\n")
+        # macOS ships libedit; binding differs from GNU readline.
+        if "libedit" in readline.__doc__ or "":
+            readline.parse_and_bind("bind ^I rl_complete")
+        readline.parse_and_bind("tab: complete")
+        readline.parse_and_bind('"\\C-r": reverse-search-history')
+    except Exception:
+        pass
+
+
+# =============================================================================
+# Project context loader
+# =============================================================================
+
+def load_project_context(workspace):
+    """Read CLAUDE.md / AGENTS.md / GUIDE.md / README.md (priority order)
+    from the workspace, concatenate them up to CONTEXT_CAP_BYTES, and
+    return (text, file_list). Falls back to ("", []) when nothing exists."""
+    parts = []
+    used = []
+    remaining = CONTEXT_CAP_BYTES
+    for name in CONTEXT_FILES:
+        path = workspace / name
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            continue
+        if not text:
+            continue
+        slice_ = text[:remaining]
+        parts.append(f"## {name}\n{slice_}")
+        used.append(name)
+        remaining -= len(slice_)
+        if remaining <= 0:
+            break
+    if not parts:
+        return "", []
+    return "# Project Context\n\n" + "\n\n".join(parts), used
+
+
+# =============================================================================
+# Session save / load
+# =============================================================================
+
+def save_session(state, name=None):
+    SESSION_ROOT.mkdir(parents=True, exist_ok=True)
+    if not name:
+        name = datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = SESSION_ROOT / f"{name}.json"
+    payload = {
+        "saved_at": _now_iso(),
+        "model": state.model,
+        "workspace": str(state.workspace),
+        "session_id": state.session_id,
+        "transcript": state.transcript,
+        "tasks": state.sink.current,
+        "allow_bash": state.allow_bash,
+    }
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return path
+
+
+def load_session(name):
+    if not name or name == "latest":
+        candidates = sorted(SESSION_ROOT.glob("*.json"),
+                            key=lambda p: p.stat().st_mtime, reverse=True)
+        if not candidates:
+            raise FileNotFoundError("no saved sessions in ~/.loom/sessions/")
+        path = candidates[0]
+    else:
+        path = SESSION_ROOT / f"{name}.json"
+        if not path.is_file():
+            raise FileNotFoundError(f"no such session: {name}")
+    return json.loads(path.read_text(encoding="utf-8")), path.stem
+
+
+def list_sessions():
+    SESSION_ROOT.mkdir(parents=True, exist_ok=True)
+    return sorted(SESSION_ROOT.glob("*.json"),
+                  key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+# =============================================================================
+# MCP client (stdio JSON-RPC, minimal viable)
+# =============================================================================
+
+class MCPClient:
+    """Minimal Model Context Protocol client. Spawns the server as a
+    subprocess, runs the `initialize` + `tools/list` handshake, and routes
+    `tools/call` for any tool name the server advertises.
+
+    This is intentionally bare: no resources, prompts, sampling, or
+    notification handling. Enough to expose third-party MCP tools to the
+    agent loop. Pass `--mcp "/path/to/server arg1 arg2"` once per server."""
+
+    def __init__(self, command_line):
+        self.command_line = command_line
+        self.proc = None
+        self.tools = []
+        self.next_id = 1
+        self._stdout_lock = threading.Lock()
+
+    def start(self):
+        try:
+            self.proc = subprocess.Popen(
+                self.command_line,
+                shell=isinstance(self.command_line, str),
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=False, bufsize=0,
+            )
+        except OSError as e:
+            raise RuntimeError(f"failed to launch MCP server '{self.command_line}': {e}")
+        # Handshake
+        self._send({"jsonrpc": "2.0", "id": self._id(), "method": "initialize",
+                    "params": {"protocolVersion": "2024-11-05",
+                               "capabilities": {}, "clientInfo": {
+                                   "name": "lmstudio", "version": "1.0"}}})
+        self._recv()  # initialize response (ignored)
+        self._send({"jsonrpc": "2.0", "method": "notifications/initialized",
+                    "params": {}})
+        # Tool discovery
+        self._send({"jsonrpc": "2.0", "id": self._id(),
+                    "method": "tools/list", "params": {}})
+        resp = self._recv()
+        for t in (resp.get("result") or {}).get("tools", []):
+            self.tools.append(t)
+
+    def stop(self):
+        if self.proc:
+            try:
+                self.proc.stdin.close()
+            except OSError:
+                pass
+            try:
+                self.proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        self.proc = None
+
+    def call(self, name, arguments):
+        with self._stdout_lock:
+            self._send({"jsonrpc": "2.0", "id": self._id(),
+                        "method": "tools/call",
+                        "params": {"name": name, "arguments": arguments}})
+            resp = self._recv()
+        if "error" in resp:
+            raise RuntimeError(resp["error"].get("message", "MCP error"))
+        result = resp.get("result") or {}
+        # MCP responses use a `content` array of typed blocks; we join the
+        # text blocks for the agent's tool result.
+        text_parts = []
+        for block in result.get("content", []):
+            if block.get("type") == "text":
+                text_parts.append(block.get("text", ""))
+        return "\n".join(text_parts) or json.dumps(result)
+
+    def _id(self):
+        self.next_id += 1
+        return self.next_id - 1
+
+    def _send(self, msg):
+        if not self.proc or not self.proc.stdin:
+            raise RuntimeError("MCP server not running")
+        data = json.dumps(msg) + "\n"
+        try:
+            self.proc.stdin.write(data.encode("utf-8"))
+            self.proc.stdin.flush()
+        except BrokenPipeError:
+            raise RuntimeError("MCP server stdin closed unexpectedly")
+
+    def _recv(self):
+        line = self.proc.stdout.readline()
+        if not line:
+            raise RuntimeError("MCP server closed stdout")
+        return json.loads(line.decode("utf-8"))
+
+
+def build_mcp_tool_schemas(clients):
+    """Convert MCP tool definitions to OpenAI-style function tool schemas
+    so the model sees them alongside our built-ins."""
+    schemas = []
+    for client in clients:
+        for tool in client.tools:
+            schemas.append({
+                "type": "function",
+                "function": {
+                    "name": f"mcp__{tool['name']}",
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("inputSchema",
+                                            {"type": "object", "properties": {}}),
+                },
+            })
+    return schemas
+
+
+def call_mcp_tool(clients, full_name, arguments):
+    raw_name = full_name[len("mcp__"):]
+    for client in clients:
+        for tool in client.tools:
+            if tool["name"] == raw_name:
+                return client.call(raw_name, arguments)
+    raise ValueError(f"no MCP server exposes tool {raw_name}")
+
+
+# =============================================================================
+# LM Studio HTTP
+# =============================================================================
 
 def _http_json(url, timeout=5):
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
@@ -422,15 +1039,10 @@ def _http_json(url, timeout=5):
 
 def fetch_loaded_models(base_url):
     """List currently *loaded* model ids. Tries LM Studio's /api/v0/models
-    first (which exposes a `state` field per entry) and falls back to the
-    OpenAI-compatible /v1/models for non-LM-Studio servers. Raises with a
-    friendly message on transport failure."""
+    first (state-aware), falls back to OpenAI-compatible /v1/models."""
     base = base_url.rstrip("/")
-    if base.endswith("/v1"):
-        v0_url = base[:-len("/v1")] + "/api/v0/models"
-    else:
-        v0_url = base + "/api/v0/models"
-
+    v0_url = (base[:-len("/v1")] + "/api/v0/models"
+              if base.endswith("/v1") else base + "/api/v0/models")
     try:
         v0 = _http_json(v0_url)
         data = v0.get("data") or []
@@ -445,124 +1057,42 @@ def fetch_loaded_models(base_url):
         raise RuntimeError(
             f"Could not reach LM Studio at {base_url}. "
             f"Start the server: LM Studio > Developer > Local Server > Start.\n"
-            f"Underlying error: {e.reason}"
-        ) from None
-
+            f"Underlying error: {e.reason}") from None
     try:
         v1 = _http_json(f"{base}/models")
     except urllib.error.URLError as e:
-        raise RuntimeError(
-            f"Could not reach LM Studio at {base_url}.\n"
-            f"Underlying error: {e.reason}"
-        ) from None
+        raise RuntimeError(f"Could not reach LM Studio at {base_url}.\n"
+                           f"Underlying error: {e.reason}") from None
     data = v1.get("data") or []
     return [entry["id"] for entry in data if "id" in entry]
 
 
-# ---------- Esc-to-interrupt --------------------------------------------
-
-class EscInterrupt(Exception):
-    """Raised when the user hits Esc during a running turn. Caught at the
-    REPL boundary so the turn unwinds cleanly without exiting the process."""
-
-
-class EscWatcher:
-    """Puts stdin into cbreak mode for the lifetime of a `with` block so we
-    can poll for a single Esc keystroke without waiting for Enter.
-
-    Why not just trap SIGINT? Ctrl-C already works and we keep it; this gives
-    the user a second, lower-stakes way to bail out of a long generation that
-    matches the ergonomics in Claude Code / Codex - press Esc, the current
-    turn unwinds, you're back at the prompt with history intact.
-
-    Stays a no-op when stdin isn't a TTY (CI, pipes, --no-banner-style
-    invocations) so the script stays scriptable."""
-
-    def __init__(self):
-        self.enabled = sys.stdin.isatty()
-        self.fd = None
-        self.old = None
-
-    def __enter__(self):
-        if not self.enabled:
-            return self
-        try:
-            self.fd = sys.stdin.fileno()
-            self.old = termios.tcgetattr(self.fd)
-            new = list(self.old)
-            # Flip off ICANON (line buffering) and ECHO. Keep ISIG so Ctrl-C
-            # still raises SIGINT. Output (OPOST) untouched, so streamed text
-            # renders with normal newline translation.
-            new[3] = new[3] & ~(termios.ICANON | termios.ECHO)
-            termios.tcsetattr(self.fd, termios.TCSANOW, new)
-        except (termios.error, OSError):
-            self.enabled = False
-            self.old = None
-        return self
-
-    def __exit__(self, *args):
-        if self.old is None:
-            return
-        try:
-            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old)
-            # Drain anything the user typed during generation so it doesn't
-            # leak into the next prompt as phantom input.
-            termios.tcflush(self.fd, termios.TCIFLUSH)
-        except (termios.error, OSError):
-            pass
-
-    def check(self):
-        """True if Esc was pressed since the last call. Non-blocking. Drains
-        and discards any other characters typed during the turn so we don't
-        confuse subsequent input."""
-        if not self.enabled:
-            return False
-        saw_esc = False
-        try:
-            while True:
-                ready, _, _ = select.select([self.fd], [], [], 0)
-                if not ready:
-                    break
-                try:
-                    ch = os.read(self.fd, 64)
-                except (OSError, BlockingIOError):
-                    break
-                if not ch:
-                    break
-                if b"\x1b" in ch:
-                    saw_esc = True
-        except (OSError, ValueError):
-            return saw_esc
-        return saw_esc
-
-
-# ---------- Streaming chat completion -------------------------------------
+# =============================================================================
+# Think-tag streaming
+# =============================================================================
 
 class ThinkStreamer:
-    """Renders streamed assistant text live, dimming any content that lives
-    between <think>...</think> tags. Markers can arrive split across chunks,
-    so we keep a small buffer and only commit characters that we know aren't
-    part of a partial marker.
-
-    Streaming straight to stdout means the user sees output as the model
-    produces it - feels native, no wall-of-text drop."""
+    """Renders streamed assistant text, dimming content between
+    <think>...</think>. Markers can split across chunks, so we keep a
+    small tail buffer and only commit characters we know aren't part of
+    a partial marker. Quiet mode skips stdout (used by --json)."""
 
     OPEN = "<think>"
     CLOSE = "</think>"
 
-    def __init__(self):
+    def __init__(self, quiet=False, emit_event=None):
         self.in_think = False
         self.buf = ""
         self.full = []
         self._started_line = False
+        self.quiet = quiet
+        self.emit_event = emit_event or (lambda *a, **kw: None)
 
     def feed(self, chunk):
         if not chunk:
             return
         self.full.append(chunk)
         self.buf += chunk
-        # Keep at most max(len(OPEN), len(CLOSE)) - 1 chars in the tail so
-        # we never miss a marker split across stream chunks.
         keep = max(len(self.OPEN), len(self.CLOSE))
         while True:
             if self.in_think:
@@ -576,8 +1106,7 @@ class ThinkStreamer:
                 self._emit_think(self.buf[:idx])
                 self.buf = self.buf[idx + len(self.CLOSE):]
                 self.in_think = False
-                # Newline ending the dimmed think block.
-                if self._started_line:
+                if self._started_line and not self.quiet:
                     sys.stdout.write("\n")
                     self._started_line = False
             else:
@@ -591,10 +1120,11 @@ class ThinkStreamer:
                 self._emit_plain(self.buf[:idx])
                 self.buf = self.buf[idx + len(self.OPEN):]
                 self.in_think = True
-                if self._started_line:
+                if self._started_line and not self.quiet:
                     sys.stdout.write("\n")
                     self._started_line = False
-                sys.stdout.write(style(f"  {GLYPH_THINK} ", DIM, YELLOW))
+                if not self.quiet:
+                    sys.stdout.write(style(f"  {GLYPH_THINK} ", "thinking"))
 
     def finish(self):
         if self.buf:
@@ -603,17 +1133,21 @@ class ThinkStreamer:
             else:
                 self._emit_plain(self.buf)
             self.buf = ""
-        if self.in_think:
+        if self.in_think and not self.quiet:
             sys.stdout.write("\n")
             self.in_think = False
-        if self._started_line:
+        if self._started_line and not self.quiet:
             sys.stdout.write("\n")
             self._started_line = False
-        sys.stdout.flush()
+        if not self.quiet:
+            sys.stdout.flush()
         return "".join(self.full)
 
     def _emit_plain(self, text):
         if not text:
+            return
+        self.emit_event("content", text=text)
+        if self.quiet:
             return
         sys.stdout.write(text)
         sys.stdout.flush()
@@ -622,45 +1156,29 @@ class ThinkStreamer:
     def _emit_think(self, text):
         if not text:
             return
-        # Indent each new line so the dim block visually offsets from
-        # the model's "real" output. Replace internal newlines with a
-        # newline + indent + dim continuation prefix.
-        rendered = text.replace("\n", "\n  " + style(GLYPH_THINK + " ", DIM, YELLOW))
-        sys.stdout.write(style(rendered, DIM, ITALIC))
+        self.emit_event("thinking", text=text)
+        if self.quiet:
+            return
+        rendered = text.replace("\n", "\n  " + style(GLYPH_THINK + " ", "thinking"))
+        sys.stdout.write(style(rendered, "thinking"))
         sys.stdout.flush()
         self._started_line = not text.endswith("\n")
 
 
 def stream_completion(base_url, model, messages, tools):
-    """Stream chat completion via SSE. Yields one of:
-       ("content", str), ("tool_call", dict), ("done", None), ("error", str)
-
-    Tool-call deltas arrive in pieces: each delta gives an index and one
-    or more of {id, function.name, function.arguments}. We accumulate per
-    index and emit a finished tool_call entry only after the stream ends."""
-    payload = {
-        "model": model,
-        "messages": messages,
-        "tools": tools,
-        "tool_choice": "auto",
-        "stream": True,
-    }
+    payload = {"model": model, "messages": messages, "tools": tools,
+               "tool_choice": "auto", "stream": True}
     req = urllib.request.Request(
         f"{base_url.rstrip('/')}/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-
+        method="POST")
     tool_calls_by_index = {}
-
     try:
         with urllib.request.urlopen(req, timeout=600) as resp:
             for raw in resp:
                 line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-                if not line:
-                    continue
-                if not line.startswith("data:"):
+                if not line or not line.startswith("data:"):
                     continue
                 data_str = line[len("data:"):].strip()
                 if data_str == "[DONE]":
@@ -676,19 +1194,13 @@ def stream_completion(base_url, model, messages, tools):
                 content = delta.get("content")
                 if content:
                     yield ("content", content)
-                # Some servers (LM Studio with thinking-capable models) emit
-                # reasoning under reasoning_content; treat it as thinking by
-                # wrapping it in <think> tags inline.
                 reasoning = delta.get("reasoning_content")
                 if reasoning:
                     yield ("content", reasoning)
                 for tc_delta in delta.get("tool_calls") or []:
                     index = tc_delta.get("index", 0)
-                    slot = tool_calls_by_index.setdefault(index, {
-                        "id": None,
-                        "name": "",
-                        "arguments": "",
-                    })
+                    slot = tool_calls_by_index.setdefault(index,
+                        {"id": None, "name": "", "arguments": ""})
                     if tc_delta.get("id"):
                         slot["id"] = tc_delta["id"]
                     fn = tc_delta.get("function") or {}
@@ -703,250 +1215,492 @@ def stream_completion(base_url, model, messages, tools):
     except urllib.error.URLError as e:
         yield ("error", f"Could not reach LM Studio: {e.reason}")
         return
-
     for index in sorted(tool_calls_by_index.keys()):
         slot = tool_calls_by_index[index]
         if slot["name"]:
             yield ("tool_call", {
                 "id": slot["id"] or f"call_{index}",
                 "name": slot["name"],
-                "arguments": slot["arguments"] or "{}",
-            })
+                "arguments": slot["arguments"] or "{}"})
     yield ("done", None)
 
 
-# ---------- Agent loop ----------------------------------------------------
+# =============================================================================
+# Session state container
+# =============================================================================
 
-def render_tool_call(name, args_json):
-    try:
-        args = json.loads(args_json)
-    except json.JSONDecodeError:
-        args = {}
-    width = max(40, min(term_width() - 4, 100))
-    preview = json.dumps(args, separators=(", ", ": "))
-    if len(preview) > width - 12:
-        preview = preview[: width - 13] + "…"
-    head = style(GLYPH_TOOL, BCYAN) + " " + style(name, BOLD)
-    print(f"  {head} {style(preview, DIM)}")
-    return args
+SYSTEM_PROMPT_BASE = """You are an interactive coding agent running in a
+terminal, backed by a local LM Studio model. You have these tools:
+
+- read_file(path) - read a UTF-8 file in the current workspace
+- write_file(path, content) - create or overwrite a file
+- edit_file(path, old_string, new_string) - surgical text edit
+- list_dir(path) - list directory entries
+- run_bash(command, timeout_seconds?) - shell command, when enabled
+- update_tasks(tasks) - replace the visible task list. Each task has
+  subject, activeForm (present-continuous), and status (pending,
+  in_progress, completed, cancelled).
+- spawn_agent(prompt, role?, system?) - delegate a focused subtask
+- MCP tools when a `--mcp` server is configured. They appear with an
+  `mcp__` name prefix.
+
+Workflow:
+1. For non-trivial requests, call update_tasks first with a plan.
+2. Flip each task to in_progress before working on it, and to completed
+   immediately when done. Keep at most one task in_progress at a time.
+3. When the work is done, answer in plain text (no tool calls). That
+   ends the loop; leftover tasks are auto-completed.
+
+Paths must be relative to the current working directory. The runner
+enforces that boundary.
+
+Wrap reasoning in <think>...</think>. It's rendered dimmed so the user
+can follow along without it cluttering the answer."""
 
 
-def render_tool_result(succeeded, summary):
-    glyph = GLYPH_OK if succeeded else GLYPH_ERR
-    color = BGREEN if succeeded else RED
-    first = summary.splitlines()[0] if summary else "(no output)"
-    width = max(40, min(term_width() - 4, 100))
-    if len(first) > width - 6:
-        first = first[: width - 7] + "…"
-    print(f"    {style(glyph, color)} {style(first, DIM)}")
+class AgentState:
+    def __init__(self, *, workspace, base_url, model, allow_bash, session_id,
+                 yolo, theme_name, mcp_clients):
+        self.workspace = workspace
+        self.base_url = base_url
+        self.model = model
+        self.allow_bash = allow_bash
+        self.session_id = session_id
+        self.sink = TaskSink(session_id)
+        self.yolo = yolo
+        self.theme_name = theme_name
+        self.mcp_clients = mcp_clients
+        self.permissions = PermissionManager(yolo=yolo)
+        self.transcript = []
+        self.approx_tokens = 0
+        self.started_at = time.time()
+        self.context_files = []
+        self.context_text = ""
+        self.system_prompt = SYSTEM_PROMPT_BASE
+        self.system_override = None
+        self.last_diff = None  # set by write_file / edit_file tool calls
+
+    def system_message(self):
+        body = self.system_override or self.system_prompt
+        if self.context_text:
+            return body + "\n\n" + self.context_text
+        return body
+
+    def reset_transcript(self):
+        self.transcript = [{"role": "system", "content": self.system_message()}]
+
+    def absorb_text(self, text):
+        # Rough token approximation: 4 chars / token. Good enough for a
+        # status footer indicator.
+        if text:
+            self.approx_tokens += max(1, len(text) // 4)
 
 
-def run_turn(workspace, base_url, model, user_message, allow_bash, sink,
-             session_id, max_turns, transcript):
-    transcript.append({"role": "user", "content": user_message})
+# =============================================================================
+# Agent loop
+# =============================================================================
 
-    for turn in range(1, max_turns + 1):
-        streamer = ThinkStreamer()
+def run_turn(state, user_message, *, json_emit=None):
+    """Drive the streaming agent loop for one user message. Returns the
+    final assistant text. Raises EscInterrupt if the user stops mid-turn."""
+    user_payload = expand_mentions(user_message, state.workspace)
+    state.transcript.append({"role": "user", "content": user_payload})
+    state.absorb_text(user_payload)
+    if json_emit:
+        json_emit("user", text=user_message)
+
+    for turn_index in range(1, DEFAULT_MAX_TURNS + 1):
+        streamer = ThinkStreamer(
+            quiet=bool(json_emit),
+            emit_event=(lambda kind, text: json_emit(kind, text=text)) if json_emit else None,
+        )
         finished_tool_calls = []
         had_content = False
         error_message = None
+        first_chunk_seen = False
+        spinner = Spinner("thinking") if not json_emit else None
+        if spinner:
+            spinner.__enter__()
+        if json_emit:
+            json_emit("turn_started", index=turn_index)
 
         with EscWatcher() as esc:
-            stream = stream_completion(base_url, model, transcript, TOOLS)
+            stream = stream_completion(state.base_url, state.model,
+                                       state.transcript, _all_tool_schemas(state))
             try:
                 for kind, data in stream:
                     if esc.check():
                         raise EscInterrupt
                     if kind == "content":
-                        if not had_content:
+                        if spinner and not first_chunk_seen:
+                            spinner.stop()
+                            spinner = None
                             sys.stdout.write("  ")
+                        first_chunk_seen = True
                         had_content = True
                         streamer.feed(data)
                     elif kind == "tool_call":
+                        if spinner and not first_chunk_seen:
+                            spinner.stop()
+                            spinner = None
                         finished_tool_calls.append(data)
                     elif kind == "error":
+                        if spinner:
+                            spinner.stop()
+                            spinner = None
                         error_message = data
                         break
                     elif kind == "done":
+                        if spinner:
+                            spinner.stop()
+                            spinner = None
                         break
             finally:
-                # Always close the generator so the underlying HTTP response
-                # tears down promptly on Esc / error / normal completion.
                 stream.close()
+                if spinner:
+                    spinner.stop()
 
         assistant_text = streamer.finish()
-        if had_content and not assistant_text.endswith("\n"):
+        state.absorb_text(assistant_text)
+        if had_content and not assistant_text.endswith("\n") and not json_emit:
             print()
         if error_message:
-            print(style(f"  {GLYPH_ERR} {error_message}", RED))
+            if json_emit:
+                json_emit("error", message=error_message)
+            else:
+                print(style(f"  {GLYPH_ERR} {error_message}", "err"))
             return ""
 
         assistant_entry = {"role": "assistant", "content": assistant_text}
         if finished_tool_calls:
             assistant_entry["tool_calls"] = [
-                {
-                    "id": tc["id"],
-                    "type": "function",
-                    "function": {"name": tc["name"], "arguments": tc["arguments"]},
-                }
+                {"id": tc["id"], "type": "function",
+                 "function": {"name": tc["name"], "arguments": tc["arguments"]}}
                 for tc in finished_tool_calls
             ]
-        transcript.append(assistant_entry)
+        state.transcript.append(assistant_entry)
 
         if not finished_tool_calls:
-            sink.mark_remaining_complete()
-            draw_task_list(sink.current)
+            state.sink.mark_remaining_complete()
+            if not json_emit:
+                draw_task_list(state.sink.current)
+            if json_emit:
+                json_emit("completed", text=assistant_text)
             return assistant_text
 
-        print()
+        if not json_emit:
+            print()
         for call in finished_tool_calls:
             name = call["name"]
-            args = render_tool_call(name, call["arguments"])
             try:
-                if name == "read_file":
-                    result_text = tool_read_file(workspace, args)
-                elif name == "write_file":
-                    result_text = tool_write_file(workspace, args)
-                elif name == "edit_file":
-                    result_text = tool_edit_file(workspace, args)
-                elif name == "list_dir":
-                    result_text = tool_list_dir(workspace, args)
-                elif name == "run_bash":
-                    result_text = tool_run_bash(workspace, args, allow_bash)
-                elif name == "update_tasks":
-                    count = sink.replace(args.get("tasks", []))
-                    result_text = f"Task list updated ({count} task{'' if count == 1 else 's'})."
-                    render_tool_result(True, result_text)
-                    draw_task_list(sink.current)
-                    transcript.append({
-                        "role": "tool",
-                        "tool_call_id": call["id"],
-                        "content": result_text,
-                    })
-                    continue
-                else:
-                    raise ValueError(f"unknown tool {name}")
-            except Exception as e:
-                result_text = f"Error: {e}"
-                render_tool_result(False, str(e))
-            else:
-                lines = result_text.splitlines()
-                summary = lines[0] if lines else "(no output)"
-                if len(lines) > 1:
-                    summary += f"  ({len(lines)} lines)"
-                render_tool_result(True, summary)
-            transcript.append({
-                "role": "tool",
-                "tool_call_id": call["id"],
-                "content": result_text,
-            })
-        print()
+                args = json.loads(call["arguments"] or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            if not json_emit:
+                _render_tool_call_line(name, args)
+            if json_emit:
+                json_emit("tool_call", name=name, arguments=args)
+            result_text = _dispatch_tool(state, name, args)
+            state.absorb_text(result_text)
+            if json_emit:
+                json_emit("tool_result", name=name, text=result_text)
+            state.transcript.append({"role": "tool",
+                                     "tool_call_id": call["id"],
+                                     "content": result_text})
+            if not json_emit:
+                if name == "update_tasks":
+                    draw_task_list(state.sink.current)
+                elif name in ("write_file", "edit_file") and state.last_diff:
+                    path, old, new = state.last_diff
+                    draw_diff(path, old, new)
+                    state.last_diff = None
+        if not json_emit:
+            print()
 
-    print(style(f"  (stopped: hit max_turns={max_turns})", RED))
+    if json_emit:
+        json_emit("error", message=f"max_turns={DEFAULT_MAX_TURNS} hit")
+    else:
+        print(style(f"  (stopped: hit max_turns={DEFAULT_MAX_TURNS})", "err"))
     return ""
 
 
-# ---------- Entrypoint ----------------------------------------------------
+def _all_tool_schemas(state):
+    schemas = list(BUILTIN_TOOL_SCHEMAS)
+    schemas.extend(build_mcp_tool_schemas(state.mcp_clients))
+    return schemas
 
-def main():
-    parser = argparse.ArgumentParser(
-        prog="lmstudio",
-        description="Interactive agent CLI backed by LM Studio.",
-    )
-    parser.add_argument("prompt", nargs="*", help="One-shot prompt. Omit for REPL.")
-    parser.add_argument("--base-url", default=os.environ.get("LMSTUDIO_BASE_URL", DEFAULT_BASE_URL))
-    parser.add_argument("--model", default=os.environ.get("LMSTUDIO_MODEL", ""))
-    parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS)
-    parser.add_argument("--workspace", default=os.getcwd())
-    parser.add_argument("--allow-bash", action="store_true",
-        default=os.environ.get("LMSTUDIO_BASH", "0") == "1")
-    parser.add_argument("--no-banner", action="store_true",
-        help="Skip the banner / tips on startup.")
-    args = parser.parse_args()
 
-    if not args.model:
-        try:
-            loaded = fetch_loaded_models(args.base_url)
-        except RuntimeError as e:
-            print(style(f"error: {e}", RED), file=sys.stderr)
-            sys.exit(2)
-        if len(loaded) == 1:
-            args.model = loaded[0]
-        elif len(loaded) == 0:
-            print(style("error: no model is loaded in LM Studio. Open the app, "
-                  "pick a model in Chat, or run `lms load <model>`.", RED),
-                  file=sys.stderr)
-            sys.exit(2)
-        else:
-            print(style("error: multiple models loaded. Pass --model or set "
-                  "LMSTUDIO_MODEL to one of:", RED), file=sys.stderr)
-            for m in loaded:
-                print(f"  {m}", file=sys.stderr)
-            sys.exit(2)
+def _render_tool_call_line(name, args):
+    preview = json.dumps(args, separators=(", ", ": "))
+    width = box_width()
+    if len(preview) > width - 14:
+        preview = preview[: width - 15] + "…"
+    head = style(GLYPH_TOOL, "tool") + " " + style(name, "key")
+    print(f"  {head} {style(preview, 'dim')}")
 
-    workspace = Path(args.workspace).resolve()
-    if not workspace.is_dir():
-        print(style(f"error: workspace is not a directory: {workspace}", RED),
-              file=sys.stderr)
-        sys.exit(2)
 
-    session_id = uuid.uuid4().hex[:8]
-    sink = TaskSink(session_id)
-    transcript = [{"role": "system", "content": SYSTEM_PROMPT}]
+def _dispatch_tool(state, name, args):
+    try:
+        if name == "update_tasks":
+            count = state.sink.replace(args.get("tasks", []))
+            return f"Task list updated ({count} task{'' if count == 1 else 's'})."
+        if name.startswith("mcp__"):
+            return call_mcp_tool(state.mcp_clients, name, args)
+        if name == "run_bash" and not state.allow_bash:
+            return "Error: run_bash disabled. Use --allow-bash or /bash on."
+        if name in DANGEROUS_TOOLS and not state.permissions.gate(name, args):
+            return f"Error: user denied {name}."
+        func = BUILTIN_TOOL_FUNCS.get(name)
+        if not func:
+            return f"Error: unknown tool {name}"
+        result = func(state, args)
+        _render_tool_result_summary(name, result, True)
+        return result
+    except Exception as e:
+        _render_tool_result_summary(name, str(e), False)
+        return f"Error: {e}"
 
-    if not args.no_banner:
-        draw_banner(args.model, workspace, args.allow_bash, session_id)
+
+def _render_tool_result_summary(name, result, ok):
+    if not isinstance(result, str):
+        result = str(result)
+    first = result.splitlines()[0] if result else "(no output)"
+    width = box_width()
+    if len(first) > width - 6:
+        first = first[: width - 7] + "…"
+    glyph = GLYPH_OK if ok else GLYPH_ERR
+    role = "ok" if ok else "err"
+    if name != "update_tasks":  # update_tasks renders its own box
+        print(f"    {style(glyph, role)} {style(first, 'dim')}")
+
+
+# =============================================================================
+# Slash commands
+# =============================================================================
+
+class SlashRouter:
+    def __init__(self, state):
+        self.state = state
+        self.commands = {
+            "/help":    self.cmd_help,
+            "/quit":    self.cmd_quit,
+            "/exit":    self.cmd_quit,
+            "/clear":   self.cmd_clear,
+            "/model":   self.cmd_model,
+            "/bash":    self.cmd_bash,
+            "/cwd":     self.cmd_cwd,
+            "/cost":    self.cmd_cost,
+            "/tasks":   self.cmd_tasks,
+            "/save":    self.cmd_save,
+            "/resume":  self.cmd_resume,
+            "/sessions": self.cmd_sessions,
+            "/system":  self.cmd_system,
+            "/sh":      self.cmd_sh,
+            "/yolo":    self.cmd_yolo,
+            "/theme":   self.cmd_theme,
+        }
+
+    def names(self):
+        return sorted(self.commands.keys())
+
+    def dispatch(self, line):
+        head, _, rest = line.partition(" ")
+        handler = self.commands.get(head)
+        if not handler:
+            print(style(f"  unknown command: {head}", "warning"))
+            print(style(f"  type /help for the list", "dim"))
+            return "continue"
+        return handler(rest.strip())
+
+    # --- handlers ---
+    def cmd_help(self, _):
         draw_tips()
-
-    _load_history()
-
-    one_shot = " ".join(args.prompt).strip()
-    if one_shot:
-        top, lead, bot = draw_prompt_box()
-        print(top)
-        print(f"{lead}{one_shot}")
-        print(bot)
+        print(style(" Slash commands", "tip"))
+        for name in self.names():
+            print(f"   {style(name, 'key')}")
         print()
-        try:
-            run_turn(workspace, args.base_url, args.model, one_shot,
-                     args.allow_bash, sink, session_id, args.max_turns, transcript)
-        except (KeyboardInterrupt, EscInterrupt):
-            print(style("\n  (interrupted)", YELLOW))
-        return
+        return "continue"
 
-    while True:
-        top, lead, bot = draw_prompt_box()
-        print(top)
-        try:
-            user_in = input(lead).strip()
-        except EOFError:
-            print(bot)
-            return
-        except KeyboardInterrupt:
-            # Empty Ctrl-C at the prompt clears the line - matches shell behavior.
-            print()
-            continue
-        # Close the bottom of the box once input is in.
-        print(bot)
-        if not user_in:
-            continue
-        if user_in in ("/quit", "/exit"):
-            _save_history()
-            return
-        if user_in == "/help":
-            draw_tips()
-            continue
-        _save_history()
-        print()
-        try:
-            run_turn(workspace, args.base_url, args.model, user_in,
-                     args.allow_bash, sink, session_id, args.max_turns, transcript)
-        except (KeyboardInterrupt, EscInterrupt):
-            print(style("\n  (interrupted)", YELLOW))
-        except Exception as e:
-            print(style(f"  {GLYPH_ERR} error: {e}", RED), file=sys.stderr)
-        print()
+    def cmd_quit(self, _):
+        return "exit"
 
+    def cmd_clear(self, _):
+        self.state.reset_transcript()
+        self.state.approx_tokens = 0
+        print(style("  session cleared.", "ok"))
+        return "continue"
+
+    def cmd_model(self, rest):
+        if not rest:
+            try:
+                loaded = fetch_loaded_models(self.state.base_url)
+            except RuntimeError as e:
+                print(style(f"  {e}", "err"))
+                return "continue"
+            if not loaded:
+                print(style("  no models loaded.", "warning"))
+                return "continue"
+            print(style("  Loaded models:", "key"))
+            for m in loaded:
+                marker = "*" if m == self.state.model else " "
+                print(f"   {marker} {m}")
+            print(style(f"  current: {self.state.model}", "dim"))
+            return "continue"
+        self.state.model = rest
+        print(style(f"  model set to {rest}", "ok"))
+        return "continue"
+
+    def cmd_bash(self, rest):
+        if rest in ("on", "yes", "true"):
+            self.state.allow_bash = True
+        elif rest in ("off", "no", "false"):
+            self.state.allow_bash = False
+        else:
+            self.state.allow_bash = not self.state.allow_bash
+        print(style(f"  run_bash {'enabled' if self.state.allow_bash else 'disabled'}", "ok"))
+        return "continue"
+
+    def cmd_cwd(self, rest):
+        if not rest:
+            print(style(f"  workspace: {self.state.workspace}", "key"))
+            return "continue"
+        path = Path(rest).expanduser().resolve()
+        if not path.is_dir():
+            print(style(f"  not a directory: {path}", "err"))
+            return "continue"
+        self.state.workspace = path
+        self.state.context_text, self.state.context_files = load_project_context(path)
+        self.state.reset_transcript()
+        print(style(f"  workspace -> {path}", "ok"))
+        if self.state.context_files:
+            print(style(f"  loaded context: {', '.join(self.state.context_files)}", "dim"))
+        return "continue"
+
+    def cmd_cost(self, _):
+        elapsed = int(time.time() - self.state.started_at)
+        rate = self.state.approx_tokens / elapsed if elapsed > 0 else 0
+        print(f"  {style('tokens (approx)', 'key')}  {self.state.approx_tokens:,}")
+        print(f"  {style('elapsed', 'key')}         {elapsed}s")
+        print(f"  {style('rate', 'key')}            {rate:.1f} tok/s (rough)")
+        return "continue"
+
+    def cmd_tasks(self, _):
+        if not self.state.sink.current:
+            print(style("  no tasks yet.", "dim"))
+        else:
+            draw_task_list(self.state.sink.current)
+        return "continue"
+
+    def cmd_save(self, rest):
+        name = rest or None
+        try:
+            path = save_session(self.state, name)
+            print(style(f"  saved -> {path}", "ok"))
+        except OSError as e:
+            print(style(f"  save failed: {e}", "err"))
+        return "continue"
+
+    def cmd_resume(self, rest):
+        try:
+            payload, name = load_session(rest or "latest")
+        except FileNotFoundError as e:
+            print(style(f"  {e}", "err"))
+            return "continue"
+        self.state.transcript = payload.get("transcript", [])
+        self.state.sink.current = payload.get("tasks", [])
+        if "model" in payload:
+            self.state.model = payload["model"]
+        if "workspace" in payload:
+            ws = Path(payload["workspace"])
+            if ws.is_dir():
+                self.state.workspace = ws
+        print(style(f"  resumed session {name}", "ok"))
+        print(style(f"  {len(self.state.transcript)} messages, "
+                    f"{len(self.state.sink.current)} tasks", "dim"))
+        return "continue"
+
+    def cmd_sessions(self, _):
+        sessions = list_sessions()
+        if not sessions:
+            print(style("  no saved sessions.", "dim"))
+            return "continue"
+        for path in sessions[:20]:
+            mtime = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+            print(f"   {style(path.stem, 'key')}  {style(mtime, 'dim')}")
+        return "continue"
+
+    def cmd_system(self, rest):
+        if not rest:
+            print(style("  current system prompt:", "key"))
+            print(style(textwrap_short(self.state.system_message(), 400), "dim"))
+            return "continue"
+        self.state.system_override = rest
+        self.state.reset_transcript()
+        print(style("  system prompt updated.", "ok"))
+        return "continue"
+
+    def cmd_sh(self, rest):
+        if not rest:
+            print(style("  usage: /sh <command>", "dim"))
+            return "continue"
+        proc = subprocess.run(["/bin/zsh", "-lic", rest],
+                              cwd=str(self.state.workspace),
+                              capture_output=True, text=True)
+        if proc.stdout:
+            print(proc.stdout, end="")
+        if proc.stderr:
+            print(style(proc.stderr, "err"), end="")
+        if proc.returncode != 0:
+            print(style(f"  [exit {proc.returncode}]", "err"))
+        return "continue"
+
+    def cmd_yolo(self, rest):
+        if rest in ("on", "yes"):
+            self.state.permissions.yolo = True
+        elif rest in ("off", "no"):
+            self.state.permissions.yolo = False
+        else:
+            self.state.permissions.yolo = not self.state.permissions.yolo
+        print(style(f"  yolo {'ON' if self.state.permissions.yolo else 'off'}",
+                    "warning" if self.state.permissions.yolo else "ok"))
+        return "continue"
+
+    def cmd_theme(self, rest):
+        if not rest:
+            print(style(f"  current: {self.state.theme_name}", "key"))
+            print(style(f"  options: {', '.join(_THEMES.keys())}", "dim"))
+            return "continue"
+        if rest not in _THEMES:
+            print(style(f"  unknown theme: {rest}", "err"))
+            return "continue"
+        set_theme(rest)
+        self.state.theme_name = rest
+        print(style(f"  theme -> {rest}", "ok"))
+        return "continue"
+
+
+def textwrap_short(s, n):
+    s = s.replace("\n", " ")
+    if len(s) > n:
+        return s[: n - 1] + "…"
+    return s
+
+
+# =============================================================================
+# JSON event emitter (for --json mode)
+# =============================================================================
+
+def make_json_emitter():
+    def emit(event_type, **fields):
+        record = {"type": event_type, "ts": _now_iso(), **fields}
+        sys.stdout.write(json.dumps(record) + "\n")
+        sys.stdout.flush()
+    return emit
+
+
+# =============================================================================
+# History
+# =============================================================================
 
 def _load_history():
     if not _HAS_READLINE:
@@ -970,6 +1724,211 @@ def _save_history():
         readline.write_history_file(str(HISTORY_FILE))
     except OSError:
         pass
+
+
+# =============================================================================
+# Entrypoint
+# =============================================================================
+
+def main():
+    parser = argparse.ArgumentParser(prog="lmstudio",
+        description="Interactive agent CLI backed by LM Studio.")
+    parser.add_argument("prompt", nargs="*", help="One-shot prompt. Omit for REPL.")
+    parser.add_argument("--base-url", default=os.environ.get("LMSTUDIO_BASE_URL", DEFAULT_BASE_URL))
+    parser.add_argument("--model", default=os.environ.get("LMSTUDIO_MODEL", ""))
+    parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS)
+    parser.add_argument("--workspace", default=os.getcwd())
+    parser.add_argument("--allow-bash", action="store_true",
+        default=os.environ.get("LMSTUDIO_BASH", "0") == "1")
+    parser.add_argument("--yolo", action="store_true",
+        default=os.environ.get("LMSTUDIO_YOLO", "0") == "1",
+        help="Disable permission prompts for write_file / edit_file / run_bash.")
+    parser.add_argument("--resume", nargs="?", const="latest",
+        help="Resume a saved session (most recent if no name given).")
+    parser.add_argument("--theme", default=os.environ.get("LMSTUDIO_THEME", "default"),
+        choices=list(_THEMES.keys()))
+    parser.add_argument("--no-banner", action="store_true")
+    parser.add_argument("--no-context", action="store_true",
+        help="Skip auto-loading CLAUDE.md / AGENTS.md / GUIDE.md / README.md.")
+    parser.add_argument("--system", help="Override the system prompt for this session.")
+    parser.add_argument("--mcp", action="append", default=[],
+        help="Shell command line that spawns a stdio MCP server. Repeatable.")
+    parser.add_argument("--json", action="store_true",
+        help="Emit one JSON event per line instead of styled output. "
+             "Implies --no-banner.")
+    args = parser.parse_args()
+
+    set_theme(args.theme)
+    configure_styling(use_color=(sys.stdout.isatty()
+                                 and "NO_COLOR" not in os.environ
+                                 and args.theme != "mono"
+                                 and not args.json))
+
+    if not args.model:
+        try:
+            loaded = fetch_loaded_models(args.base_url)
+        except RuntimeError as e:
+            print(style(f"error: {e}", "err"), file=sys.stderr)
+            sys.exit(2)
+        if len(loaded) == 1:
+            args.model = loaded[0]
+        elif len(loaded) == 0:
+            print(style("error: no model is loaded in LM Studio.", "err"),
+                  file=sys.stderr)
+            sys.exit(2)
+        else:
+            print(style("error: multiple models loaded. Pass --model or set "
+                  "LMSTUDIO_MODEL to one of:", "err"), file=sys.stderr)
+            for m in loaded:
+                print(f"  {m}", file=sys.stderr)
+            sys.exit(2)
+
+    workspace = Path(args.workspace).resolve()
+    if not workspace.is_dir():
+        print(style(f"error: workspace is not a directory: {workspace}", "err"),
+              file=sys.stderr)
+        sys.exit(2)
+
+    session_id = uuid.uuid4().hex[:8]
+    mcp_clients = []
+    for cmd in args.mcp:
+        client = MCPClient(cmd)
+        try:
+            client.start()
+        except Exception as e:
+            print(style(f"warning: MCP server failed to start ({cmd}): {e}",
+                        "warning"), file=sys.stderr)
+            continue
+        mcp_clients.append(client)
+
+    state = AgentState(
+        workspace=workspace, base_url=args.base_url, model=args.model,
+        allow_bash=args.allow_bash, session_id=session_id,
+        yolo=args.yolo, theme_name=args.theme, mcp_clients=mcp_clients,
+    )
+    if args.system:
+        state.system_override = args.system
+    if not args.no_context:
+        state.context_text, state.context_files = load_project_context(workspace)
+    state.reset_transcript()
+
+    if args.resume:
+        try:
+            payload, name = load_session(args.resume)
+            state.transcript = payload.get("transcript", []) or state.transcript
+            state.sink.current = payload.get("tasks", [])
+            if "model" in payload and not os.environ.get("LMSTUDIO_MODEL"):
+                state.model = payload["model"]
+            if not args.no_banner and not args.json:
+                print(style(f"resumed {name}: {len(state.transcript)} messages",
+                            "ok"))
+        except FileNotFoundError as e:
+            print(style(f"error: {e}", "err"), file=sys.stderr)
+            sys.exit(2)
+
+    router = SlashRouter(state)
+    json_emit = make_json_emitter() if args.json else None
+    if json_emit:
+        json_emit("session_started",
+                  session_id=session_id, model=state.model,
+                  workspace=str(workspace))
+
+    if not args.no_banner and not args.json:
+        draw_banner(state.model, workspace, state.allow_bash, session_id,
+                    state.theme_name, state.context_files)
+        draw_tips()
+
+    _load_history()
+    if not args.json:
+        install_completer(workspace, router.names())
+
+    # SIGWINCH: redraw the prompt area cleanly on terminal resize between
+    # turns. We can't redraw mid-input safely without raw-mode line editing,
+    # so this just flags a state we can act on after the current input.
+    def _on_resize(signum, frame):
+        try:
+            sys.stdout.flush()
+        except Exception:
+            pass
+    try:
+        signal.signal(signal.SIGWINCH, _on_resize)
+    except (ValueError, AttributeError):
+        pass
+
+    one_shot = " ".join(args.prompt).strip()
+    if one_shot:
+        if not args.json:
+            top, lead, bot = draw_prompt_box()
+            draw_status_footer(state)
+            print(top)
+            print(f"{lead}{one_shot}")
+            print(bot)
+            print()
+        try:
+            run_turn(state, one_shot, json_emit=json_emit)
+        except (KeyboardInterrupt, EscInterrupt):
+            if json_emit:
+                json_emit("interrupted")
+            else:
+                print(style("\n  (interrupted)", "warning"))
+        _shutdown(state, json_emit)
+        return
+
+    if args.json:
+        # JSON mode without a one-shot prompt reads newline-delimited
+        # prompts from stdin and emits structured events per turn.
+        for raw in sys.stdin:
+            user_in = raw.strip()
+            if not user_in or user_in in ("/quit", "/exit"):
+                break
+            try:
+                run_turn(state, user_in, json_emit=json_emit)
+            except (KeyboardInterrupt, EscInterrupt):
+                json_emit("interrupted")
+            except Exception as e:
+                json_emit("error", message=str(e))
+        _shutdown(state, json_emit)
+        return
+
+    while True:
+        top, lead, bot = draw_prompt_box()
+        draw_status_footer(state)
+        print(top)
+        try:
+            user_in = input(lead).strip()
+        except EOFError:
+            print(bot)
+            break
+        except KeyboardInterrupt:
+            print()
+            continue
+        print(bot)
+        if not user_in:
+            continue
+        if user_in.startswith("/"):
+            outcome = router.dispatch(user_in)
+            if outcome == "exit":
+                break
+            continue
+        _save_history()
+        print()
+        try:
+            run_turn(state, user_in)
+        except (KeyboardInterrupt, EscInterrupt):
+            print(style("\n  (interrupted)", "warning"))
+        except Exception as e:
+            print(style(f"  {GLYPH_ERR} error: {e}", "err"), file=sys.stderr)
+        print()
+
+    _shutdown(state, json_emit)
+
+
+def _shutdown(state, json_emit):
+    _save_history()
+    for client in state.mcp_clients:
+        client.stop()
+    if json_emit:
+        json_emit("session_ended")
 
 
 if __name__ == "__main__":

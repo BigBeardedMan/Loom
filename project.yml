@@ -15,7 +15,7 @@ settings:
     # release, so the pill never shows a code lower than what's on main.
     # Bump this manually before each testing release; release-testing.sh
     # reads it back out and tags the GitHub pre-release `testing-<version>`.
-    MARKETING_VERSION: "3.5.1"
+    MARKETING_VERSION: "3.6.0"
     CURRENT_PROJECT_VERSION: "1"
     CODE_SIGN_STYLE: Manual
     CODE_SIGN_IDENTITY: "Loom Local Codesign"
