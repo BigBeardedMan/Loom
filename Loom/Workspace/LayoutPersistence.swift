@@ -43,6 +43,9 @@ enum LayoutPersistence {
         /// Pin fraction (0.2-0.8). `nil` means an unpinned block or a
         /// pre-3.1.0 store with default 50% split.
         var pinFraction: Double?
+        /// Horizontal cell-fill fraction (0.3-1.0). `nil` means default 1.0
+        /// (block fills its cell). Drives the trailing-edge resize handle.
+        var widthFraction: Double?
     }
 
     fileprivate struct StoredLayout: Codable, Sendable {
@@ -130,6 +133,7 @@ private extension LayoutPersistence.StoredBlock {
         self.widthWeight = block.widthWeight == 1.0 ? nil : block.widthWeight
         self.heightWeight = block.heightWeight == 1.0 ? nil : block.heightWeight
         self.pinFraction = block.pinFraction
+        self.widthFraction = block.widthFraction == 1.0 ? nil : block.widthFraction
         if block.kind == .terminal {
             self.cwdPath = block.terminalSessions.first?.cwd.path
             self.terminalCwds = block.terminalSessions.map { $0.cwd.path }
@@ -165,6 +169,10 @@ private extension LayoutPersistence.StoredBlock {
         if let pf = pinFraction {
             block.pinFraction = min(max(pf, WorkspaceBlock.pinFractionRange.lowerBound),
                                     WorkspaceBlock.pinFractionRange.upperBound)
+        }
+        if let wf = widthFraction {
+            block.widthFraction = min(max(wf, WorkspaceBlock.widthFractionRange.lowerBound),
+                                      WorkspaceBlock.widthFractionRange.upperBound)
         }
 
         if kind == .terminal {

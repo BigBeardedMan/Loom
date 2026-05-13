@@ -14,6 +14,8 @@ import {
   WEIGHT_MAX,
   PIN_FRACTION_MIN,
   PIN_FRACTION_MAX,
+  WIDTH_FRACTION_MIN,
+  WIDTH_FRACTION_MAX,
 } from "../modules/workspace/deckMetrics";
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
@@ -66,6 +68,7 @@ type AppState = {
     updates: { id: string; widthWeight?: number; heightWeight?: number }[]
   ) => Promise<void>;
   setPinFraction: (id: string, fraction: number) => Promise<void>;
+  setWidthFraction: (id: string, fraction: number) => Promise<void>;
   resetSeam: (ids: string[]) => Promise<void>;
   resetAllWeights: () => Promise<void>;
   setBlockStatus: (id: string, status: "idle" | "active" | "warning") => void;
@@ -329,6 +332,21 @@ export const useApp = create<AppState>((set, get) => ({
     await saveLayout(wsId, next);
   },
 
+  setWidthFraction: async (id, fraction) => {
+    const wsId = get().selectedWorkspaceId;
+    const current = get().layout;
+    if (!wsId || !current) return;
+    const next: Layout = {
+      blocks: current.blocks.map((b) =>
+        b.id === id
+          ? { ...b, widthFraction: clamp(fraction, WIDTH_FRACTION_MIN, WIDTH_FRACTION_MAX) }
+          : b
+      ),
+    };
+    set({ layout: next });
+    await saveLayout(wsId, next);
+  },
+
   resetSeam: async (ids) => {
     const wsId = get().selectedWorkspaceId;
     const current = get().layout;
@@ -336,7 +354,7 @@ export const useApp = create<AppState>((set, get) => ({
     const idSet = new Set(ids);
     const next: Layout = {
       blocks: current.blocks.map((b) =>
-        idSet.has(b.id) ? { ...b, widthWeight: 1.0, heightWeight: 1.0 } : b
+        idSet.has(b.id) ? { ...b, widthWeight: 1.0, heightWeight: 1.0, widthFraction: 1.0 } : b
       ),
     };
     set({ layout: next });
@@ -353,6 +371,7 @@ export const useApp = create<AppState>((set, get) => ({
         widthWeight: 1.0,
         heightWeight: 1.0,
         pinFraction: undefined,
+        widthFraction: 1.0,
       })),
     };
     set({ layout: next });

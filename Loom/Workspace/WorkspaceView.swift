@@ -473,6 +473,7 @@ private enum DividerDragStart {
     case column(leftWeight: Double, rightWeight: Double, leftPx: CGFloat, rowWidthPx: CGFloat)
     case row(topWeight: Double, bottomWeight: Double, topPx: CGFloat, colHeightPx: CGFloat)
     case pin(fraction: Double, extentPx: CGFloat, sign: CGFloat)
+    case trailing(fraction: Double, cellWidthPx: CGFloat)
 }
 
 /// Invisible 12pt-thick grip living in a gap between blocks. Renders a thin
@@ -563,6 +564,11 @@ struct DividerGripView: View {
                 ? (deckSize.width - metrics.gap)
                 : (deckSize.height - metrics.gap)
             return .pin(fraction: f0, extentPx: extent, sign: pinSign(for: pin, axis: axis))
+        case .trailingEdge(let blockID):
+            guard let b = layout.blocks.first(where: { $0.id == blockID }) else { return nil }
+            let f0 = b.widthFraction
+            let cellW = metrics.cellWidths[blockID] ?? metrics.frame(for: blockID).width
+            return .trailing(fraction: f0, cellWidthPx: cellW)
         }
     }
 
@@ -608,6 +614,14 @@ struct DividerGripView: View {
             let target = f0 + Double(normalized)
             layout.setPinFraction(pinnedID, to: target)
 
+        case (.trailingEdge(let blockID),
+              .trailing(let f0, let cellWidthPx)):
+            // translation.width > 0 grows the block back toward the right;
+            // < 0 shrinks it. Convert pixel delta to fraction-of-cell.
+            let normalized = translation.width / max(1, cellWidthPx)
+            let target = f0 + Double(normalized)
+            layout.setWidthFraction(blockID, to: target)
+
         default:
             break
         }
@@ -620,6 +634,9 @@ struct DividerGripView: View {
         case .pinSplit(let pinnedID, _):
             // Reset just this seam by clearing the pin fraction back to 50%.
             layout.setPinFraction(pinnedID, to: 0.5)
+        case .trailingEdge(let blockID):
+            // Restore the block to full-cell width.
+            layout.setWidthFraction(blockID, to: 1.0)
         }
     }
 
@@ -827,6 +844,11 @@ enum DeckDividerKind: Hashable {
     /// (drag left/right adjusts width-side fraction); `axis = .vertical` for
     /// a horizontal seam (drag up/down adjusts height-side fraction).
     case pinSplit(pinnedID: UUID, axis: Axis)
+    /// Right edge of the last block in a row. Drag adjusts the block's
+    /// `widthFraction`, shrinking it toward the left and exposing deck
+    /// background on the right. The only horizontal control in a
+    /// single-block (stacked) row.
+    case trailingEdge(blockID: UUID)
 }
 
 struct DeckDivider: Hashable {
@@ -845,6 +867,11 @@ struct DeckMetrics {
     let gap: CGFloat
     let frames: [UUID: CGRect]
     let pinnedID: UUID?
+    /// Pre-`widthFraction` cell width for each block. Equal to `frame.width`
+    /// when the block fills its cell; larger when the block has been shrunk
+    /// via the trailing-edge handle. Used by the trailing-edge drag handler
+    /// to recover what the cell *could* be at full width.
+    let cellWidths: [UUID: CGFloat]
     /// Draggable divider hit zones. Always centered in the 12pt gap so the
     /// grip never overlaps a block's visible content.
     let dividers: [DeckDivider]
@@ -852,16 +879,32 @@ struct DeckMetrics {
     init(size: CGSize, blocks: [WorkspaceBlock]) {
         let gap: CGFloat = 12
         var frames: [UUID: CGRect] = [:]
+        var cellWidths: [UUID: CGFloat] = [:]
         var pinnedID: UUID?
         var dividers: [DeckDivider] = []
 
         if blocks.count == 1 {
-            // Single block always fills the deck. Pinning makes no sense when
+            // Single block fills the deck along the row but still gets a
+            // trailing-edge handle so the user can carve out empty space on
+            // the right via widthFraction. Pinning makes no sense when
             // there are no other blocks to take the remainder.
-            frames[blocks[0].id] = CGRect(origin: .zero, size: size)
+            let only = blocks[0]
+            let cellW = size.width
+            let frac = CGFloat(min(max(only.widthFraction, WorkspaceBlock.widthFractionRange.lowerBound),
+                                   WorkspaceBlock.widthFractionRange.upperBound))
+            let blockW = max(140, cellW * frac)
+            frames[only.id] = CGRect(x: 0, y: 0, width: blockW, height: size.height)
+            cellWidths[only.id] = cellW
+            let trailingRect = CGRect(x: blockW, y: 0, width: gap, height: size.height)
+            dividers.append(DeckDivider(
+                kind: .trailingEdge(blockID: only.id),
+                rect: trailingRect,
+                isVertical: true
+            ))
         } else if let pinned = blocks.first(where: { $0.pin != nil }), let pin = pinned.pin {
             let fraction = CGFloat(pinned.pinFraction ?? 0.5)
             frames[pinned.id] = Self.pinFrame(pin: pin, deckSize: size, gap: gap, fraction: fraction)
+            cellWidths[pinned.id] = frames[pinned.id]!.width
             pinnedID = pinned.id
 
             let freeBlocks = blocks.filter { $0.id != pinned.id }
@@ -873,10 +916,14 @@ struct DeckMetrics {
                 let wideRow = zones.wideRow
                 if let head = freeBlocks.first {
                     frames[head.id] = neighbor
+                    cellWidths[head.id] = neighbor.width
                     let tail = Array(freeBlocks.dropFirst())
                     let rowResult = Self.computeEvenRow(blocks: tail, area: wideRow, gap: gap)
                     for (id, rect) in rowResult.frames {
                         frames[id] = rect
+                    }
+                    for (id, w) in rowResult.cellWidths {
+                        cellWidths[id] = w
                     }
                     dividers.append(contentsOf: rowResult.dividers)
                 }
@@ -885,6 +932,9 @@ struct DeckMetrics {
                 let rowResult = Self.computeEvenRow(blocks: freeBlocks, area: freeArea, gap: gap)
                 for (id, rect) in rowResult.frames {
                     frames[id] = rect
+                }
+                for (id, w) in rowResult.cellWidths {
+                    cellWidths[id] = w
                 }
                 dividers.append(contentsOf: rowResult.dividers)
             }
@@ -904,12 +954,16 @@ struct DeckMetrics {
             for (id, rect) in rowResult.frames {
                 frames[id] = rect
             }
+            for (id, w) in rowResult.cellWidths {
+                cellWidths[id] = w
+            }
             dividers.append(contentsOf: rowResult.dividers)
         }
 
         self.containerSize = size
         self.gap = gap
         self.frames = frames
+        self.cellWidths = cellWidths
         self.pinnedID = pinnedID
         self.dividers = dividers
     }
@@ -994,8 +1048,8 @@ struct DeckMetrics {
         blocks: [WorkspaceBlock],
         area: CGRect,
         gap: CGFloat
-    ) -> (frames: [UUID: CGRect], dividers: [DeckDivider]) {
-        guard !blocks.isEmpty, area.width > 0, area.height > 0 else { return ([:], []) }
+    ) -> (frames: [UUID: CGRect], cellWidths: [UUID: CGFloat], dividers: [DeckDivider]) {
+        guard !blocks.isEmpty, area.width > 0, area.height > 0 else { return ([:], [:], []) }
         let cap = WorkspaceLayout.capacity(for: area.size)
         let cols = balancedCols(
             count: blocks.count,
@@ -1037,6 +1091,7 @@ struct DeckMetrics {
         let rowHeights: [CGFloat] = rawRowHeights.map { max(160, $0) }
 
         var frames: [UUID: CGRect] = [:]
+        var cellWidths: [UUID: CGFloat] = [:]
         var dividers: [DeckDivider] = []
         var cursorY = area.minY
         for (rowIdx, row) in rows.enumerated() {
@@ -1054,16 +1109,46 @@ struct DeckMetrics {
 
             var cursorX = area.minX
             for (posInRow, block) in row.enumerated() {
+                let isLast = (posInRow == row.count - 1)
                 let cellW = widths[posInRow]
-                frames[block.id] = CGRect(x: cursorX, y: cursorY, width: cellW, height: rowH)
+                // widthFraction only applies to the LAST block in a row. For
+                // earlier blocks the columnGap to their right is the resize
+                // control; introducing a second handle there would overlap
+                // it. The last block has no columnGap, so its widthFraction
+                // shrinks it toward the left, exposing deck background on
+                // the right where a trailing-edge handle lives.
+                let frac: CGFloat = isLast
+                    ? CGFloat(min(max(block.widthFraction, WorkspaceBlock.widthFractionRange.lowerBound),
+                                  WorkspaceBlock.widthFractionRange.upperBound))
+                    : 1.0
+                let blockW = max(140, cellW * frac)
+                frames[block.id] = CGRect(x: cursorX, y: cursorY, width: blockW, height: rowH)
+                cellWidths[block.id] = cellW
                 // Vertical divider between this block and the next in the row.
-                if posInRow < row.count - 1 {
+                if !isLast {
                     let dividerX = cursorX + cellW
                     let rightID = row[posInRow + 1].id
                     let rect = CGRect(x: dividerX, y: cursorY, width: gap, height: rowH)
                     dividers.append(DeckDivider(
                         kind: .columnGap(leftID: block.id, rightID: rightID),
                         rect: rect,
+                        isVertical: true
+                    ))
+                } else {
+                    // Trailing-edge handle for the last block in the row.
+                    // Always sits flush against the block's right edge (12pt
+                    // wide), so the grip moves with the block as it shrinks
+                    // or grows. The exposed deck background to the right is
+                    // visual feedback for the new widthFraction.
+                    let trailingRect = CGRect(
+                        x: cursorX + blockW,
+                        y: cursorY,
+                        width: gap,
+                        height: rowH
+                    )
+                    dividers.append(DeckDivider(
+                        kind: .trailingEdge(blockID: block.id),
+                        rect: trailingRect,
                         isVertical: true
                     ))
                 }
@@ -1084,7 +1169,7 @@ struct DeckMetrics {
             }
             cursorY += rowH + gap
         }
-        return (frames, dividers)
+        return (frames, cellWidths, dividers)
     }
 
     /// Build the draggable boundary divider(s) for a pinned block. Edge pins

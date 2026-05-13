@@ -413,6 +413,15 @@ the seam between the pin and the rest of the deck. The pin can claim
 anywhere from 20% to 80% of the deck along its axis. Corner pins expose
 two draggable seams (one per shared edge) and share a single fraction.
 
+Stacked rows (one block per row) used to be height-only because there was
+no neighbour to share width with. Every row now exposes a **trailing-edge
+handle** on the rightmost block: hover the block's right edge, the cursor
+flips to horizontal resize, and dragging left shrinks the block toward
+30% of its cell while exposing deck background on the right. The handle
+appears on the last block of multi-block rows too, so the row's right
+side is always grabbable. Double-click the handle to restore full-cell
+width.
+
 Sizes persist per block in `layout.json`, so reordering or reopening Loom
 preserves your tuned layout.
 

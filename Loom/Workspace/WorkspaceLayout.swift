@@ -85,6 +85,11 @@ final class WorkspaceBlock: Identifiable {
     /// hard-coded 0.5 split between the pinned area and the free area. `nil`
     /// falls back to 0.5 for backwards compatibility.
     var pinFraction: Double?
+    /// Block's share of its allotted cell along the horizontal axis. 1.0 (default)
+    /// fills the cell. Values below 1.0 shrink the block toward the left, leaving
+    /// deck background visible on the right. Lets stacked single-block rows expose
+    /// a horizontal resize handle even when there is no sibling to share width with.
+    var widthFraction: Double
     var customTitle: String?
     var autoTerminalIndex: Int?
     var autoPreviewIndex: Int?
@@ -108,6 +113,10 @@ final class WorkspaceBlock: Identifiable {
     /// Allowed range for `pinFraction`. Symmetrical so the unpinned side
     /// never falls below 20% of the deck.
     static let pinFractionRange: ClosedRange<Double> = 0.2...0.8
+    /// Allowed range for `widthFraction`. Floor of 0.3 keeps the block
+    /// readable; ceiling of 1.0 means "fill the cell" — going wider would
+    /// overflow neighbouring blocks.
+    static let widthFractionRange: ClosedRange<Double> = 0.3...1.0
 
     init(kind: PanelKind, cwd: URL = FileManager.default.homeDirectoryForCurrentUser) {
         self.id = UUID()
@@ -117,6 +126,7 @@ final class WorkspaceBlock: Identifiable {
         self.widthWeight = 1.0
         self.heightWeight = 1.0
         self.pinFraction = nil
+        self.widthFraction = 1.0
         self.customTitle = nil
         self.autoTerminalIndex = nil
         self.autoPreviewIndex = nil
@@ -368,12 +378,25 @@ final class WorkspaceLayout {
         persistCurrent()
     }
 
+    /// Update the horizontal cell-fill fraction for a single block. Drives
+    /// the trailing-edge resize handle, which is the only horizontal control
+    /// in a stacked single-block row.
+    func setWidthFraction(_ id: UUID, to fraction: Double) {
+        let current = blocks
+        guard let block = current.first(where: { $0.id == id }) else { return }
+        block.widthFraction = min(max(fraction, WorkspaceBlock.widthFractionRange.lowerBound),
+                                  WorkspaceBlock.widthFractionRange.upperBound)
+        blocksByKind[currentKind] = current
+        persistCurrent()
+    }
+
     /// Reset weights for a specific pair (the two sides of one divider).
     func resetWeights(for ids: [UUID]) {
         let current = blocks
         for block in current where ids.contains(block.id) {
             block.widthWeight = 1.0
             block.heightWeight = 1.0
+            block.widthFraction = 1.0
         }
         blocksByKind[currentKind] = current
         persistCurrent()
@@ -387,6 +410,7 @@ final class WorkspaceLayout {
             block.widthWeight = 1.0
             block.heightWeight = 1.0
             block.pinFraction = nil
+            block.widthFraction = 1.0
         }
         blocksByKind[currentKind] = current
         persistCurrent()
