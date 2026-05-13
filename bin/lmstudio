@@ -65,6 +65,9 @@ COMPACT_TRIGGER_RATIO = 0.75
 JOURNAL_ROOT = Path.home() / ".loom" / "journal"
 BRANCH_ROOT = Path.home() / ".loom" / "branches"
 PROJECT_KNOWLEDGE_FILENAME = ".loom/project.json"
+PERSONA_WORKSPACE_FILENAME = ".loom/persona.md"
+PERSONA_ROOT = Path.home() / ".loom" / "personas"
+PERMISSION_ROOT = Path.home() / ".loom" / "permissions"
 
 WORKSPACE_TREE_IGNORE = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache",
@@ -308,10 +311,12 @@ def draw_banner(model, workspace, allow_bash, session_id, theme_name,
 
 
 def draw_banner_extra(state):
-    """Surface the new 4.0.0 features when they're active. Called right
+    """Surface the new 4.0.0+ features when they're active. Called right
     after `draw_banner`; silent when nothing's interesting to report."""
     width = box_width()
     rows = []
+    if state.persona_source:
+        rows.append(("persona", state.persona_source, "ok"))
     if state.project_knowledge_text:
         rows.append(("knowledge", "project.json loaded", "ok"))
     if state.preview:
@@ -319,6 +324,14 @@ def draw_banner_extra(state):
     if state.auto_test:
         runner = detect_test_runner(state.workspace)
         rows.append(("auto-test", "on (" + (runner["name"] if runner else "no runner") + ")", "ok"))
+    if state.auto_screenshot:
+        rows.append(("auto-shot", "on", "ok"))
+    if state.auto_commit:
+        rows.append(("autocommit", "on", "ok"))
+    if state.aggressive_batching:
+        rows.append(("batch", "on (aggressive)", "ok"))
+    if state.lsp:
+        rows.append(("lsp", "running", "ok"))
     if state.planner_model or state.coder_model or state.explainer_model:
         parts = []
         if state.planner_model: parts.append(f"plan={state.planner_model}")
@@ -1369,22 +1382,355 @@ def tool_run_bash(state, args):
     holding a terminal we don't own. The previous `zsh -lic ...` invocation
     flipped pgrp ownership around and intermittently dropped lmstudio into
     the background, where the spinner's next stdout write tripped SIGTTOU
-    ("zsh: suspended (tty output)")."""
+    ("zsh: suspended (tty output)").
+
+    Streams the command's combined output line-by-line to the terminal so
+    long-running tasks aren't silent. Captures the full output to return
+    as the tool result."""
     command = args["command"]
-    timeout = max(1, min(int(args.get("timeout_seconds", 30)), 300))
-    proc = subprocess.run(
+    timeout = max(1, min(int(args.get("timeout_seconds", 30)), 600))
+    proc = subprocess.Popen(
         ["/bin/zsh", "-lc", command],
         cwd=str(state.workspace),
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
-        timeout=timeout,
+        bufsize=1,
         start_new_session=True,
     )
+    deadline = time.time() + timeout
+    chunks = []
+    truncated = False
+    total_bytes = 0
+    cap = 32000
+    quiet = not sys.stdout.isatty()
+    try:
+        while True:
+            if time.time() > deadline:
+                proc.kill()
+                chunks.append("\n[orchestrator killed: timeout exceeded]\n")
+                break
+            line = proc.stdout.readline()
+            if not line:
+                if proc.poll() is not None:
+                    break
+                continue
+            if not quiet:
+                sys.stdout.write("  " + style("│", "dim") + " " + line)
+                sys.stdout.flush()
+            if not truncated:
+                if total_bytes + len(line) > cap:
+                    chunks.append(line[:cap - total_bytes])
+                    chunks.append(f"\n...(streamed truncated at {cap} bytes; "
+                                  f"continued running)\n")
+                    truncated = True
+                else:
+                    chunks.append(line)
+                    total_bytes += len(line)
+    finally:
+        if proc.poll() is None:
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
     header = f"$ {command}\n[exit {proc.returncode}]\n"
-    body = proc.stdout + proc.stderr
-    if len(body) > 16000:
-        body = body[:16000] + "\n...(truncated)"
-    return header + body
+    return header + "".join(chunks)
+
+
+# =============================================================================
+# Headless browser (Playwright via persistent subprocess)
+# =============================================================================
+#
+# The agent gets a Chromium it can drive: navigate, screenshot, click,
+# type, evaluate JS. Implemented as a persistent Python subprocess running
+# Playwright's sync API so we don't pay launch cost per call. The
+# subprocess speaks one-line JSON over stdin/stdout.
+#
+# Degrades gracefully: if `playwright` isn't importable in the child, the
+# child reports it on first command and the tool returns an instructive
+# error pointing to the install steps.
+
+BROWSER_DRIVER = r"""
+import sys, json, traceback
+
+try:
+    from playwright.sync_api import sync_playwright
+except Exception as e:
+    sys.stdout.write(json.dumps({
+        "error": "playwright not installed",
+        "hint": "pip install playwright && python -m playwright install chromium"
+    }) + "\n")
+    sys.stdout.flush()
+    sys.exit(0)
+
+pw = sync_playwright().start()
+browser = None
+page = None
+
+def _ensure_browser():
+    global browser, page
+    if browser is None:
+        browser = pw.chromium.launch(headless=True)
+    if page is None:
+        ctx = browser.new_context(viewport={"width": 1280, "height": 800})
+        page = ctx.new_page()
+
+for raw in sys.stdin:
+    raw = raw.strip()
+    if not raw:
+        continue
+    try:
+        cmd = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(json.dumps({"error": f"bad json: {e}"}))
+        sys.stdout.flush()
+        continue
+    method = cmd.get("method")
+    out = {}
+    try:
+        if method == "goto":
+            _ensure_browser()
+            page.goto(cmd["url"], wait_until="domcontentloaded", timeout=30000)
+            out = {"url": page.url, "title": page.title()}
+        elif method == "screenshot":
+            _ensure_browser()
+            full = bool(cmd.get("full_page", True))
+            page.screenshot(path=cmd["path"], full_page=full)
+            out = {"path": cmd["path"]}
+        elif method == "click":
+            _ensure_browser()
+            page.click(cmd["selector"], timeout=10000)
+            out = {"clicked": cmd["selector"]}
+        elif method == "type":
+            _ensure_browser()
+            page.fill(cmd["selector"], cmd["text"], timeout=10000)
+            out = {"typed": True}
+        elif method == "eval":
+            _ensure_browser()
+            out = {"result": page.evaluate(cmd["script"])}
+        elif method == "text":
+            _ensure_browser()
+            out = {"text": page.inner_text("body")[:32000]}
+        elif method == "close":
+            if browser is not None:
+                browser.close()
+                browser = None
+                page = None
+            pw.stop()
+            print(json.dumps({"closed": True}))
+            sys.stdout.flush()
+            sys.exit(0)
+        else:
+            out = {"error": f"unknown method: {method}"}
+    except Exception as e:
+        out = {"error": str(e), "trace": traceback.format_exc()[:2000]}
+    print(json.dumps(out))
+    sys.stdout.flush()
+"""
+
+
+class BrowserSession:
+    """Long-lived Playwright subprocess. Lazy-launched on first call."""
+
+    def __init__(self):
+        self.proc = None
+
+    def _ensure(self):
+        if self.proc and self.proc.poll() is None:
+            return
+        self.proc = subprocess.Popen(
+            ["python3", "-u", "-c", BROWSER_DRIVER],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, bufsize=1,
+        )
+
+    def call(self, method, **kwargs):
+        self._ensure()
+        msg = {"method": method, **kwargs}
+        try:
+            self.proc.stdin.write(json.dumps(msg) + "\n")
+            self.proc.stdin.flush()
+        except (BrokenPipeError, OSError) as e:
+            return {"error": f"browser subprocess died: {e}"}
+        line = self.proc.stdout.readline()
+        if not line:
+            # Maybe an early exit (playwright missing). Read stderr too.
+            err = self.proc.stderr.read() if self.proc.stderr else ""
+            return {"error": "browser subprocess produced no output",
+                    "stderr": err[:400]}
+        try:
+            return json.loads(line)
+        except json.JSONDecodeError as e:
+            return {"error": f"browser returned non-JSON: {e}", "raw": line[:400]}
+
+    def close(self):
+        if not self.proc:
+            return
+        try:
+            self.proc.stdin.write(json.dumps({"method": "close"}) + "\n")
+            self.proc.stdin.flush()
+        except Exception:
+            pass
+        try:
+            self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+        self.proc = None
+
+
+def _ensure_browser(state):
+    if state.browser is None:
+        state.browser = BrowserSession()
+    return state.browser
+
+
+def tool_browser_open(state, args):
+    res = _ensure_browser(state).call("goto", url=args["url"])
+    if res.get("error"):
+        return _browser_error(res)
+    return f"opened {res['url']}\ntitle: {res.get('title','?')}"
+
+
+def tool_browser_screenshot(state, args):
+    target = args.get("path")
+    if not target:
+        ts = int(time.time())
+        target_path = state.workspace / "screenshots" / f"shot-{ts}.png"
+    else:
+        target_path = resolve_in_workspace(state.workspace, target)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    full = bool(args.get("full_page", True))
+    res = _ensure_browser(state).call(
+        "screenshot", path=str(target_path), full_page=full)
+    if res.get("error"):
+        return _browser_error(res)
+    try:
+        rel = target_path.relative_to(state.workspace)
+    except ValueError:
+        rel = target_path
+    return f"saved screenshot to {rel}"
+
+
+def tool_browser_click(state, args):
+    res = _ensure_browser(state).call("click", selector=args["selector"])
+    if res.get("error"):
+        return _browser_error(res)
+    return f"clicked {args['selector']}"
+
+
+def tool_browser_type(state, args):
+    res = _ensure_browser(state).call(
+        "type", selector=args["selector"], text=args["text"])
+    if res.get("error"):
+        return _browser_error(res)
+    return f"typed into {args['selector']}"
+
+
+def tool_browser_eval(state, args):
+    res = _ensure_browser(state).call("eval", script=args["script"])
+    if res.get("error"):
+        return _browser_error(res)
+    val = res.get("result")
+    return f"result: {json.dumps(val)[:2000]}"
+
+
+def tool_browser_text(state, _args):
+    res = _ensure_browser(state).call("text")
+    if res.get("error"):
+        return _browser_error(res)
+    return res.get("text", "")
+
+
+def tool_browser_close(state, _args):
+    if state.browser:
+        state.browser.close()
+        state.browser = None
+        return "browser closed."
+    return "browser was not running."
+
+
+def _browser_error(res):
+    msg = res.get("error", "unknown browser error")
+    hint = res.get("hint")
+    if hint:
+        msg += f"\nhint: {hint}"
+    return f"browser error: {msg}"
+
+
+def _run_git(state, *args, timeout=20, max_bytes=16000):
+    """Run a git subcommand inside the workspace. Returns the combined
+    stdout+stderr, capped. The model uses these for repository awareness."""
+    try:
+        proc = subprocess.run(
+            ["/usr/bin/env", "git", *args],
+            cwd=str(state.workspace),
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return f"git error: {e}"
+    out = (proc.stdout or "") + (proc.stderr or "")
+    if not out.strip():
+        return f"(empty) git {' '.join(args)} -> exit {proc.returncode}"
+    if len(out) > max_bytes:
+        out = out[:max_bytes] + f"\n…(truncated; {len(out) - max_bytes} more bytes)"
+    return out
+
+
+def tool_git_status(state, _args):
+    return _run_git(state, "status", "--short", "--branch")
+
+
+def tool_git_diff(state, args):
+    target = args.get("path", "")
+    staged = args.get("staged", False)
+    cmd = ["diff"]
+    if staged:
+        cmd.append("--staged")
+    if target:
+        cmd.append("--")
+        cmd.append(target)
+    return _run_git(state, *cmd, max_bytes=32000)
+
+
+def tool_git_log(state, args):
+    limit = max(1, min(int(args.get("limit", 20)), 200))
+    return _run_git(state, "log", f"-{limit}", "--oneline", "--decorate")
+
+
+def tool_git_blame(state, args):
+    path = args["path"]
+    return _run_git(state, "blame", "--", path, max_bytes=20000)
+
+
+def tool_git_show(state, args):
+    target = args.get("commit", "HEAD")
+    return _run_git(state, "show", "--stat", target, max_bytes=20000)
+
+
+def tool_find_todos(state, args):
+    """Scan the workspace for TODO/FIXME/XXX/HACK markers. Returns
+    `path:line: text` per hit, capped at 200 hits. Skip dirs that
+    `WORKSPACE_TREE_IGNORE` already filters from the workspace scan."""
+    pattern = args.get("pattern") or "TODO|FIXME|XXX|HACK|NOTE"
+    paths_arg = args.get("path", "")
+    if paths_arg:
+        base = resolve_in_workspace(state.workspace, paths_arg)
+    else:
+        base = state.workspace
+    exclude = [f"--exclude-dir={d}" for d in WORKSPACE_TREE_IGNORE]
+    cmd = ["/usr/bin/grep", "-rInE", *exclude, "--", pattern, str(base)]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+    except subprocess.TimeoutExpired:
+        return f"find_todos timed out"
+    lines = (proc.stdout or "").splitlines()
+    if not lines:
+        return "no TODO/FIXME markers found"
+    prefix = str(state.workspace) + "/"
+    cleaned = [ln.removeprefix(prefix) for ln in lines[:200]]
+    suffix = "" if len(lines) <= 200 else f"\n... ({len(lines) - 200} more)"
+    return "\n".join(cleaned) + suffix
 
 
 def tool_spawn_agent(state, args):
@@ -1465,6 +1811,91 @@ BUILTIN_TOOL_SCHEMAS = [
                 "new_string": {"type": "string"}},
                 "required": ["old_string", "new_string"]}}},
             "required": ["path", "edits"]}}},
+    {"type": "function", "function": {"name": "git_status",
+        "description": "git status --short --branch in the workspace.",
+        "parameters": {"type": "object", "properties": {},
+            "required": []}}},
+    {"type": "function", "function": {"name": "git_diff",
+        "description": "git diff (working tree by default; staged when staged=true). Optionally limit to one path.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"},
+            "staged": {"type": "boolean"}},
+            "required": []}}},
+    {"type": "function", "function": {"name": "git_log",
+        "description": "git log --oneline -N (N = limit, default 20, max 200).",
+        "parameters": {"type": "object", "properties": {
+            "limit": {"type": "integer"}},
+            "required": []}}},
+    {"type": "function", "function": {"name": "git_blame",
+        "description": "git blame for a single file in the workspace.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"}},
+            "required": ["path"]}}},
+    {"type": "function", "function": {"name": "git_show",
+        "description": "git show <commit> --stat. Defaults to HEAD.",
+        "parameters": {"type": "object", "properties": {
+            "commit": {"type": "string"}},
+            "required": []}}},
+    {"type": "function", "function": {"name": "find_todos",
+        "description": "Scan workspace for TODO/FIXME/XXX/HACK/NOTE markers (or a custom regex). Returns path:line:text.",
+        "parameters": {"type": "object", "properties": {
+            "pattern": {"type": "string"},
+            "path": {"type": "string"}},
+            "required": []}}},
+    {"type": "function", "function": {"name": "browser_open",
+        "description": "Open or navigate the headless browser to a URL. Returns final URL + page title.",
+        "parameters": {"type": "object", "properties": {
+            "url": {"type": "string"}},
+            "required": ["url"]}}},
+    {"type": "function", "function": {"name": "browser_screenshot",
+        "description": "Screenshot the current browser page. Saves to <path> (default screenshots/<ts>.png inside workspace).",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"},
+            "full_page": {"type": "boolean"}},
+            "required": []}}},
+    {"type": "function", "function": {"name": "browser_click",
+        "description": "Click an element by CSS selector.",
+        "parameters": {"type": "object", "properties": {
+            "selector": {"type": "string"}},
+            "required": ["selector"]}}},
+    {"type": "function", "function": {"name": "browser_type",
+        "description": "Type text into a form field by CSS selector.",
+        "parameters": {"type": "object", "properties": {
+            "selector": {"type": "string"},
+            "text": {"type": "string"}},
+            "required": ["selector", "text"]}}},
+    {"type": "function", "function": {"name": "browser_eval",
+        "description": "Run a JS expression and return its result.",
+        "parameters": {"type": "object", "properties": {
+            "script": {"type": "string"}},
+            "required": ["script"]}}},
+    {"type": "function", "function": {"name": "browser_text",
+        "description": "Return the rendered text content of the current page (innerText).",
+        "parameters": {"type": "object", "properties": {},
+            "required": []}}},
+    {"type": "function", "function": {"name": "browser_close",
+        "description": "Close the headless browser session.",
+        "parameters": {"type": "object", "properties": {},
+            "required": []}}},
+    {"type": "function", "function": {"name": "lsp_diagnostics",
+        "description": "Get LSP diagnostics (errors/warnings) for a file. Requires --lsp.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"}},
+            "required": ["path"]}}},
+    {"type": "function", "function": {"name": "lsp_definition",
+        "description": "LSP textDocument/definition at line+character (0-indexed).",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"},
+            "line": {"type": "integer"},
+            "character": {"type": "integer"}},
+            "required": ["path", "line", "character"]}}},
+    {"type": "function", "function": {"name": "lsp_references",
+        "description": "LSP textDocument/references at line+character (0-indexed).",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"},
+            "line": {"type": "integer"},
+            "character": {"type": "integer"}},
+            "required": ["path", "line", "character"]}}},
     {"type": "function", "function": {"name": "run_bash",
         "description": "Execute a shell command in the workspace.",
         "parameters": {"type": "object", "properties": {
@@ -1500,12 +1931,30 @@ BUILTIN_TOOL_FUNCS = {
     "multi_edit": tool_multi_edit,
     "run_bash": tool_run_bash,
     "spawn_agent": tool_spawn_agent,
+    "git_status": tool_git_status,
+    "git_diff": tool_git_diff,
+    "git_log": tool_git_log,
+    "git_blame": tool_git_blame,
+    "git_show": tool_git_show,
+    "find_todos": tool_find_todos,
+    "browser_open": tool_browser_open,
+    "browser_screenshot": tool_browser_screenshot,
+    "browser_click": tool_browser_click,
+    "browser_type": tool_browser_type,
+    "browser_eval": tool_browser_eval,
+    "browser_text": tool_browser_text,
+    "browser_close": tool_browser_close,
+    # LSP tools are registered below where the LSP client class lives.
 }
 
 # Read-only tools that are safe to fan out in parallel (no fs mutation, no
 # shell escape, no permission prompt). Anything not in this set is run
 # sequentially to keep permission prompts ordered and writes deterministic.
-SAFE_PARALLEL_TOOLS = {"read_file", "list_dir", "glob", "grep"}
+SAFE_PARALLEL_TOOLS = {
+    "read_file", "list_dir", "glob", "grep",
+    "git_status", "git_diff", "git_log", "git_blame", "git_show",
+    "find_todos",
+}
 
 # Tools that mutate the filesystem and therefore get journaled for /undo.
 FS_MUTATING_TOOLS = {"write_file", "edit_file", "multi_edit"}
@@ -1732,6 +2181,376 @@ def expand_mentions(text, workspace):
 # =============================================================================
 # Orchestrator helpers (4.0.0): undo, memory, preview, branching, routing
 # =============================================================================
+
+def load_persona(workspace, persona_name=None):
+    """Return (persona_text, source_label) or ("", "") when no persona is
+    configured. Workspace persona wins over a named one."""
+    workspace_persona = Path(workspace) / PERSONA_WORKSPACE_FILENAME
+    if workspace_persona.is_file():
+        try:
+            text = workspace_persona.read_text(encoding="utf-8").strip()
+            if text:
+                return "# Persona (workspace)\n\n" + text[:8000], "workspace"
+        except OSError:
+            pass
+    if persona_name:
+        candidate = PERSONA_ROOT / f"{persona_name}.md"
+        if candidate.is_file():
+            try:
+                text = candidate.read_text(encoding="utf-8").strip()
+                if text:
+                    return ("# Persona ("
+                            + persona_name + ")\n\n" + text[:8000],
+                            persona_name)
+            except OSError:
+                pass
+    return "", ""
+
+
+def _workspace_permission_hash(workspace):
+    import hashlib
+    return hashlib.sha256(str(Path(workspace).resolve()).encode()).hexdigest()[:16]
+
+
+def load_permission_grants(state):
+    """Restore the allowed_forever set from a per-workspace JSON file so
+    "always allow" decisions survive across sessions."""
+    h = _workspace_permission_hash(state.workspace)
+    path = PERMISSION_ROOT / f"{h}.json"
+    if not path.is_file():
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        tools = data.get("allowed_forever") or []
+        if isinstance(tools, list):
+            for name in tools:
+                state.permissions.allowed_forever.add(name)
+    except (OSError, json.JSONDecodeError):
+        return
+
+
+def save_permission_grants(state):
+    if not state.permissions.allowed_forever:
+        return
+    PERMISSION_ROOT.mkdir(parents=True, exist_ok=True)
+    h = _workspace_permission_hash(state.workspace)
+    path = PERMISSION_ROOT / f"{h}.json"
+    try:
+        path.write_text(json.dumps({
+            "workspace": str(state.workspace),
+            "allowed_forever": sorted(state.permissions.allowed_forever),
+            "updated_at": _now_iso(),
+        }, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def maybe_auto_screenshot(state, mutated_paths):
+    """When auto-screenshot is enabled and a fs mutation touched a UI
+    file, spin up the preview server (if needed), screenshot the page via
+    the headless browser, OCR the result, and return a system message to
+    append to the transcript. Returns "" when nothing should be done."""
+    if not state.auto_screenshot:
+        return ""
+    ui_exts = {".html", ".htm", ".css", ".scss", ".jsx", ".tsx", ".svelte"}
+    if not any(Path(p).suffix.lower() in ui_exts for p in mutated_paths if p):
+        return ""
+    url = preview_start(state)
+    if not url:
+        return ""
+    if state.browser is None:
+        state.browser = BrowserSession()
+    nav = state.browser.call("goto", url=url)
+    if nav.get("error"):
+        return ""
+    shot_path = state.workspace / "screenshots" / f"auto-{int(time.time())}.png"
+    shot_path.parent.mkdir(parents=True, exist_ok=True)
+    res = state.browser.call("screenshot", path=str(shot_path),
+                             full_page=True)
+    if res.get("error"):
+        return ""
+    ocr_text = _ocr_image(shot_path)
+    label = "auto-screenshot OCR"
+    if ocr_text:
+        return (f"ORCHESTRATOR {label}: rendered {url} after UI edit. "
+                f"OCR'd text follows.\n\n{ocr_text[:6000]}")
+    return (f"ORCHESTRATOR {label}: rendered {url} after UI edit. "
+            f"Screenshot saved to {shot_path.relative_to(state.workspace)} "
+            f"(OCR returned empty - visual review only).")
+
+
+def maybe_auto_commit(state, completed_tasks):
+    """If auto_commit is on and the workspace is a git repo, stage and
+    commit the journaled changes with an auto-generated message naming
+    the completed task."""
+    if not state.auto_commit or not completed_tasks:
+        return None
+    if not (state.workspace / ".git").exists():
+        return None
+    subject = completed_tasks[0].get("subject", "task")
+    msg = f"lmstudio: {subject[:60]}\n\nCo-authored-by: lmstudio agent"
+    try:
+        subprocess.run(["/usr/bin/env", "git", "add", "-A"],
+                       cwd=str(state.workspace),
+                       capture_output=True, timeout=10)
+        proc = subprocess.run(
+            ["/usr/bin/env", "git", "commit", "-m", msg],
+            cwd=str(state.workspace), capture_output=True, text=True,
+            timeout=10,
+        )
+        if proc.returncode == 0:
+            return f"auto-commit: {subject[:80]}"
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    return None
+
+
+def aggressive_batch_steps(state, narration, json_emit=None):
+    """When the current task list has multiple pending tasks that name
+    files (Create X, Add Y), execute the first concrete write_file for
+    each one using grammar-constrained generation, without re-prompting
+    the model between steps. Stops at the first ambiguity.
+
+    Returns a list of {task_index, path, ok, message} dicts describing
+    what was attempted, suitable for inclusion in a synthetic system
+    follow-up."""
+    if not state.aggressive_batching or not state.grammar_supported:
+        return []
+    schema = schema_params_for("write_file")
+    if not schema:
+        return []
+    results = []
+    for idx, task in enumerate(state.sink.current):
+        if task.get("status") != "pending":
+            continue
+        subject = task.get("subject", "")
+        candidate = _scan_for_path(subject, state.workspace)
+        if not candidate:
+            break  # ambiguity - stop the batch
+        forced = force_grammar_args(
+            state.base_url, state.model, state.transcript,
+            "write_file", schema,
+            {"path": candidate}, narration or subject, state.workspace,
+        )
+        if not forced or missing_required("write_file", forced):
+            break
+        try:
+            result = tool_write_file(state, forced)
+            task["status"] = "completed"
+            results.append({"index": idx, "path": forced.get("path"),
+                            "ok": True, "message": result})
+        except Exception as e:
+            results.append({"index": idx, "path": forced.get("path"),
+                            "ok": False, "message": str(e)})
+            break
+    if results:
+        # Persist the updated task list.
+        state.sink.replace(state.sink.current)
+    return results
+
+
+# =============================================================================
+# Minimal LSP client (stdio JSON-RPC)
+# =============================================================================
+#
+# Speaks just enough of LSP to be useful: initialize, textDocument/didOpen,
+# textDocument/publishDiagnostics (server -> us), textDocument/definition,
+# textDocument/references. Targets one server at a time, configured via
+# --lsp "<command>" or /lsp <command>. Stdlib only.
+
+class LSPClient:
+    def __init__(self, command, workspace):
+        import threading
+        self.command = command
+        self.workspace = Path(workspace).resolve()
+        self.proc = subprocess.Popen(
+            command if isinstance(command, list) else command.split(),
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        self.next_id = 1
+        self._pending = {}
+        self._diagnostics = {}
+        self._lock = threading.Lock()
+        self._reader = threading.Thread(target=self._read_loop, daemon=True)
+        self._reader.start()
+        self._initialize()
+
+    def _send(self, payload):
+        body = json.dumps(payload).encode("utf-8")
+        header = f"Content-Length: {len(body)}\r\n\r\n".encode("utf-8")
+        try:
+            self.proc.stdin.write(header + body)
+            self.proc.stdin.flush()
+        except (BrokenPipeError, OSError):
+            pass
+
+    def _read_loop(self):
+        buf = b""
+        while True:
+            chunk = self.proc.stdout.read(4096) if self.proc.stdout else b""
+            if not chunk:
+                break
+            buf += chunk
+            while True:
+                # Parse Content-Length header.
+                if b"\r\n\r\n" not in buf:
+                    break
+                hdr, rest = buf.split(b"\r\n\r\n", 1)
+                length = 0
+                for line in hdr.split(b"\r\n"):
+                    if line.lower().startswith(b"content-length:"):
+                        try:
+                            length = int(line.split(b":", 1)[1].strip())
+                        except ValueError:
+                            length = 0
+                if len(rest) < length:
+                    break
+                body, buf = rest[:length], rest[length:]
+                try:
+                    msg = json.loads(body)
+                except json.JSONDecodeError:
+                    continue
+                with self._lock:
+                    if "id" in msg and msg["id"] in self._pending:
+                        self._pending[msg["id"]] = msg
+                    elif msg.get("method") == "textDocument/publishDiagnostics":
+                        params = msg.get("params") or {}
+                        uri = params.get("uri", "")
+                        diags = params.get("diagnostics") or []
+                        self._diagnostics[uri] = diags
+
+    def _call(self, method, params, timeout=10):
+        with self._lock:
+            req_id = self.next_id
+            self.next_id += 1
+            self._pending[req_id] = None
+        self._send({"jsonrpc": "2.0", "id": req_id, "method": method,
+                    "params": params})
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            with self._lock:
+                v = self._pending.get(req_id)
+                if v is not None:
+                    self._pending.pop(req_id, None)
+                    return v
+            time.sleep(0.05)
+        with self._lock:
+            self._pending.pop(req_id, None)
+        return {"error": "lsp call timed out"}
+
+    def _notify(self, method, params):
+        self._send({"jsonrpc": "2.0", "method": method, "params": params})
+
+    def _initialize(self):
+        self._call("initialize", {
+            "processId": os.getpid(),
+            "rootUri": f"file://{self.workspace}",
+            "capabilities": {
+                "textDocument": {
+                    "publishDiagnostics": {"relatedInformation": True},
+                    "definition": {"dynamicRegistration": False},
+                    "references": {"dynamicRegistration": False},
+                },
+            },
+        }, timeout=15)
+        self._notify("initialized", {})
+
+    def open_doc(self, rel_path):
+        path = (self.workspace / rel_path).resolve()
+        if not path.is_file():
+            return
+        text = path.read_text(encoding="utf-8", errors="replace")
+        suffix = path.suffix.lstrip(".") or "plaintext"
+        self._notify("textDocument/didOpen", {
+            "textDocument": {
+                "uri": f"file://{path}",
+                "languageId": suffix,
+                "version": 1,
+                "text": text,
+            }
+        })
+
+    def diagnostics(self, rel_path):
+        self.open_doc(rel_path)
+        # Diagnostics arrive asynchronously; wait briefly.
+        deadline = time.time() + 3
+        uri = f"file://{(self.workspace / rel_path).resolve()}"
+        while time.time() < deadline:
+            with self._lock:
+                if uri in self._diagnostics:
+                    return self._diagnostics[uri]
+            time.sleep(0.1)
+        return []
+
+    def definition(self, rel_path, line, character):
+        self.open_doc(rel_path)
+        return self._call("textDocument/definition", {
+            "textDocument": {"uri": f"file://{(self.workspace / rel_path).resolve()}"},
+            "position": {"line": line, "character": character},
+        })
+
+    def references(self, rel_path, line, character):
+        self.open_doc(rel_path)
+        return self._call("textDocument/references", {
+            "textDocument": {"uri": f"file://{(self.workspace / rel_path).resolve()}"},
+            "position": {"line": line, "character": character},
+            "context": {"includeDeclaration": True},
+        })
+
+    def shutdown(self):
+        try:
+            self._call("shutdown", None, timeout=3)
+            self._notify("exit", None)
+        except Exception:
+            pass
+        try:
+            self.proc.terminate()
+            self.proc.wait(timeout=2)
+        except (subprocess.TimeoutExpired, OSError):
+            try:
+                self.proc.kill()
+            except Exception:
+                pass
+
+
+def tool_lsp_diagnostics(state, args):
+    if not state.lsp:
+        return ("lsp: no server running. Start one with `/lsp <command>` "
+                "or --lsp '<command>' at launch.")
+    diags = state.lsp.diagnostics(args["path"])
+    if not diags:
+        return f"no diagnostics for {args['path']}"
+    rows = []
+    for d in diags[:50]:
+        rng = d.get("range", {})
+        start = rng.get("start", {})
+        sev = {1:"error", 2:"warning", 3:"info", 4:"hint"}.get(
+            d.get("severity", 1), "?")
+        rows.append(f"{args['path']}:{start.get('line', 0)+1}:"
+                    f"{start.get('character',0)+1} [{sev}] "
+                    f"{d.get('message','')}")
+    return "\n".join(rows)
+
+
+def tool_lsp_definition(state, args):
+    if not state.lsp:
+        return "lsp: no server running."
+    res = state.lsp.definition(args["path"], args["line"], args["character"])
+    return json.dumps(res.get("result"), indent=2)[:4000]
+
+
+def tool_lsp_references(state, args):
+    if not state.lsp:
+        return "lsp: no server running."
+    res = state.lsp.references(args["path"], args["line"], args["character"])
+    return json.dumps(res.get("result"), indent=2)[:4000]
+
+
+BUILTIN_TOOL_FUNCS["lsp_diagnostics"] = tool_lsp_diagnostics
+BUILTIN_TOOL_FUNCS["lsp_definition"] = tool_lsp_definition
+BUILTIN_TOOL_FUNCS["lsp_references"] = tool_lsp_references
+
 
 def _kick_speculative_prefetch(state, narration, already_prefetched):
     """Look at the streamed narration so far and prefetch likely tool
@@ -3367,7 +4186,17 @@ terminal, backed by a local LM Studio model. You have these tools:
 - list_dir(path) - list directory entries
 - glob(pattern, path?) - find files matching a glob (supports **)
 - grep(pattern, path?, include?) - grep -rIn across the workspace
-- run_bash(command, timeout_seconds?) - shell command, when enabled
+- find_todos(pattern?, path?) - find TODO/FIXME/XXX/HACK markers
+- git_status / git_diff / git_log / git_blame / git_show - repo
+  awareness as builtins (no shelling out to bash needed)
+- browser_open(url) / browser_screenshot / browser_click(selector) /
+  browser_type(selector, text) / browser_eval(script) / browser_text /
+  browser_close - drive a headless Chromium when Playwright is
+  installed in the local Python env
+- lsp_diagnostics(path) / lsp_definition / lsp_references - real code
+  intelligence when an LSP server is configured via --lsp
+- run_bash(command, timeout_seconds?) - shell command, when enabled.
+  Output streams live; long-running commands no longer appear silent
 - update_tasks(tasks) - replace the visible task list. Each task has
   subject, activeForm (present-continuous), and status (pending,
   in_progress, completed, cancelled). Subjects that name a file are
@@ -3465,6 +4294,27 @@ class AgentState:
         self.project_knowledge_text = ""
         # Live preview server handle (HTTPServer + thread).
         self.preview = None
+        # Persistent headless browser (BrowserSession). Lazy-launched on
+        # first browser_open / browser_screenshot call.
+        self.browser = None
+        # Auto-screenshot on UI edits. When True, after every write/edit
+        # to an HTML/CSS/JSX file the orchestrator spins up the preview,
+        # screenshots the rendered page, OCRs it, and feeds the text back.
+        self.auto_screenshot = False
+        # Aggressive multi-step batching: after update_tasks emits N
+        # file-create steps, the orchestrator executes each via grammar-
+        # forced write_file calls in one batch without re-prompting.
+        self.aggressive_batching = False
+        # Auto-commit at task completion: when a task flips to completed,
+        # if the workspace is a git repo, stage and commit with an
+        # auto-generated message.
+        self.auto_commit = False
+        # LSP client (LSPClient instance). Started via --lsp / /lsp.
+        self.lsp = None
+        # Persona (optional). When set, prepended to the system prompt
+        # alongside project context / workspace tree / project knowledge.
+        self.persona_text = ""
+        self.persona_source = ""
         # Multi-model routing (planner/coder/explainer override the
         # default `model`). Empty string = use default.
         self.planner_model = ""
@@ -3474,6 +4324,8 @@ class AgentState:
     def system_message(self):
         body = self.system_override or self.system_prompt
         extras = []
+        if self.persona_text:
+            extras.append(self.persona_text)
         if self.context_text:
             extras.append(self.context_text)
         if self.workspace_tree:
@@ -3708,30 +4560,81 @@ def run_turn(state, user_message, *, json_emit=None):
                     draw_diff(path, old, new)
                     state.last_diff = None
 
+        # Collect what was mutated this turn, for the auto-test /
+        # auto-screenshot / auto-commit hooks below.
+        mutated_paths = [
+            args.get("path", "")
+            for (_, name, args) in parsed_calls
+            if name in FS_MUTATING_TOOLS
+        ]
+
         # Auto-test hook: if anything mutated a known test-related file,
         # run the detected framework once at the end of the turn and
         # surface the failure tail as a synthetic tool result.
-        if state.auto_test:
-            mutated_test_files = [
-                args.get("path", "")
-                for (_, name, args) in parsed_calls
-                if name in FS_MUTATING_TOOLS
+        if state.auto_test and mutated_paths:
+            runner = detect_test_runner(state.workspace)
+            if runner and any(path_matches_test(p, runner["file_globs"])
+                              for p in mutated_paths):
+                note = run_auto_test(state)
+                if note:
+                    if not json_emit:
+                        head = style(GLYPH_TOOL, "tool")
+                        print(f"  {head} {style('auto_test', 'key')} "
+                              f"{style(runner['name'], 'dim')}")
+                        print(style(textwrap_short(note, 200), "dim"))
+                    state.transcript.append({
+                        "role": "system",
+                        "content": "ORCHESTRATOR auto-test: " + note,
+                    })
+
+        # Auto-screenshot hook: if anything mutated a UI file, render +
+        # screenshot via the headless browser and feed the OCR back.
+        if state.auto_screenshot and mutated_paths:
+            shot_note = maybe_auto_screenshot(state, mutated_paths)
+            if shot_note:
+                if not json_emit:
+                    head = style(GLYPH_TOOL, "tool")
+                    print(f"  {head} {style('auto_screenshot', 'key')}")
+                state.transcript.append({
+                    "role": "system",
+                    "content": shot_note,
+                })
+
+        # Auto-commit hook: if a task just flipped to completed AND
+        # auto_commit is on, stage+commit the journaled changes.
+        if state.auto_commit:
+            just_completed = [
+                t for t in state.sink.current
+                if t.get("status") == "completed"
             ]
-            if mutated_test_files:
-                runner = detect_test_runner(state.workspace)
-                if runner and any(path_matches_test(p, runner["file_globs"])
-                                  for p in mutated_test_files):
-                    note = run_auto_test(state)
-                    if note:
-                        if not json_emit:
-                            head = style(GLYPH_TOOL, "tool")
-                            print(f"  {head} {style('auto_test', 'key')} "
-                                  f"{style(runner['name'], 'dim')}")
-                            print(style(textwrap_short(note, 200), "dim"))
-                        state.transcript.append({
-                            "role": "system",
-                            "content": "ORCHESTRATOR auto-test: " + note,
-                        })
+            commit_note = maybe_auto_commit(state, just_completed)
+            if commit_note and not json_emit:
+                head = style(GLYPH_TOOL, "tool")
+                print(f"  {head} {style('auto_commit', 'key')} "
+                      f"{style(commit_note, 'dim')}")
+
+        # Aggressive batching: if the model just emitted update_tasks with
+        # multiple file-create steps still pending, execute them in batch
+        # via grammar-forced write_file. Saves N round trips.
+        if (state.aggressive_batching
+                and any(n == "update_tasks" for _, n, _ in parsed_calls)):
+            batch = aggressive_batch_steps(state, assistant_text, json_emit)
+            if batch:
+                summary = "\n".join(
+                    f"  - task #{r['index']}: " + r["path"]
+                    + (" ✓" if r["ok"] else f" ✗ {r['message']}")
+                    for r in batch
+                )
+                if not json_emit:
+                    head = style(GLYPH_TOOL, "tool")
+                    print(f"  {head} {style('aggressive_batch', 'key')} "
+                          f"({len(batch)} steps)")
+                    print(style(summary, "dim"))
+                state.transcript.append({
+                    "role": "system",
+                    "content": ("ORCHESTRATOR aggressive_batch: ran "
+                                f"{len(batch)} step(s) ahead.\n" + summary),
+                })
 
         if not json_emit:
             print()
@@ -4016,6 +4919,11 @@ class SlashRouter:
             "/merge":   self.cmd_merge,
             "/router":  self.cmd_router,
             "/prefetch": self.cmd_prefetch,
+            "/screenshot": self.cmd_screenshot,
+            "/batch":   self.cmd_batch,
+            "/autocommit": self.cmd_autocommit,
+            "/persona": self.cmd_persona,
+            "/lsp":     self.cmd_lsp,
         }
 
     def names(self):
@@ -4092,6 +5000,8 @@ class SlashRouter:
         self.state.project_knowledge_text, self.state.project_knowledge = (
             load_project_knowledge(path)
         )
+        self.state.persona_text, self.state.persona_source = load_persona(path)
+        load_permission_grants(self.state)
         self.state.reset_transcript()
         print(style(f"  workspace -> {path}", "ok"))
         if self.state.context_files:
@@ -4421,6 +5331,77 @@ class SlashRouter:
                     f"misses: {self.state.prefetch_misses})", "ok"))
         return "continue"
 
+    def cmd_screenshot(self, rest):
+        if rest in ("on", "yes", "true"):
+            self.state.auto_screenshot = True
+        elif rest in ("off", "no", "false"):
+            self.state.auto_screenshot = False
+        else:
+            self.state.auto_screenshot = not self.state.auto_screenshot
+        msg = "on" if self.state.auto_screenshot else "off"
+        print(style(f"  auto-screenshot {msg}", "ok"))
+        return "continue"
+
+    def cmd_batch(self, rest):
+        if rest in ("on", "yes", "true"):
+            self.state.aggressive_batching = True
+        elif rest in ("off", "no", "false"):
+            self.state.aggressive_batching = False
+        else:
+            self.state.aggressive_batching = not self.state.aggressive_batching
+        msg = "on" if self.state.aggressive_batching else "off"
+        print(style(f"  aggressive batching {msg}  "
+                    "(requires grammar support)", "ok"))
+        return "continue"
+
+    def cmd_autocommit(self, rest):
+        if rest in ("on", "yes", "true"):
+            self.state.auto_commit = True
+        elif rest in ("off", "no", "false"):
+            self.state.auto_commit = False
+        else:
+            self.state.auto_commit = not self.state.auto_commit
+        msg = "on" if self.state.auto_commit else "off"
+        print(style(f"  auto-commit {msg}", "ok"))
+        return "continue"
+
+    def cmd_persona(self, rest):
+        if not rest:
+            print(style(f"  current persona: "
+                        f"{self.state.persona_source or '(none)'}", "key"))
+            return "continue"
+        text, source = load_persona(self.state.workspace, rest)
+        if not text:
+            print(style(f"  no persona named {rest!r} at "
+                        f"{PERSONA_ROOT}/{rest}.md", "warning"))
+            return "continue"
+        self.state.persona_text = text
+        self.state.persona_source = source
+        self.state.reset_transcript()
+        print(style(f"  persona -> {source}", "ok"))
+        return "continue"
+
+    def cmd_lsp(self, rest):
+        if rest in ("off", "stop"):
+            if self.state.lsp:
+                self.state.lsp.shutdown()
+                self.state.lsp = None
+                print(style("  lsp stopped.", "ok"))
+            return "continue"
+        if not rest:
+            print(style(
+                f"  lsp: {'running' if self.state.lsp else 'not running'}",
+                "key"))
+            return "continue"
+        if self.state.lsp:
+            self.state.lsp.shutdown()
+        try:
+            self.state.lsp = LSPClient(rest, self.state.workspace)
+            print(style(f"  lsp started: {rest}", "ok"))
+        except Exception as e:
+            print(style(f"  lsp failed to start: {e}", "err"))
+        return "continue"
+
 
 def textwrap_short(s, n):
     s = s.replace("\n", " ")
@@ -4520,6 +5501,25 @@ def main():
         default=os.environ.get("LMSTUDIO_AUTO_TEST", "0") == "1",
         help="After every fs mutation to a test file, run the detected "
              "framework and feed failures back to the model.")
+    parser.add_argument("--auto-screenshot", action="store_true",
+        default=os.environ.get("LMSTUDIO_AUTO_SCREENSHOT", "0") == "1",
+        help="After every UI fs mutation, screenshot the rendered page via "
+             "headless Playwright and OCR the result back to the model.")
+    parser.add_argument("--auto-commit", action="store_true",
+        default=os.environ.get("LMSTUDIO_AUTO_COMMIT", "0") == "1",
+        help="When a task flips to completed, auto-commit the journaled "
+             "changes (workspace must be a git repo).")
+    parser.add_argument("--batch", action="store_true",
+        default=os.environ.get("LMSTUDIO_BATCH", "0") == "1",
+        help="Aggressive multi-step batching: after update_tasks emits N "
+             "file-create tasks, execute each via grammar-forced "
+             "write_file without re-prompting.")
+    parser.add_argument("--persona", default=os.environ.get("LMSTUDIO_PERSONA", ""),
+        help="Load a named persona from ~/.loom/personas/<name>.md. "
+             ".loom/persona.md in the workspace always wins.")
+    parser.add_argument("--lsp", default=os.environ.get("LMSTUDIO_LSP", ""),
+        help="Shell command line for a stdio LSP server (typescript-"
+             "language-server, sourcekit-lsp, pyright, etc.).")
     args = parser.parse_args()
 
     set_theme(args.theme)
@@ -4587,6 +5587,11 @@ def main():
         state.project_knowledge_text, state.project_knowledge = (
             load_project_knowledge(workspace)
         )
+        # Persona load (workspace persona wins over --persona name).
+        state.persona_text, state.persona_source = load_persona(
+            workspace, args.persona or None)
+    # Cross-session permission learning.
+    load_permission_grants(state)
     # Multi-model routing config from CLI flags.
     state.planner_model = args.planner_model or ""
     state.coder_model = args.coder_model or ""
@@ -4595,6 +5600,18 @@ def main():
         state.prefetch_enabled = False
     if args.auto_test:
         state.auto_test = True
+    if args.auto_screenshot:
+        state.auto_screenshot = True
+    if args.auto_commit:
+        state.auto_commit = True
+    if args.batch:
+        state.aggressive_batching = True
+    if args.lsp:
+        try:
+            state.lsp = LSPClient(args.lsp, workspace)
+        except Exception as e:
+            print(style(f"warning: LSP failed to start ({args.lsp}): {e}",
+                        "warning"), file=sys.stderr)
     state.reset_transcript()
 
     if args.resume:
@@ -4725,6 +5742,22 @@ def _shutdown(state, json_emit):
         except Exception:
             pass
         state.preview = None
+    if state.browser:
+        try:
+            state.browser.close()
+        except Exception:
+            pass
+        state.browser = None
+    if state.lsp:
+        try:
+            state.lsp.shutdown()
+        except Exception:
+            pass
+        state.lsp = None
+    try:
+        save_permission_grants(state)
+    except Exception:
+        pass
     if json_emit:
         json_emit("session_ended")
 

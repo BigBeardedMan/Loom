@@ -70,7 +70,12 @@ Type these at the `❯` prompt (they don't go to the model):
 | `/merge <name>` | Pull the last assistant message + tasks of `<name>` into context |
 | `/router <planner\|coder\|explainer> <model>` | Set a per-role model. `/router off` clears |
 | `/prefetch [on\|off]` | Toggle speculative tool prefetch |
-| `/quit`, `/exit` | Leave the REPL (writes `.loom/project.json`) |
+| `/screenshot [on\|off]` | Toggle auto-screenshot on UI mutations |
+| `/batch [on\|off]` | Toggle aggressive multi-step batching |
+| `/autocommit [on\|off]` | Toggle git auto-commit on task completion |
+| `/persona [name]` | Load a persona by name (or print current) |
+| `/lsp <command>`, `/lsp off` | Start/stop an LSP server (stdio JSON-RPC) |
+| `/quit`, `/exit` | Leave the REPL (writes `.loom/project.json` + persists permissions) |
 
 ## Built-in tools
 
@@ -83,7 +88,23 @@ Type these at the `❯` prompt (they don't go to the model):
 | `list_dir(path)` | Directory listing |
 | `glob(pattern, path?)` | Workspace-rooted glob (supports `**`). Cap 200 hits |
 | `grep(pattern, path?, include?)` | `grep -rIn`. Cap 200 lines |
-| `run_bash(command, timeout?)` | Shell in a fresh session id. Gated by `--allow-bash` or `/bash on` |
+| `find_todos(pattern?, path?)` | Find TODO/FIXME/XXX/HACK/NOTE markers across the workspace |
+| `git_status` | `git status --short --branch` |
+| `git_diff(path?, staged?)` | `git diff` working tree (or staged) |
+| `git_log(limit?)` | `git log --oneline -N` (default 20, max 200) |
+| `git_blame(path)` | `git blame` for a single file |
+| `git_show(commit?)` | `git show --stat`, defaults to HEAD |
+| `browser_open(url)` | Open or navigate the headless Chromium to a URL |
+| `browser_screenshot(path?, full_page?)` | Screenshot the current page (default: full page into `screenshots/`) |
+| `browser_click(selector)` | Click an element by CSS selector |
+| `browser_type(selector, text)` | Fill a form field |
+| `browser_eval(script)` | Run a JS expression, return the result |
+| `browser_text` | Inner text of the current page |
+| `browser_close` | Tear down the browser subprocess |
+| `lsp_diagnostics(path)` | LSP diagnostics for a file (requires `--lsp`) |
+| `lsp_definition(path, line, character)` | LSP go-to-definition |
+| `lsp_references(path, line, character)` | LSP find-references |
+| `run_bash(command, timeout?)` | Shell in a fresh session id. Output streams live to the terminal so long commands aren't silent. Gated by `--allow-bash` or `/bash on` |
 | `update_tasks(tasks)` | Replace the task list. Subjects naming a file are verified on disk — claims without the artifact get flipped back to `in_progress` |
 | `spawn_agent(prompt, role?, system?)` | Delegate a focused subtask to a child `lmstudio --json` process |
 
@@ -267,6 +288,76 @@ Set per-role model overrides with CLI flags or env vars:
 - `--explainer-model` / `LMSTUDIO_EXPLAINER_MODEL` — articulate, large; used for `explain`/`why`/`summarize`.
 
 `/router planner <id>` swaps the planner mid-session. `/router off` clears all overrides. Requires LM Studio to have the relevant models loaded (or JIT-loaded on demand).
+
+## Git intelligence
+
+Five built-in tools shell out to `git` for repo awareness without going through `run_bash`:
+
+- `git_status` / `git_diff(path?, staged?)` / `git_log(limit?)` / `git_blame(path)` / `git_show(commit?)`
+
+All run with output capped (32 KB for diff/log, 20 KB for blame/show, 16 KB everywhere else). All are in `SAFE_PARALLEL_TOOLS`, so the model can fan out `git_status + git_diff + git_log` in one turn.
+
+### Auto-commit
+
+`--auto-commit` (or `/autocommit on`) stages everything and commits with an auto-generated message keyed off the most recently completed task whenever the task list flips a task to `completed`. Workspace must be a git repo; failures are silent (no half-staged state).
+
+## Browser automation
+
+When `playwright` is importable from the local Python and Chromium is installed (`python -m playwright install chromium`), the agent gets seven built-in browser tools driven by a persistent subprocess speaking JSON over stdin/stdout:
+
+- `browser_open(url)` — `page.goto`, returns `{url, title}`.
+- `browser_screenshot(path?, full_page?)` — saves to `path` (default `screenshots/shot-<ts>.png`).
+- `browser_click(selector)` / `browser_type(selector, text)` — interact with the page.
+- `browser_eval(script)` — run a JS expression and return the result.
+- `browser_text` — inner text of the current page (cap 32 KB).
+- `browser_close` — tear down.
+
+The subprocess is lazy-launched on the first `browser_*` call and torn down on `/quit`. When Playwright isn't installed, the tool returns a clear error pointing at the install command.
+
+### Auto-screenshot on UI edits
+
+`--auto-screenshot` (or `/screenshot on`) closes the loop on web work. After any `write_file` / `edit_file` / `multi_edit` to a `.html / .htm / .css / .scss / .jsx / .tsx / .svelte` file, the orchestrator:
+
+1. Starts the preview server (if not running already).
+2. Navigates the headless browser to the URL.
+3. Screenshots full-page into `screenshots/auto-<ts>.png`.
+4. OCRs the screenshot via macOS Vision.
+5. Feeds the OCR text back as a synthetic system message so the model can verify the render visually without you asking it to.
+
+## Streaming `run_bash`
+
+`run_bash` now uses `Popen` instead of `subprocess.run`. The combined stdout/stderr is line-streamed to the terminal as the command runs (prefixed with a dim `│`), so long-running tasks (`npm install`, `swift build`) are no longer silent. The full output (capped at 32 KB) is still returned as the tool result so the model sees everything. Timeout default raised from 30s to 30s with a 600s ceiling.
+
+## Aggressive step batching
+
+`--batch` (or `/batch on`) enables a more aggressive orchestrator move that requires grammar support: after `update_tasks` emits N pending tasks that each name a file, the orchestrator runs `force_grammar_args("write_file", ...)` for each task and writes them all in one batch — no model round-trips between steps. Stops at the first ambiguity (no path inference, multi-file step, run_bash required). Each successful write flips the task to `completed`. Compounds with `--auto-screenshot` and `--auto-commit` for a "scaffold + render + commit" pipeline.
+
+## Personas
+
+Two layers, workspace wins:
+
+1. `<workspace>/.loom/persona.md` — committed-with-the-project persona; loads automatically on session start and after `/cwd`.
+2. `~/.loom/personas/<name>.md` + `--persona <name>` (or `LMSTUDIO_PERSONA` env) — shared personas across projects.
+
+The persona text is prepended to the system prompt under `# Persona`. Use this to set tone, role, project conventions, or hard rules that aren't in `CLAUDE.md`.
+
+## Cross-session permission learning
+
+When you answer `a` ("yes, always this session") to a permission prompt, the choice is now persisted to `~/.loom/permissions/<sha256-of-workspace-path>.json` on session quit. Next time you start lmstudio in the same workspace, those grants restore automatically — `npm install` is allowed-forever per project, but never globally.
+
+## LSP integration
+
+`--lsp "typescript-language-server --stdio"` (or `/lsp <command>`) starts a stdio LSP server, runs the `initialize`/`initialized` handshake, and exposes three tools:
+
+- `lsp_diagnostics(path)` — open the file in the LSP and wait briefly for `publishDiagnostics`. Returns errors/warnings/info/hints as `path:line:col [sev] message`.
+- `lsp_definition(path, line, character)` — go-to-definition. Line/character are 0-indexed.
+- `lsp_references(path, line, character)` — find references including the declaration.
+
+Minimal client (no resources/prompts/sampling, one server at a time, no diagnostic refresh streaming). Pair with `typescript-language-server`, `pyright --stdio`, `sourcekit-lsp`, etc.
+
+## find_todos
+
+`find_todos(pattern?, path?)` greps the workspace for the usual markers (`TODO|FIXME|XXX|HACK|NOTE` by default) with `WORKSPACE_TREE_IGNORE` excluded so `node_modules` etc. don't dominate the results. Cap 200 hits.
 
 ## Model recommendations
 
