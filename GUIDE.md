@@ -1312,15 +1312,23 @@ separate privacy entitlement).
 
 ### Clearing
 
-The × icon next to a Claude session header deletes that session's `.json`
-task files. Live Claude sessions will rewrite them on the next turn, so
-this only "sticks" for crashed or zombie sessions. Codex groups don't
-expose the × button: Codex stores its plan inside the rollout JSONL
-alongside the rest of the conversation, so there's no safe per-session
-delete. "Clear all" applies to Claude sessions only.
+Every session header carries a × icon, and the trash icon in the pane
+header runs "Clear all". The effect on disk depends on the source:
 
-The "Clear all" button in the pane header opens a confirmation, then deletes
-every visible session's task files.
+- **Claude** sessions get their `.json` task files deleted. Live sessions
+  rewrite them on the next turn, so the clear only "sticks" for crashed or
+  zombie sessions.
+- **Codex** rollouts hold the full conversation alongside the plan, so
+  Loom never deletes them. Instead it records a dismissal timestamp
+  (keyed by `codex:<session-id>`, persisted under
+  `UserDefaults` key `loom.tasks.dismissedSessions`) and hides the group
+  until the rollout's file mtime advances past that mark. An active
+  session reappears after its next event; a stuck session stays cleared.
+- **Gemini** isn't collected from disk today; the same dismissal
+  mechanism applies if a future Gemini source is added.
+
+"Clear all" opens a confirmation, then clears every visible session using
+the per-source behavior above.
 
 ---
 

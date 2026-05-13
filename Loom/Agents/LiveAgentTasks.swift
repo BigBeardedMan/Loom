@@ -101,6 +101,12 @@ struct LiveAgentTaskGroup: Identifiable, Hashable {
 /// `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`; we surface the
 /// latest plan from each active rollout. Gemini CLI does not currently log
 /// plan or task state to disk in any format we can read.
+///
+/// Clearing a session works for all sources. Claude gets a file-level delete
+/// (the live session rewrites on its next turn). Codex/Gemini can't be
+/// deleted without losing conversation history, so we record a dismissal
+/// timestamp and hide the session until its on-disk activity advances past
+/// that mark.
 @Observable
 @MainActor
 final class LiveAgentTasksService {
@@ -125,6 +131,19 @@ final class LiveAgentTasksService {
             .appendingPathComponent(".codex/sessions", isDirectory: true)
     }()
     private var refreshInFlight: Bool = false
+
+    /// Sessions the user has explicitly cleared, mapped to the `lastActivity`
+    /// timestamp at the moment they were cleared. A group stays hidden until
+    /// its on-disk activity advances past this mark, which means live sessions
+    /// naturally reappear on their next write while truly stuck/zombie ones
+    /// stay gone. Used for sources where we can't safely delete the underlying
+    /// files (Codex, Gemini) and as a belt-and-suspenders for Claude.
+    private static let dismissedSessionsKey = "loom.tasks.dismissedSessions"
+    private var dismissedSessions: [String: Date] = {
+        let raw = UserDefaults.standard.dictionary(forKey: LiveAgentTasksService.dismissedSessionsKey)
+            as? [String: TimeInterval] ?? [:]
+        return raw.mapValues { Date(timeIntervalSince1970: $0) }
+    }()
 
     /// Sessions older than this are presumed dead — even if they still have
     /// task files on disk, we don't want them to reappear in the pane.
@@ -161,9 +180,15 @@ final class LiveAgentTasksService {
         let claudeRoot = claudeTasksRoot
         let codexRoot = codexSessionsRoot
         let cutoff = Date().addingTimeInterval(-activeWindow)
+        let dismissed = dismissedSessions
         Task { [weak self] in
             let sorted = await Task.detached(priority: .utility) {
-                Self.collectAllGroups(claudeRoot: claudeRoot, codexRoot: codexRoot, cutoff: cutoff)
+                Self.collectAllGroups(
+                    claudeRoot: claudeRoot,
+                    codexRoot: codexRoot,
+                    cutoff: cutoff,
+                    dismissed: dismissed
+                )
             }.value
             guard let self else { return }
             self.refreshInFlight = false
@@ -171,25 +196,39 @@ final class LiveAgentTasksService {
         }
     }
 
-    /// Delete the on-disk task files for every visible Claude session and
-    /// refresh. Live Claude sessions will rewrite their files on the next
-    /// turn, so this only "sticks" for crashed/zombie sessions. Codex
-    /// sessions are skipped: their plan lives inside the same JSONL as the
-    /// rest of the conversation, so deleting it would also delete the
-    /// session history.
+    /// Clear every visible session and refresh. For Claude this deletes the
+    /// on-disk task JSON files (the live session will rewrite them on its
+    /// next turn, so the clear only "sticks" for crashed/zombie sessions).
+    /// For Codex/Gemini we can't delete files without losing conversation
+    /// history, so we record a dismissal timestamp; the session stays hidden
+    /// until its on-disk activity advances past that mark.
     func clearAll() {
         for group in groups {
-            deleteTaskFiles(for: group)
+            dismiss(group: group)
         }
+        saveDismissed()
         refresh()
     }
 
-    /// Wipe a single Claude session's task files (the dir stays so the lock
-    /// file is undisturbed). For Codex this is a no-op; the UI hides the
-    /// per-row × on Codex groups.
+    /// Clear a single session and refresh. Same per-source semantics as
+    /// `clearAll()`: Claude gets a file delete, Codex/Gemini get hidden until
+    /// the underlying rollout/session moves forward.
     func clear(group: LiveAgentTaskGroup) {
-        deleteTaskFiles(for: group)
+        dismiss(group: group)
+        saveDismissed()
         refresh()
+    }
+
+    private func dismiss(group: LiveAgentTaskGroup) {
+        if group.source == .claude {
+            deleteTaskFiles(for: group)
+        }
+        dismissedSessions[group.id] = group.lastActivity
+    }
+
+    private func saveDismissed() {
+        let raw = dismissedSessions.mapValues { $0.timeIntervalSince1970 }
+        UserDefaults.standard.set(raw, forKey: Self.dismissedSessionsKey)
     }
 
     private func deleteTaskFiles(for group: LiveAgentTaskGroup) {
@@ -211,12 +250,17 @@ final class LiveAgentTasksService {
     nonisolated static func collectAllGroups(
         claudeRoot: URL,
         codexRoot: URL,
-        cutoff: Date
+        cutoff: Date,
+        dismissed: [String: Date]
     ) -> [LiveAgentTaskGroup] {
         var collected: [LiveAgentTaskGroup] = []
         collected.append(contentsOf: collectClaudeGroups(root: claudeRoot, cutoff: cutoff))
         collected.append(contentsOf: collectCodexGroups(root: codexRoot, cutoff: cutoff))
-        return collected.sorted { $0.lastActivity > $1.lastActivity }
+        let filtered = collected.filter { group in
+            guard let dismissedAt = dismissed[group.id] else { return true }
+            return group.lastActivity > dismissedAt
+        }
+        return filtered.sorted { $0.lastActivity > $1.lastActivity }
     }
 
     // MARK: - Claude

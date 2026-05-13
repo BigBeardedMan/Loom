@@ -57,6 +57,12 @@ The poll keeps running regardless of the window — it's purely a display filter
 
 Loom only reads files under `~/.claude/tasks/` and `~/.codex/sessions/`. Nothing leaves your machine. The polling service uses standard FileManager calls and does not watch via FSEvents (which would require a separate privacy entitlement).
 
-## Codex caveat
+## Clearing sessions
 
-Codex's plan lives inside the same rollout JSONL as the rest of the conversation, so the per-session × button is hidden for Codex groups. "Clear all" only deletes Claude task files, never Codex rollouts.
+Every session in the Tasks pane has a × button, and the trash icon in the header runs "Clear all". What happens on disk depends on the source:
+
+- **Claude Code** task JSON files are deleted (the session directory stays so the lock file is undisturbed). If the session is still live it rewrites its tasks on the next turn; truly stuck/zombie sessions stay gone.
+- **Codex** rollout files are left untouched — they hold the conversation history, so deleting them would destroy more than the plan. Instead Loom records a dismissal timestamp keyed to the session and hides the group until the rollout file's mtime advances past that mark. An active Codex session reappears after its next event; a stuck session stays cleared.
+- **Gemini** is currently never collected from disk, so there's nothing to clear; the same dismissal mechanism applies if a future Gemini source is added.
+
+Dismissals persist across launches via `UserDefaults` key `loom.tasks.dismissedSessions`.

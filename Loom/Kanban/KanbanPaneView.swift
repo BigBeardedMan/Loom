@@ -42,7 +42,7 @@ struct KanbanPaneView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Deletes the on-disk task files for every Claude Code session shown here. Live sessions rewrite theirs on the next turn, so only crashed or zombie sessions stay gone. Codex sessions keep their plan inside the rollout log and are left untouched.")
+            Text("Clears every session shown here. Claude task files are deleted on disk; live Claude sessions rewrite them on the next turn. Codex sessions are hidden until the rollout advances, so stuck/zombie sessions stay gone and active ones reappear after Codex's next event.")
         }
     }
 
@@ -73,23 +73,22 @@ struct KanbanPaneView: View {
                 .padding(.vertical, 1)
                 .background(Color.white.opacity(0.05))
                 .clipShape(Capsule())
-            // Codex stores its plan inside the rollout JSONL alongside the
-            // rest of the conversation, so there's no safe per-session
-            // delete; only Claude groups get the × button.
-            if group.source == .claude {
-                Button {
-                    liveAgentTasks.clear(group: group)
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .padding(3)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .pointingHandCursor()
-                .help("Clear this session's task files")
+            // Claude gets a file-level delete; Codex/Gemini get hidden via a
+            // dismissal timestamp (the rollout JSONL holds the conversation
+            // so it isn't safe to delete). Either way the × is available on
+            // every session.
+            Button {
+                liveAgentTasks.clear(group: group)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .padding(3)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .help(clearHelp(for: group.source))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
@@ -194,6 +193,13 @@ struct KanbanPaneView: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(task.subject, forType: .string)
             }
+        }
+    }
+
+    private func clearHelp(for source: AgentSource) -> String {
+        switch source {
+        case .claude: return "Clear this session's task files"
+        case .codex, .gemini: return "Hide this session until it next updates"
         }
     }
 
