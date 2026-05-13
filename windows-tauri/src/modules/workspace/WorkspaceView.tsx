@@ -397,6 +397,7 @@ function DividerGrip({
   const layoutState = useApp((s) => s.layout);
   const applyBlockWeights = useApp((s) => s.applyBlockWeights);
   const setPinFraction = useApp((s) => s.setPinFraction);
+  const setWidthFraction = useApp((s) => s.setWidthFraction);
   const resetSeam = useApp((s) => s.resetSeam);
   const [hover, setHover] = useState(false);
   const [active, setActive] = useState(false);
@@ -434,6 +435,12 @@ function DividerGrip({
           fraction: number;
           extentPx: number;
           sign: number;
+        }
+      | {
+          kind: "trailing";
+          blockID: string;
+          fraction: number;
+          cellWidthPx: number;
         };
 
     let s: StartState | null = null;
@@ -482,6 +489,17 @@ function DividerGrip({
         extentPx: extent,
         sign: pinDragSign(p.pin, axis),
       };
+    } else if (divider.kind.kind === "trailingEdge") {
+      const { blockID } = divider.kind;
+      const b = layoutState.blocks.find((x) => x.id === blockID);
+      if (!b) return;
+      const cellW = metrics.cellWidths.get(blockID) ?? metrics.frames.get(blockID)?.width ?? 1;
+      s = {
+        kind: "trailing",
+        blockID,
+        fraction: b.widthFraction ?? 1.0,
+        cellWidthPx: cellW,
+      };
     }
     if (!s) return;
     setActive(true);
@@ -518,10 +536,14 @@ function DividerGrip({
           { id: startState.topID, heightWeight: totalH * topFrac },
           { id: startState.bottomID, heightWeight: totalH * (1 - topFrac) },
         ]);
-      } else {
+      } else if (startState.kind === "pin") {
         const d = startState.axis === "horizontal" ? dx : dy;
         const normalized = (startState.sign * d) / Math.max(1, startState.extentPx);
         setPinFraction(startState.pinnedID, startState.fraction + normalized);
+      } else {
+        // trailing edge: shrink/grow last block toward the left.
+        const normalized = dx / Math.max(1, startState.cellWidthPx);
+        setWidthFraction(startState.blockID, startState.fraction + normalized);
       }
     };
     const onUp = () => {
@@ -542,6 +564,8 @@ function DividerGrip({
       resetSeam([divider.kind.topAnchorID, divider.kind.bottomAnchorID]);
     } else if (divider.kind.kind === "pinSplit") {
       setPinFraction(divider.kind.pinnedID, 0.5);
+    } else if (divider.kind.kind === "trailingEdge") {
+      setWidthFraction(divider.kind.blockID, 1.0);
     }
   };
 

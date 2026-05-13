@@ -42,6 +42,10 @@ export type Block = {
   widthWeight?: number;
   /// Relative height of the row this block anchors. `undefined` falls back to 1.0.
   heightWeight?: number;
+  /// Block's share of its allotted cell along the horizontal axis (0.3..1.0).
+  /// `undefined` means default 1.0 (fills the cell). Drives the trailing-edge
+  /// resize handle, which is the only horizontal control in a stacked row.
+  widthFraction?: number;
 };
 
 export type Layout = {
@@ -102,6 +106,7 @@ function migrateLegacyBlock(raw: unknown): Block | null {
   if (typeof r.pinFraction === "number") block.pinFraction = r.pinFraction;
   if (typeof r.widthWeight === "number") block.widthWeight = r.widthWeight;
   if (typeof r.heightWeight === "number") block.heightWeight = r.heightWeight;
+  if (typeof r.widthFraction === "number") block.widthFraction = r.widthFraction;
   return block;
 }
 

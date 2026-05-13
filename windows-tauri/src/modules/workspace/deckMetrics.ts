@@ -15,7 +15,8 @@ export interface Rect {
 export type DeckDividerKind =
   | { kind: "columnGap"; leftID: string; rightID: string }
   | { kind: "rowGap"; topAnchorID: string; bottomAnchorID: string }
-  | { kind: "pinSplit"; pinnedID: string; axis: "horizontal" | "vertical" };
+  | { kind: "pinSplit"; pinnedID: string; axis: "horizontal" | "vertical" }
+  | { kind: "trailingEdge"; blockID: string };
 
 export interface DeckDivider {
   kind: DeckDividerKind;
@@ -32,6 +33,10 @@ export interface DeckMetrics {
   containerSize: { width: number; height: number };
   gap: number;
   frames: Map<string, Rect>;
+  /// Pre-`widthFraction` cell width for each block. Equal to `frame.width`
+  /// when the block fills its cell; larger when it has been shrunk via the
+  /// trailing-edge handle. Used by the trailing-edge drag handler.
+  cellWidths: Map<string, number>;
   pinnedID: string | null;
   dividers: DeckDivider[];
 }
@@ -43,6 +48,12 @@ export const WEIGHT_MIN = 0.2;
 export const WEIGHT_MAX = 5.0;
 export const PIN_FRACTION_MIN = 0.2;
 export const PIN_FRACTION_MAX = 0.8;
+export const WIDTH_FRACTION_MIN = 0.3;
+export const WIDTH_FRACTION_MAX = 1.0;
+
+export function clampWidthFraction(f: number): number {
+  return Math.min(Math.max(f, WIDTH_FRACTION_MIN), WIDTH_FRACTION_MAX);
+}
 
 export function clampWeight(w: number): number {
   return Math.min(Math.max(w, WEIGHT_MIN), WEIGHT_MAX);
@@ -188,11 +199,12 @@ function computeEvenRow(
   blocks: Block[],
   area: Rect,
   gap: number
-): { frames: Map<string, Rect>; dividers: DeckDivider[] } {
+): { frames: Map<string, Rect>; cellWidths: Map<string, number>; dividers: DeckDivider[] } {
   const frames = new Map<string, Rect>();
+  const cellWidths = new Map<string, number>();
   const dividers: DeckDivider[] = [];
   if (blocks.length === 0 || area.width <= 0 || area.height <= 0) {
-    return { frames, dividers };
+    return { frames, cellWidths, dividers };
   }
   const cap = deckCapacity({ width: area.width, height: area.height });
   const cols = balancedCols(blocks.length, cap.cols, cap.rows, {
@@ -237,17 +249,32 @@ function computeEvenRow(
     let cursorX = area.x;
     for (let p = 0; p < row.length; p++) {
       const block = row[p];
-      const w = widths[p];
-      frames.set(block.id, { x: cursorX, y: cursorY, width: w, height: rowH });
-      if (p < row.length - 1) {
-        const dividerX = cursorX + w;
+      const cellW = widths[p];
+      const isLast = p === row.length - 1;
+      // widthFraction only narrows the LAST block in a row. Earlier blocks
+      // get the columnGap as their resize control; introducing a second
+      // handle there would overlap.
+      const frac = isLast ? clampWidthFraction(block.widthFraction ?? 1.0) : 1.0;
+      const blockW = Math.max(MIN_BLOCK_WIDTH, cellW * frac);
+      frames.set(block.id, { x: cursorX, y: cursorY, width: blockW, height: rowH });
+      cellWidths.set(block.id, cellW);
+      if (!isLast) {
+        const dividerX = cursorX + cellW;
         dividers.push({
           kind: { kind: "columnGap", leftID: block.id, rightID: row[p + 1].id },
           rect: { x: dividerX, y: cursorY, width: gap, height: rowH },
           isVertical: true,
         });
+      } else {
+        // Trailing-edge handle: flush against block's right edge, 12pt wide.
+        // The only horizontal control in a stacked single-block row.
+        dividers.push({
+          kind: { kind: "trailingEdge", blockID: block.id },
+          rect: { x: cursorX + blockW, y: cursorY, width: gap, height: rowH },
+          isVertical: true,
+        });
       }
-      cursorX += w + gap;
+      cursorX += cellW + gap;
     }
 
     if (r < rows.length - 1) {
@@ -264,7 +291,7 @@ function computeEvenRow(
     }
     cursorY += rowH + gap;
   }
-  return { frames, dividers };
+  return { frames, cellWidths, dividers };
 }
 
 function pinDividers(
@@ -365,42 +392,59 @@ export function computeDeckMetrics(
 ): DeckMetrics {
   const gap = DECK_GAP;
   const frames = new Map<string, Rect>();
+  const cellWidths = new Map<string, number>();
   let pinnedID: string | null = null;
   const dividers: DeckDivider[] = [];
 
   if (blocks.length === 1) {
-    frames.set(blocks[0].id, { x: 0, y: 0, width: size.width, height: size.height });
+    const only = blocks[0];
+    const cellW = size.width;
+    const frac = clampWidthFraction(only.widthFraction ?? 1.0);
+    const blockW = Math.max(MIN_BLOCK_WIDTH, cellW * frac);
+    frames.set(only.id, { x: 0, y: 0, width: blockW, height: size.height });
+    cellWidths.set(only.id, cellW);
+    dividers.push({
+      kind: { kind: "trailingEdge", blockID: only.id },
+      rect: { x: blockW, y: 0, width: gap, height: size.height },
+      isVertical: true,
+    });
   } else {
     const pinned = blocks.find((b) => b.pin);
     if (pinned && pinned.pin) {
       const fraction = pinned.pinFraction ?? 0.5;
-      frames.set(pinned.id, pinFrame(pinned.pin, size, gap, fraction));
+      const pframe = pinFrame(pinned.pin, size, gap, fraction);
+      frames.set(pinned.id, pframe);
+      cellWidths.set(pinned.id, pframe.width);
       pinnedID = pinned.id;
       const free = blocks.filter((b) => b.id !== pinned.id);
       if (isCornerPin(pinned.pin)) {
         const zones = cornerComplementZones(pinned.pin, size, gap, fraction);
         if (free.length > 0) {
           frames.set(free[0].id, zones.neighbor);
+          cellWidths.set(free[0].id, zones.neighbor.width);
           const tail = free.slice(1);
           const result = computeEvenRow(tail, zones.wideRow, gap);
           result.frames.forEach((r, id) => frames.set(id, r));
+          result.cellWidths.forEach((w, id) => cellWidths.set(id, w));
           dividers.push(...result.dividers);
         }
       } else {
         const freeArea = complementFrame(pinned.pin, size, gap, fraction);
         const result = computeEvenRow(free, freeArea, gap);
         result.frames.forEach((r, id) => frames.set(id, r));
+        result.cellWidths.forEach((w, id) => cellWidths.set(id, w));
         dividers.push(...result.dividers);
       }
       dividers.push(...pinDividers(pinned.pin, size, gap, fraction, pinned.id));
     } else {
       const result = computeEvenRow(blocks, { x: 0, y: 0, width: size.width, height: size.height }, gap);
       result.frames.forEach((r, id) => frames.set(id, r));
+      result.cellWidths.forEach((w, id) => cellWidths.set(id, w));
       dividers.push(...result.dividers);
     }
   }
 
-  return { containerSize: size, gap, frames, pinnedID, dividers };
+  return { containerSize: size, gap, frames, cellWidths, pinnedID, dividers };
 }
 
 /// Decide what should happen if the user drops the dragged block at the
