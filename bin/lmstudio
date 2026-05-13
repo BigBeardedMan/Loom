@@ -245,6 +245,7 @@ TIPS = [
     "slash commands: /help, /clear, /model, /bash, /cwd, /save, /resume, /cost",
     "word wrap on by default · /wrap off (or --no-wrap) for terminal hard wrap",
     "--allow-bash enables run_bash and auto-approves it · --yolo skips every prompt",
+    "orchestrator auto-continues until tasks are done (max 12) · /auto off to disable",
     "task list flows into Loom's Tasks pane via ~/.loom/tasks/",
     "themes: --theme default | mono | cyberpunk | solarized",
     "non-interactive: --json streams structured events for scripting",
@@ -1996,6 +1997,94 @@ def repair_args(state, name, args, narration):
     return fixed, note
 
 
+# ---------- Continuation policy --------------------------------------------
+#
+# Local models routinely stop mid-task. The two failure modes we see:
+#
+#   1. Pending tasks remain, but the model ends a turn with no tool calls
+#      ("Let me think about this..." -> empty response).
+#   2. The model marks every task complete in one update_tasks call and
+#      then *still* narrates more work ("Now I need to create the website")
+#      without actually doing it - premature done.
+#
+# `should_auto_continue` decides whether to inject a synthetic user
+# message before the REPL hands control back to the human. Each
+# injection counts against state.max_continuations so a stuck model
+# can't loop forever; if we exhaust the budget, the user gets a clear
+# "orchestrator gave up after N attempts" message and a fresh prompt.
+
+_PROMISE_PATTERNS = [
+    re.compile(r"\b(?:I['']?ll|let me|I will|I need to|I['']?m going to|let's|now I['']?ll|now I need to|I should|next I['']?ll|next I need to)\b", re.I),
+    re.compile(r"\b(?:let me create|let me write|let me build|let me make|let me start|let me try)\b", re.I),
+    re.compile(r"\b(?:going to|about to|need to)\s+(?:create|write|build|make|add|implement|fix|update)\b", re.I),
+]
+
+
+def detect_lazy_promise(text):
+    """Find a phrase that signals the model intends to act but is about to
+    end its turn instead. Returns the matched fragment or None."""
+    if not text:
+        return None
+    snippet = text[-2000:]  # only look at the tail; intros don't count
+    for pat in _PROMISE_PATTERNS:
+        m = pat.search(snippet)
+        if m:
+            # Pull a sentence-ish slice around the match for the
+            # intervention message.
+            start = max(0, m.start() - 20)
+            end = min(len(snippet), m.end() + 80)
+            return snippet[start:end].strip()
+    return None
+
+
+def first_pending_task(state):
+    """The first task that is pending or in_progress, in display order.
+    Returns None when nothing is pending (or no tasks exist)."""
+    for t in state.sink.current:
+        if t.get("status") in ("pending", "in_progress"):
+            return t
+    return None
+
+
+def all_tasks_done(state):
+    return bool(state.sink.current) and all(
+        t.get("status") == "completed" for t in state.sink.current
+    )
+
+
+def should_auto_continue(state, last_text):
+    """Return the synthetic user message to inject for the next turn, or
+    None when it's the human's turn again. Order matters: we prefer the
+    most concrete signal (pending tasks) over the softer one (premature
+    done + promise narration)."""
+    pending = first_pending_task(state)
+    if pending:
+        subj = pending.get("subject", "(no subject)")
+        active = pending.get("activeForm") or subj
+        return (
+            "ORCHESTRATOR: pending tasks remain. The next task is: "
+            + repr(subj) + " (" + active + "). "
+            "Take concrete action on it RIGHT NOW using the tools - "
+            "do not just describe what you would do, do not summarize, "
+            "do not ask for confirmation. When the task is complete, "
+            "call update_tasks to flip its status and move to the next one. "
+            "Workspace root: " + str(state.workspace)
+        )
+    if all_tasks_done(state):
+        promise = detect_lazy_promise(last_text)
+        if promise:
+            return (
+                "ORCHESTRATOR: you marked every task complete, but your "
+                "last message also said: " + repr(promise)
+                + " - that is unfinished work that contradicts the "
+                "completed status. Either call update_tasks to add a new "
+                "task for what you described and execute it now, OR "
+                "actually finish what you said before ending the turn. "
+                "Use the tools - do not just narrate."
+            )
+    return None
+
+
 def schema_summary_for(name):
     """One-line argument summary for the named built-in tool. Used in the
     orchestrator intervention text so the model sees a concrete schema."""
@@ -2077,6 +2166,13 @@ class AgentState:
         # Model's context window in tokens, queried once at session start
         # via LM Studio's /api/v0/models. Used by the status footer.
         self.context_window = None
+        # Continuation policy: how many times the orchestrator will keep
+        # re-prompting after a turn ends with work clearly unfinished.
+        # Counts reset to 0 on every human-issued user message.
+        self.continuation_count = 0
+        self.max_continuations = 12
+        self.last_turn_had_tool_calls = False
+        self.auto_continue = True
 
     def system_message(self):
         body = self.system_override or self.system_prompt
@@ -2180,12 +2276,15 @@ def run_turn(state, user_message, *, json_emit=None):
         state.transcript.append(assistant_entry)
 
         if not finished_tool_calls:
-            state.sink.mark_remaining_complete()
+            # Don't auto-mark-complete here - the continuation policy may
+            # want to push the model to actually do the work.
+            state.last_turn_had_tool_calls = False
             if not json_emit:
                 draw_task_list(state.sink.current)
             if json_emit:
                 json_emit("completed", text=assistant_text)
             return assistant_text
+        state.last_turn_had_tool_calls = True
 
         if not json_emit:
             print()
@@ -2221,6 +2320,60 @@ def run_turn(state, user_message, *, json_emit=None):
     else:
         print(style(f"  (stopped: hit max_turns={DEFAULT_MAX_TURNS})", "err"))
     return ""
+
+
+def drive_user_message(state, user_message, *, json_emit=None):
+    """Run a user-issued message through the agent loop, then keep
+    re-driving the model with synthetic continuation prompts whenever the
+    orchestrator detects an unfinished turn. Each continuation counts
+    against state.max_continuations; the budget resets per human input.
+
+    This is the layer that stops a 35B local model from giving up after
+    one turn: pending tasks AND post-completion promise narration both
+    force another round. Returns the final assistant text."""
+    state.continuation_count = 0
+    final_text = run_turn(state, user_message, json_emit=json_emit)
+
+    if not state.auto_continue:
+        if not state.last_turn_had_tool_calls:
+            state.sink.mark_remaining_complete()
+        return final_text
+
+    while state.continuation_count < state.max_continuations:
+        followup = should_auto_continue(state, final_text)
+        if not followup:
+            break
+        state.continuation_count += 1
+        if json_emit:
+            json_emit("auto_continue",
+                      attempt=state.continuation_count,
+                      message=followup)
+        else:
+            print()
+            print(style(
+                f"  ▸ orchestrator continuation #{state.continuation_count} "
+                f"of {state.max_continuations}", "tip"))
+            reason = followup.split("\n", 1)[0]
+            if len(reason) > 90:
+                reason = reason[:90] + "…"
+            print(style("    " + reason, "dim"))
+            print()
+        final_text = run_turn(state, followup, json_emit=json_emit)
+
+    if state.continuation_count >= state.max_continuations:
+        if json_emit:
+            json_emit("orchestrator_stopped",
+                      attempts=state.continuation_count)
+        else:
+            print()
+            print(style(
+                f"  orchestrator stopped after {state.max_continuations} "
+                "continuations - control returned to you.", "warning"))
+
+    # Once the orchestrator gives up, anything still pending/in_progress
+    # gets flipped to completed so the visible task list isn't stuck.
+    state.sink.mark_remaining_complete()
+    return final_text
 
 
 def _all_tool_schemas(state):
@@ -2368,6 +2521,7 @@ class SlashRouter:
             "/yolo":    self.cmd_yolo,
             "/theme":   self.cmd_theme,
             "/wrap":    self.cmd_wrap,
+            "/auto":    self.cmd_auto,
         }
 
     def names(self):
@@ -2556,6 +2710,28 @@ class SlashRouter:
         else:
             self.state.wrap = not self.state.wrap
         print(style(f"  word wrap {'on' if self.state.wrap else 'off'}", "ok"))
+        return "continue"
+
+    def cmd_auto(self, rest):
+        """Toggle the orchestrator's continuation policy. With auto on
+        (the default), the agent loop re-prompts itself whenever a turn
+        ends with pending tasks or premature 'done' + lingering promises.
+        Off makes it behave like a pure one-shot Claude-Code-style loop."""
+        if rest in ("on", "yes", "true"):
+            self.state.auto_continue = True
+        elif rest in ("off", "no", "false"):
+            self.state.auto_continue = False
+        elif rest.isdigit():
+            self.state.max_continuations = max(0, int(rest))
+            self.state.auto_continue = True
+            print(style(f"  auto-continue budget set to "
+                        f"{self.state.max_continuations}", "ok"))
+            return "continue"
+        else:
+            self.state.auto_continue = not self.state.auto_continue
+        msg = ("on" if self.state.auto_continue else "off")
+        print(style(f"  auto-continue {msg}  (budget "
+                    f"{self.state.max_continuations} per user turn)", "ok"))
         return "continue"
 
 
@@ -2760,7 +2936,7 @@ def main():
             print(bot)
             print()
         try:
-            run_turn(state, one_shot, json_emit=json_emit)
+            drive_user_message(state, one_shot, json_emit=json_emit)
         except (KeyboardInterrupt, EscInterrupt):
             if json_emit:
                 json_emit("interrupted")
@@ -2777,7 +2953,7 @@ def main():
             if not user_in or user_in in ("/quit", "/exit"):
                 break
             try:
-                run_turn(state, user_in, json_emit=json_emit)
+                drive_user_message(state, user_in, json_emit=json_emit)
             except (KeyboardInterrupt, EscInterrupt):
                 json_emit("interrupted")
             except Exception as e:
@@ -2806,7 +2982,7 @@ def main():
         BoxedLineEditor.append_history(user_in)
         print()
         try:
-            run_turn(state, user_in)
+            drive_user_message(state, user_in)
         except (KeyboardInterrupt, EscInterrupt):
             print(style("\n  (interrupted)", "warning"))
         except Exception as e:
