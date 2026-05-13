@@ -1000,7 +1000,20 @@ class PermissionManager:
 # =============================================================================
 
 def resolve_in_workspace(workspace: Path, rel: str) -> Path:
-    target = (workspace / rel).resolve()
+    """Resolve `rel` against the workspace, accepting `~` / `~user` and
+    absolute paths as long as they ultimately live under the workspace
+    root. Tilde expansion is the difference between "the model gives us
+    `~/Documents/foo.html` and it just works" vs. the resolver treating
+    `~` as a literal directory and rejecting the call."""
+    raw = rel.strip()
+    if raw.startswith("~"):
+        candidate = Path(raw).expanduser()
+    else:
+        candidate = Path(raw)
+    if candidate.is_absolute():
+        target = candidate.resolve()
+    else:
+        target = (workspace / candidate).resolve()
     root = workspace.resolve()
     if target != root and root not in target.parents:
         raise ValueError(f"path is outside the workspace: {rel}")
@@ -1847,14 +1860,23 @@ def stream_completion(base_url, model, messages, tools):
 #     the tool result so the model sees what was fixed.
 
 _PATH_PATTERNS = (
-    # `path is X`, `path: X`, etc.
-    re.compile(r"path\s*(?:is|:|=)\s*[\"`']?([^\s\"`',;]+)[\"`']?", re.I),
-    # Backticked filename
-    re.compile(r"`([^`\s]+\.[A-Za-z0-9]{1,5})`"),
-    # `create X.html`, `write X.py`, etc.
-    re.compile(r"(?:create|write|edit|build|update)\s+(?:the\s+)?[\"`']?([\w./-]+\.[A-Za-z0-9]{1,5})[\"`']?", re.I),
-    # Bare relative path with extension
-    re.compile(r"\b([\w][\w./ -]*?\.[A-Za-z0-9]{1,5})\b"),
+    # Quoted path - highest confidence, handles spaces.
+    re.compile(r"""(?:path|file|location)\s*(?:is|=|:)\s*["']([^"'\n]+)["']""", re.I),
+    # Backticked path (allows spaces inside the backticks).
+    re.compile(r"`([^`\n]+\.[A-Za-z0-9]{1,5})`"),
+    # Tilde-rooted path through to the extension, spaces allowed.
+    re.compile(r"(~/[^\n,;:`\"']+?\.[A-Za-z0-9]{1,5})"),
+    # Absolute path through to the extension.
+    re.compile(r"(/[A-Za-z][^\n,;:`\"']+?\.[A-Za-z0-9]{1,5})"),
+    # `path is X`, `path: X` with unquoted single-token value.
+    re.compile(r"(?:path|file)\s*(?:is|=|:)\s*([^\s,;:`\"'\n]+\.[A-Za-z0-9]{1,5})", re.I),
+    # `create X.html`, `write X.py`, etc - allow spaces inside the name
+    # up to the extension.
+    re.compile(r"(?:create|write|edit|build|update|save)\s+(?:the\s+)?([\w][\w./ -]*?\.[A-Za-z0-9]{1,5})\b", re.I),
+    # Bare multi-segment relative path with extension.
+    re.compile(r"\b((?:[\w][\w -]*/)+[\w][\w -]*\.[A-Za-z0-9]{1,5})\b"),
+    # Bare filename with extension.
+    re.compile(r"\b([\w][\w-]*\.[A-Za-z0-9]{1,5})\b"),
 )
 
 _COMMAND_PATTERNS = (
@@ -1902,25 +1924,33 @@ def build_intervention_message(name, args, schema_summary):
 
 
 def _scan_for_path(text, workspace):
-    """Look for a plausible workspace-relative path in `text`. Falls back
-    to None when nothing pattern-matches a filename."""
+    """Find a plausible workspace path in the model's narration. Patterns
+    are ordered from highest-confidence (quoted / backticked / tilde-
+    rooted) to lowest. Each candidate is rejected if the resolver would
+    refuse it (outside workspace, no extension, scheme-y, etc.); we keep
+    trying patterns until something resolves."""
     if not text:
         return None
     seen = set()
     for pat in _PATH_PATTERNS:
         for m in pat.finditer(text):
-            candidate = m.group(1).strip("'\"` ")
+            candidate = m.group(1).strip("'\"`,. ;:")
             if not candidate or candidate in seen:
                 continue
             seen.add(candidate)
-            # Drop scheme-y or absolute non-workspace garbage.
-            if candidate.startswith(("http://", "https://", "/")):
+            # Hide URLs and anchor-only fragments.
+            if candidate.startswith(("http://", "https://")) or candidate.startswith("."):
                 continue
-            if "." not in candidate or candidate.startswith("."):
+            if "." not in candidate:
                 continue
-            # Sanity: a path can't contain spaces in our schema, but the
-            # model often writes spaces inside paths (e.g. "website dev").
-            # Keep them; resolve_in_workspace will validate.
+            # Try to resolve. If it's accepted by resolve_in_workspace,
+            # it's a real candidate. Otherwise we move on - prevents the
+            # repair from emitting a path the dispatcher would just error
+            # on a moment later.
+            try:
+                resolve_in_workspace(workspace, candidate)
+            except ValueError:
+                continue
             return candidate
     return None
 
@@ -2228,6 +2258,18 @@ def _dispatch_tool(state, name, args, *, narration=""):
             state.tool_history, name, canonical_in):
         intervention = build_intervention_message(
             name, args_in, schema_summary_for(name))
+        if name in ("write_file", "edit_file", "read_file", "list_dir"):
+            # Include the workspace root so the model can pick a concrete
+            # relative path without re-scanning scrollback. Paths may
+            # contain spaces (we tilde-expand internally, so anything
+            # under the workspace is fair game).
+            intervention += (
+                "\n\nWorkspace root (relative paths resolve from here): "
+                + str(state.workspace)
+                + "\n"
+                + "If the directory you want to write into doesn't exist "
+                "yet, write_file will create it automatically."
+            )
         _render_tool_result_summary(name, "orchestrator intervened (loop)", False)
         state.tool_history.append({
             "name": name, "args": canonical_in, "error": False,
