@@ -121,7 +121,7 @@ final class TerminalSession: Identifiable {
     /// CLI agents whose foreground state we recognize. Drives both the
     /// "active session" badge above and the click-to-position cursor logic
     /// in `LoomTerminalView` below.
-    static let knownCLIAgents: Set<String> = ["claude", "codex", "gemini"]
+    static let knownCLIAgents: Set<String> = ["claude", "codex", "gemini", "lmstudio"]
 
     fileprivate static func processName(pid: pid_t) -> String? {
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]

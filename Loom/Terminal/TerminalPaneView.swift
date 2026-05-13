@@ -215,6 +215,21 @@ private struct TerminalSinglePane: View {
             .help("Close this pane")
         }
 
+        Menu {
+            Button("lmstudio") { session.submit("lmstudio") }
+            Button("claude")   { session.submit("claude") }
+            Button("codex")    { session.submit("codex") }
+            Button("gemini")   { session.submit("gemini") }
+        } label: {
+            Image(systemName: "sparkles")
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.55))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Launch an agent CLI in this terminal")
+
         Button {
             session.sendInterrupt()
         } label: {
