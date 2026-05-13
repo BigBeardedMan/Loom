@@ -83,6 +83,18 @@ Answer `a` to allow that tool for the rest of the session. `--yolo` (or `LMSTUDI
 
 On launch (and after `/cwd <path>`), the CLI reads `CLAUDE.md`, `AGENTS.md`, `GUIDE.md`, and `README.md` from the workspace in priority order, concatenates up to ~5 KB total, and appends them to the system prompt under a `# Project Context` heading. Disable with `--no-context`.
 
+## Pre-flight workspace scan
+
+Also on launch (and after `/cwd`), the CLI does a single shallow walk of the workspace (depth 3, capped at 200 entries) and injects a `# Workspace Layout` block into the system prompt. Hidden dirs and the usual noise (`node_modules`, `__pycache__`, `.venv`, `DerivedData`, `dist`, `build`, `Pods`, etc.) are skipped. The banner shows `tree N entries` so you can see what the model received.
+
+The point is to stop local models from spending their first 5 turns calling `list_dir` to orient themselves. The orchestrator's path-repair also has more material to match against — when the model says "I'll create `index.html`," we know which directory to put it in. Skipped entirely under `--no-context`.
+
+## Grammar-constrained tool calls
+
+When the active LM Studio server speaks `response_format: json_schema` (probed at session start with a 10s ping), the orchestrator gains a final-fallback move: if a tool call comes in with required arguments still missing **after** narration repair, the CLI makes a one-shot non-streaming completion to that same server with `tool_choice` pinned to the failing tool and the tool's parameter schema as a strict `json_schema`. The server-side decoder refuses to emit JSON that violates the schema, so a successful return is guaranteed to have every required field. The dispatched tool runs with the grammar-filled args and the result is annotated `[orchestrator: grammar-filled \`path\`, \`content\`]` so you can see exactly what the model originally dropped.
+
+The banner shows `grammar on (json_schema)` when supported. Backends that don't accept `response_format` (older OpenAI-compat servers, some MLX kernels) silently fall back to today's repair-only behavior. Force-disable with `LMSTUDIO_NO_GRAMMAR=1` to compare the two paths side-by-side.
+
 ## Inline diffs
 
 After `write_file` or `edit_file`, a unified diff renders right in the shell so you can see exactly what changed. Capped at 12 visible lines plus a `…N more` footer when longer.

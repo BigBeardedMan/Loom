@@ -62,6 +62,15 @@ HISTORY_FILE = Path.home() / ".config" / "loom" / "lmstudio-history"
 CONTEXT_FILES = ["CLAUDE.md", "AGENTS.md", "GUIDE.md", "README.md"]
 CONTEXT_CAP_BYTES = 5_000
 
+WORKSPACE_TREE_IGNORE = {
+    ".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache",
+    ".pytest_cache", ".ruff_cache", "dist", "build", ".next", ".nuxt",
+    "target", ".idea", ".vscode", "DerivedData", ".DS_Store",
+    "Pods", ".gradle", "out", "coverage",
+}
+WORKSPACE_TREE_MAX_DEPTH = 3
+WORKSPACE_TREE_MAX_ENTRIES = 200
+
 
 # =============================================================================
 # Themes
@@ -253,7 +262,7 @@ TIPS = [
 
 
 def draw_banner(model, workspace, allow_bash, session_id, theme_name,
-                context_files):
+                context_files, tree_count=0, grammar_supported=False):
     width = box_width()
     bar = "─" * (width - 2)
     side = style("│", "border")
@@ -283,9 +292,13 @@ def draw_banner(model, workspace, allow_bash, session_id, theme_name,
     print(row("model", model, "value"))
     print(row("bash", "on" if allow_bash else "off",
               "ok" if allow_bash else "task_pending"))
+    print(row("grammar", "on (json_schema)" if grammar_supported else "off",
+              "ok" if grammar_supported else "dim"))
     print(row("theme", theme_name, "value"))
     if context_files:
         print(row("context", ", ".join(context_files), "dim"))
+    if tree_count:
+        print(row("tree", f"{tree_count} entries", "dim"))
     print(row("session", session_id, "dim"))
     print(style("╰" + bar + "╯", "border"))
 
@@ -1345,6 +1358,61 @@ def load_project_context(workspace):
     return "# Project Context\n\n" + "\n\n".join(parts), used
 
 
+def load_workspace_tree(workspace,
+                        max_depth=WORKSPACE_TREE_MAX_DEPTH,
+                        max_entries=WORKSPACE_TREE_MAX_ENTRIES):
+    """Walk the workspace top-down and emit a compact tree summary. Used as
+    auto-injected system-prompt context so the model has a workspace map
+    without burning list_dir calls to orient itself.
+
+    Returns (tree_string, entry_count). Empty string when the workspace is
+    empty (or unreadable)."""
+    lines = []
+    counter = [0]
+
+    def walk(dirpath, depth):
+        if counter[0] >= max_entries or depth > max_depth:
+            return
+        try:
+            entries = sorted(
+                dirpath.iterdir(),
+                key=lambda p: (not p.is_dir(), p.name.lower()),
+            )
+        except (OSError, PermissionError):
+            return
+        for entry in entries:
+            if counter[0] >= max_entries:
+                lines.append("  " * depth + "... (more)")
+                return
+            name = entry.name
+            if name in WORKSPACE_TREE_IGNORE or name.startswith("."):
+                continue
+            indent = "  " * depth
+            try:
+                is_dir = entry.is_dir()
+            except OSError:
+                continue
+            if is_dir:
+                lines.append(f"{indent}{name}/")
+                counter[0] += 1
+                walk(entry, depth + 1)
+            else:
+                lines.append(f"{indent}{name}")
+                counter[0] += 1
+
+    try:
+        walk(Path(workspace), 0)
+    except (OSError, PermissionError):
+        return "", 0
+    if not lines:
+        return "", 0
+    body = "\n".join(lines)
+    header = (f"# Workspace Layout ({counter[0]} entries"
+              + (", truncated" if counter[0] >= max_entries else "")
+              + ")")
+    return f"{header}\n\n{body}", counter[0]
+
+
 # =============================================================================
 # Session save / load
 # =============================================================================
@@ -1766,6 +1834,170 @@ class ThinkStreamer:
         self._started_line = not text.endswith("\n")
 
 
+def _extract_grammar_payload(message):
+    """Pull grammar-constrained JSON text out of an assistant message.
+    Thinking models (Qwen3, DeepSeek-R1) sometimes route the entire
+    response through `reasoning_content` while leaving `content` empty -
+    the JSON's still schema-valid, we just have to look in two places."""
+    if not isinstance(message, dict):
+        return ""
+    for key in ("content", "reasoning_content"):
+        val = message.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return ""
+
+
+def probe_grammar_support(base_url, model):
+    """Ask LM Studio for a tiny structured response with a json_schema
+    response_format. Returns True if the server accepts it, False otherwise
+    (older servers, non-LM-Studio backends, MLX kernels without grammar).
+
+    Disabled entirely when LMSTUDIO_NO_GRAMMAR=1 is set."""
+    if os.environ.get("LMSTUDIO_NO_GRAMMAR") == "1":
+        return False
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content":
+            "Reply with valid JSON matching the schema."}],
+        "max_tokens": 64,
+        "stream": False,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "lmstudio_grammar_probe",
+                "schema": {
+                    "type": "object",
+                    "properties": {"ok": {"type": "boolean"}},
+                    "required": ["ok"],
+                    "additionalProperties": False,
+                },
+                "strict": True,
+            },
+        },
+    }
+    req = urllib.request.Request(
+        f"{base_url.rstrip('/')}/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+        parsed = json.loads(body)
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError,
+            json.JSONDecodeError):
+        return False
+    try:
+        message = parsed["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError):
+        return False
+    text = _extract_grammar_payload(message)
+    if not text:
+        return False
+    try:
+        result = json.loads(text)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    return isinstance(result, dict) and "ok" in result
+
+
+def force_grammar_args(base_url, model, transcript, tool_name, tool_schema,
+                       partial_args, narration, workspace):
+    """Make a non-streaming completion with strict JSON schema output, asking
+    the model to fill in the args for a specific tool. Returns the parsed
+    args dict on success, or None on any failure.
+
+    Grammar-constrained generation refuses to produce JSON that violates the
+    schema, so a successful return is guaranteed to have all required
+    fields. Used by the dispatcher as a last-resort fallback when the model
+    keeps emitting tool calls with missing required arguments."""
+    # Constrain to a strict object schema so the server-side decoder rejects
+    # missing required keys.
+    strict = dict(tool_schema) if isinstance(tool_schema, dict) else {}
+    if strict.get("type") == "object":
+        strict.setdefault("additionalProperties", False)
+        # `strict: true` on OpenAI / LM Studio requires every property to
+        # also appear in `required`. Force that to avoid 400s.
+        props = strict.get("properties") or {}
+        strict["required"] = sorted(props.keys())
+
+    # Carve down the transcript a bit so we don't pay for huge contexts on a
+    # one-shot helper call. Keep system + last ~10 turns.
+    trimmed = []
+    if transcript and transcript[0].get("role") == "system":
+        trimmed.append(transcript[0])
+    trimmed.extend(transcript[-10:])
+
+    partial_dump = json.dumps(partial_args, indent=2) if partial_args else "{}"
+    forced_messages = list(trimmed) + [{
+        "role": "user",
+        "content": (
+            f"ORCHESTRATOR (grammar retry): your last `{tool_name}` call was "
+            f"missing required arguments. Re-emit the arguments as a JSON "
+            f"object matching the schema exactly. Fill EVERY required field "
+            f"with a concrete value.\n\n"
+            f"Partial call you made:\n{partial_dump}\n\n"
+            f"Your narration mentioned:\n{(narration or '').strip()[-500:]}\n\n"
+            f"Workspace root (paths resolve from here): {workspace}\n\n"
+            f"Respond with ONLY the JSON object. No prose, no markdown, "
+            f"no code fences."
+        ),
+    }]
+
+    payload = {
+        "model": model,
+        "messages": forced_messages,
+        "stream": False,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": f"{tool_name}_args",
+                "schema": strict,
+                "strict": True,
+            },
+        },
+    }
+    req = urllib.request.Request(
+        f"{base_url.rstrip('/')}/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            body = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError,
+            json.JSONDecodeError):
+        return None
+    try:
+        message = body["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError):
+        return None
+    text = _extract_grammar_payload(message)
+    if not text:
+        return None
+    # Some models still wrap the JSON in code fences despite the strict
+    # response_format. Peel a trailing ``` and a leading ``` (with optional
+    # language tag) so json.loads gets clean input.
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        lines = stripped.split("\n")
+        if lines:
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        stripped = "\n".join(lines).strip()
+    try:
+        parsed = json.loads(stripped)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return parsed
+
+
 def stream_completion(base_url, model, messages, tools):
     payload = {"model": model, "messages": messages, "tools": tools,
                "tool_choice": "auto", "stream": True}
@@ -2105,6 +2337,35 @@ def schema_summary_for(name):
     return name + "(...)"
 
 
+def schema_params_for(name):
+    """Return the raw JSON Schema parameter object for the named built-in
+    tool, or None if not found. Used to feed `response_format` constraints
+    to LM Studio's grammar-constrained generation."""
+    for spec in BUILTIN_TOOL_SCHEMAS:
+        fn = spec.get("function") or {}
+        if fn.get("name") == name:
+            return fn.get("parameters")
+    return None
+
+
+def required_args_for(name):
+    params = schema_params_for(name) or {}
+    return list(params.get("required") or [])
+
+
+def missing_required(name, args):
+    """Required field names from the schema that aren't set (or are None /
+    empty-string) in `args`. Empty list when everything's present."""
+    if not isinstance(args, dict):
+        return required_args_for(name)
+    missing = []
+    for key in required_args_for(name):
+        val = args.get(key)
+        if val is None or val == "":
+            missing.append(key)
+    return missing
+
+
 # =============================================================================
 # Session state container
 # =============================================================================
@@ -2156,6 +2417,11 @@ class AgentState:
         self.started_at = time.time()
         self.context_files = []
         self.context_text = ""
+        # Pre-flight workspace scan injected into the system prompt so the
+        # model has a workspace map at turn-zero. Stored as (tree_text,
+        # entry_count); count surfaces in the banner.
+        self.workspace_tree = ""
+        self.workspace_tree_count = 0
         self.system_prompt = SYSTEM_PROMPT_BASE
         self.system_override = None
         self.last_diff = None  # set by write_file / edit_file tool calls
@@ -2166,6 +2432,10 @@ class AgentState:
         # Model's context window in tokens, queried once at session start
         # via LM Studio's /api/v0/models. Used by the status footer.
         self.context_window = None
+        # Whether the active LM Studio server accepts response_format /
+        # json_schema. Probed once at session start; gates grammar-retry
+        # fallback in the dispatcher.
+        self.grammar_supported = False
         # Continuation policy: how many times the orchestrator will keep
         # re-prompting after a turn ends with work clearly unfinished.
         # Counts reset to 0 on every human-issued user message.
@@ -2176,9 +2446,22 @@ class AgentState:
 
     def system_message(self):
         body = self.system_override or self.system_prompt
+        extras = []
         if self.context_text:
-            return body + "\n\n" + self.context_text
+            extras.append(self.context_text)
+        if self.workspace_tree:
+            extras.append(self.workspace_tree)
+        if extras:
+            return body + "\n\n" + "\n\n".join(extras)
         return body
+
+    def refresh_workspace_tree(self):
+        try:
+            tree, count = load_workspace_tree(self.workspace)
+        except Exception:
+            tree, count = "", 0
+        self.workspace_tree = tree
+        self.workspace_tree_count = count
 
     def reset_transcript(self):
         self.transcript = [{"role": "system", "content": self.system_message()}]
@@ -2433,6 +2716,30 @@ def _dispatch_tool(state, name, args, *, narration=""):
     if repair_note:
         args_in = repaired
 
+    # Grammar-constrained retry: when required args are STILL missing after
+    # narration repair, ask the server for a strictly-schema-conforming JSON
+    # object. The server-side decoder refuses to emit JSON that violates the
+    # schema, so a non-None return is guaranteed to have every required
+    # field. Skipped silently when the server doesn't support
+    # response_format (probed at session start).
+    if (state.grammar_supported and name in BUILTIN_TOOL_FUNCS
+            and name != "update_tasks"):
+        missing_before = missing_required(name, args_in)
+        if missing_before:
+            schema = schema_params_for(name)
+            forced = force_grammar_args(
+                state.base_url, state.model, state.transcript,
+                name, schema, args_in, narration, state.workspace,
+            ) if schema else None
+            if forced and not missing_required(name, forced):
+                merged = dict(args_in)
+                merged.update(forced)
+                args_in = merged
+                grammar_note = ("grammar-filled "
+                                + ", ".join("`" + k + "`" for k in missing_before))
+                repair_note = (repair_note + "  " + grammar_note
+                               if repair_note else grammar_note)
+
     try:
         if name == "update_tasks":
             count = state.sink.replace(args_in.get("tasks", []))
@@ -2594,10 +2901,15 @@ class SlashRouter:
             return "continue"
         self.state.workspace = path
         self.state.context_text, self.state.context_files = load_project_context(path)
+        self.state.refresh_workspace_tree()
         self.state.reset_transcript()
         print(style(f"  workspace -> {path}", "ok"))
         if self.state.context_files:
             print(style(f"  loaded context: {', '.join(self.state.context_files)}", "dim"))
+        if self.state.workspace_tree_count:
+            print(style(
+                f"  workspace tree: {self.state.workspace_tree_count} entries",
+                "dim"))
         return "continue"
 
     def cmd_cost(self, _):
@@ -2870,6 +3182,7 @@ def main():
         wrap=not args.no_wrap,
     )
     state.context_window = fetch_model_context_window(args.base_url, args.model)
+    state.grammar_supported = probe_grammar_support(args.base_url, state.model)
     # --allow-bash from the CLI is meant as "I trust the agent to run bash
     # for this session" - enable the tool AND skip the per-call prompt.
     # /bash on inside the REPL keeps the prompt because that's a softer,
@@ -2880,6 +3193,7 @@ def main():
         state.system_override = args.system
     if not args.no_context:
         state.context_text, state.context_files = load_project_context(workspace)
+        state.refresh_workspace_tree()
     state.reset_transcript()
 
     if args.resume:
@@ -2905,7 +3219,9 @@ def main():
 
     if not args.no_banner and not args.json:
         draw_banner(state.model, workspace, state.allow_bash, session_id,
-                    state.theme_name, state.context_files)
+                    state.theme_name, state.context_files,
+                    tree_count=state.workspace_tree_count,
+                    grammar_supported=state.grammar_supported)
         draw_tips()
 
     _load_history()
