@@ -24,12 +24,14 @@ Loom's Tasks pane picks them up.
 
 import argparse
 import difflib
+import fcntl
 import json
 import os
 import re
 import select
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import termios
@@ -196,15 +198,34 @@ TASK_GLYPHS = {
 # =============================================================================
 
 def term_width():
+    """Live terminal width. We `ioctl(TIOCGWINSZ)` against stdout directly
+    rather than going through `shutil.get_terminal_size()`, because that
+    helper prefers the `COLUMNS` env var when set - and SwiftTerm-backed
+    terminals (Loom, Warp, iTerm with shell integration) sometimes stamp
+    `COLUMNS` once at PTY launch and never update it on resize. The ioctl
+    asks the kernel, which always has the truth."""
+    fd = None
+    try:
+        fd = sys.stdout.fileno()
+    except (OSError, ValueError):
+        pass
+    if fd is not None:
+        try:
+            data = fcntl.ioctl(fd, termios.TIOCGWINSZ, b"\x00" * 8)
+            _, cols, _, _ = struct.unpack("hhhh", data)
+            if cols > 0:
+                return cols
+        except (OSError, ValueError):
+            pass
     return shutil.get_terminal_size((80, 24)).columns
 
 
 def box_width():
-    """Box width that always fits in the current terminal, recomputed each
-    call so resize-between-turns just works on the next draw. Mid-input
-    resize still leaves the in-flight box mis-sized; SIGWINCH redraws the
-    prompt area for the next turn."""
-    return max(40, min(term_width() - 4, 92))
+    """Box width that always fits in the current terminal. Capped at 76 so
+    we leave headroom for terminals that lie slightly about their width
+    and for any wide-glyph rendering surprises. Recomputed on every draw
+    so resize between turns lands correctly on the next prompt."""
+    return max(40, min(term_width() - 4, 76))
 
 
 def _visible_len(s):
