@@ -438,8 +438,18 @@ class BoxedLineEditor:
             new = list(old)
             new[3] = new[3] & ~(termios.ICANON | termios.ECHO | termios.ISIG)
             termios.tcsetattr(fd, termios.TCSANOW, new)
-            self._render()
-            return self._loop()
+            # Enable bracketed paste so the terminal wraps pasted text in
+            # ESC[200~ ... ESC[201~. Without this, pasted newlines look
+            # identical to Enter and we submit on the first \n in the
+            # paste buffer, firing each pasted line as its own prompt.
+            sys.stdout.write("\033[?2004h")
+            sys.stdout.flush()
+            try:
+                self._render()
+                return self._loop()
+            finally:
+                sys.stdout.write("\033[?2004l")
+                sys.stdout.flush()
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
@@ -448,33 +458,41 @@ class BoxedLineEditor:
     def _wrap(self):
         """Wrap self.line into a list of visual rows, preferring word
         boundaries but falling back to hard wrap when a word is wider
-        than the inner area. Returns (rows, row_start_offsets) where
-        row_start_offsets[i] is the linear index in self.line where row
-        i begins."""
+        than the inner area. Embedded newlines (from paste) force a row
+        break. Returns (rows, row_start_offsets) where row_start_offsets[i]
+        is the linear index in self.line where row i begins."""
         width = self._inner_width
         text = self.line
         if not text:
             return [""], [0]
         rows = []
         offsets = []
-        i = 0
-        while i < len(text):
-            offsets.append(i)
-            end = min(i + width, len(text))
-            if end >= len(text):
-                rows.append(text[i:end])
-                break
-            chunk = text[i:end]
-            # Find a break point: last space before end, but not at i itself.
-            space = chunk.rfind(" ")
-            if space > 0:
-                rows.append(text[i:i + space])
-                # Consume the breaking space so it doesn't appear on the
-                # next row's start.
-                i = i + space + 1
+        # Split on explicit \n first; each segment is wrapped independently
+        # at the visual width.
+        segments = text.split("\n")
+        pos = 0
+        for seg in segments:
+            seg_start = pos
+            if not seg:
+                rows.append("")
+                offsets.append(seg_start)
             else:
-                rows.append(chunk)
-                i = end
+                i = 0
+                while i < len(seg):
+                    offsets.append(seg_start + i)
+                    end = min(i + width, len(seg))
+                    if end >= len(seg):
+                        rows.append(seg[i:end])
+                        break
+                    chunk = seg[i:end]
+                    space = chunk.rfind(" ")
+                    if space > 0:
+                        rows.append(seg[i:i + space])
+                        i = i + space + 1
+                    else:
+                        rows.append(chunk)
+                        i = end
+            pos += len(seg) + 1  # +1 for the \n separator (extra at end is harmless)
         if not rows:
             rows = [""]
             offsets = [0]
@@ -604,7 +622,22 @@ class BoxedLineEditor:
                     continue
                 if nxt == "[":
                     seq = sys.stdin.read(1)
-                    self._handle_csi(seq)
+                    if seq.isdigit():
+                        # Multi-byte CSI (ESC[200~ paste-start, ESC[5~ pgup,
+                        # etc.). Drain until ~ or letter.
+                        tail = seq
+                        while True:
+                            ch2 = self._read_with_timeout(0.08)
+                            if ch2 is None:
+                                break
+                            tail += ch2
+                            if ch2 == "~" or ch2.isalpha():
+                                break
+                        if tail == "200~":
+                            self._handle_paste()
+                        # Other multi-byte sequences (Page Up, etc.) ignored.
+                    else:
+                        self._handle_csi(seq)
                 continue
 
             if o == 0x7f or o == 0x08:  # Backspace
@@ -659,6 +692,47 @@ class BoxedLineEditor:
                 self.col += 1
                 self._render()
                 continue
+
+    def _handle_paste(self):
+        """Consume stdin up to the bracketed-paste end marker (ESC[201~)
+        and insert the pasted text at the cursor. Newlines are preserved
+        as literal `\\n` in self.line; the wrap function treats them as
+        forced row breaks. CR is normalized to LF so terminals that send
+        \\r line endings don't double-space."""
+        chunks = []
+        while True:
+            ch = sys.stdin.read(1)
+            if not ch:
+                break
+            if ch == "\x1b":
+                # Peek for the paste-end marker. If it isn't one, write
+                # the bytes through literally.
+                n1 = sys.stdin.read(1)
+                if n1 == "[":
+                    tail = ""
+                    while True:
+                        nb = sys.stdin.read(1)
+                        if not nb:
+                            break
+                        tail += nb
+                        if nb == "~" or nb.isalpha():
+                            break
+                    if tail == "201~":
+                        break  # end of paste
+                    chunks.append("\x1b[" + tail)
+                else:
+                    chunks.append("\x1b" + (n1 or ""))
+                continue
+            if ch == "\r":
+                chunks.append("\n")
+                continue
+            chunks.append(ch)
+        text = "".join(chunks)
+        if not text:
+            return
+        self.line = self.line[:self.col] + text + self.line[self.col:]
+        self.col += len(text)
+        self._render()
 
     def _handle_csi(self, seq):
         if seq == "A":
