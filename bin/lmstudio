@@ -244,6 +244,7 @@ TIPS = [
     "type @path/to/file to inline a file's contents (Tab completes)",
     "slash commands: /help, /clear, /model, /bash, /cwd, /save, /resume, /cost",
     "word wrap on by default · /wrap off (or --no-wrap) for terminal hard wrap",
+    "--allow-bash enables run_bash and auto-approves it · --yolo skips every prompt",
     "task list flows into Loom's Tasks pane via ~/.loom/tasks/",
     "themes: --theme default | mono | cyberpunk | solarized",
     "non-interactive: --json streams structured events for scripting",
@@ -969,14 +970,21 @@ def tool_list_dir(state, args):
 
 
 def tool_run_bash(state, args):
+    """Run a shell command in a *non*-interactive login shell, isolated in
+    its own session so zsh's job-control bookkeeping can't leave us
+    holding a terminal we don't own. The previous `zsh -lic ...` invocation
+    flipped pgrp ownership around and intermittently dropped lmstudio into
+    the background, where the spinner's next stdout write tripped SIGTTOU
+    ("zsh: suspended (tty output)")."""
     command = args["command"]
     timeout = max(1, min(int(args.get("timeout_seconds", 30)), 300))
     proc = subprocess.run(
-        ["/bin/zsh", "-lic", command],
+        ["/bin/zsh", "-lc", command],
         cwd=str(state.workspace),
         capture_output=True,
         text=True,
         timeout=timeout,
+        start_new_session=True,
     )
     header = f"$ {command}\n[exit {proc.returncode}]\n"
     body = proc.stdout + proc.stderr
@@ -2230,7 +2238,10 @@ def main():
     parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS)
     parser.add_argument("--workspace", default=os.getcwd())
     parser.add_argument("--allow-bash", action="store_true",
-        default=os.environ.get("LMSTUDIO_BASH", "0") == "1")
+        default=os.environ.get("LMSTUDIO_BASH", "0") == "1",
+        help="Enable the run_bash tool AND auto-approve every invocation "
+             "for this session. Use /bash on (or LMSTUDIO_BASH=1) if you "
+             "want the tool enabled but still prompted per call.")
     parser.add_argument("--yolo", action="store_true",
         default=os.environ.get("LMSTUDIO_YOLO", "0") == "1",
         help="Disable permission prompts for write_file / edit_file / run_bash.")
@@ -2301,6 +2312,12 @@ def main():
         yolo=args.yolo, theme_name=args.theme, mcp_clients=mcp_clients,
         wrap=not args.no_wrap,
     )
+    # --allow-bash from the CLI is meant as "I trust the agent to run bash
+    # for this session" - enable the tool AND skip the per-call prompt.
+    # /bash on inside the REPL keeps the prompt because that's a softer,
+    # mid-session toggle.
+    if args.allow_bash:
+        state.permissions.allowed_forever.add("run_bash")
     if args.system:
         state.system_override = args.system
     if not args.no_context:
