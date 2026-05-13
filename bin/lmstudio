@@ -243,6 +243,7 @@ TIPS = [
     "Esc during a running turn stops it · Ctrl-D or /quit to exit",
     "type @path/to/file to inline a file's contents (Tab completes)",
     "slash commands: /help, /clear, /model, /bash, /cwd, /save, /resume, /cost",
+    "word wrap on by default · /wrap off (or --no-wrap) for terminal hard wrap",
     "task list flows into Loom's Tasks pane via ~/.loom/tasks/",
     "themes: --theme default | mono | cyberpunk | solarized",
     "non-interactive: --json streams structured events for scripting",
@@ -357,6 +358,28 @@ def draw_prompt_box():
     bottom = style("╰" + bar + "╯", "border")
     lead = style("│ ", "border") + style(GLYPH_PROMPT + " ", "prompt")
     return top, lead, bottom
+
+
+def close_prompt_box(user_input):
+    """After input() returns, redraw the typed line with a right border so
+    the prompt area reads as a fully closed box. Bails when the input would
+    have wrapped — at that point the typed line spans multiple visual rows
+    and a single cursor-up redraw would corrupt the display."""
+    width = box_width()
+    available = width - 5  # "│ " (2) + "❯ " (2) + right "│" (1)
+    visible_input = re.sub(r"\033\[[0-9;]*m", "", user_input)
+    if len(visible_input) > available:
+        return  # input wrapped; leave the box open on the right
+    if not sys.stdout.isatty():
+        return  # piped invocations don't have a controllable cursor
+    pad = available - len(visible_input)
+    line = (style("│ ", "border")
+            + style(GLYPH_PROMPT + " ", "prompt")
+            + user_input
+            + " " * pad
+            + style("│", "border"))
+    sys.stdout.write("\033[A\r\033[2K" + line + "\n")
+    sys.stdout.flush()
 
 
 def draw_status_footer(state):
@@ -1089,6 +1112,93 @@ def fetch_loaded_models(base_url):
 
 
 # =============================================================================
+# Streaming word-wrap
+# =============================================================================
+
+class StreamingWrapper:
+    """Word-boundary wrap for streamed output. Buffers each word until
+    whitespace/newline arrives, then flushes with an inserted newline if
+    placing the word would overflow the right margin. ANSI escape codes
+    pass through transparently and don't count toward column position.
+
+    Designed for the model's streamed content: each delta might be a few
+    tokens or a single character, so we keep a column cursor across feeds.
+    Falls back to passthrough when `enabled=False` so the terminal's hard
+    wrap takes over."""
+
+    _ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+
+    def __init__(self, get_width, enabled=True):
+        self.get_width = get_width
+        self.enabled = enabled
+        self.column = 0
+        self.word = ""
+
+    def feed(self, chunk):
+        if not self.enabled:
+            self.column = self._visible_advance(self.column, chunk)
+            return chunk
+        out = []
+        i = 0
+        while i < len(chunk):
+            m = self._ANSI_RE.match(chunk, i)
+            if m:
+                out.append(m.group(0))
+                i = m.end()
+                continue
+            ch = chunk[i]
+            if ch == "\n":
+                if self.word:
+                    out.append(self._flush_word())
+                out.append("\n")
+                self.column = 0
+            elif ch in " \t":
+                if self.word:
+                    out.append(self._flush_word())
+                # Only emit whitespace when we're past column 0 - leading
+                # spaces on a wrapped line look like accidental indent.
+                if self.column > 0:
+                    if self.column + 1 >= self.get_width():
+                        out.append("\n")
+                        self.column = 0
+                    else:
+                        out.append(ch)
+                        self.column += 1
+            else:
+                self.word += ch
+            i += 1
+        return "".join(out)
+
+    def finish(self):
+        if self.word:
+            return self._flush_word()
+        return ""
+
+    def reset_column(self, value=0):
+        self.column = value
+        self.word = ""
+
+    def _flush_word(self):
+        word = self.word
+        self.word = ""
+        word_len = len(self._ANSI_RE.sub("", word))
+        width = self.get_width()
+        if self.column > 0 and self.column + word_len > width:
+            self.column = word_len
+            return "\n" + word
+        self.column += word_len
+        return word
+
+    @classmethod
+    def _visible_advance(cls, column, text):
+        stripped = cls._ANSI_RE.sub("", text)
+        if "\n" in stripped:
+            tail = stripped.rsplit("\n", 1)[-1]
+            return len(tail)
+        return column + len(stripped)
+
+
+# =============================================================================
 # Think-tag streaming
 # =============================================================================
 
@@ -1101,13 +1211,20 @@ class ThinkStreamer:
     OPEN = "<think>"
     CLOSE = "</think>"
 
-    def __init__(self, quiet=False, emit_event=None):
+    def __init__(self, quiet=False, emit_event=None, wrap=True):
         self.in_think = False
         self.buf = ""
         self.full = []
         self._started_line = False
         self.quiet = quiet
         self.emit_event = emit_event or (lambda *a, **kw: None)
+        # Width for wrapping - use the real terminal width (not the box
+        # cap) so model output gets the full screen, just wrapped at word
+        # boundaries instead of mid-token.
+        self._wrapper = StreamingWrapper(
+            get_width=lambda: max(40, term_width() - 2),
+            enabled=wrap and not quiet,
+        )
 
     def feed(self, chunk):
         if not chunk:
@@ -1154,6 +1271,9 @@ class ThinkStreamer:
             else:
                 self._emit_plain(self.buf)
             self.buf = ""
+        tail = self._wrapper.finish()
+        if tail and not self.quiet:
+            sys.stdout.write(tail)
         if self.in_think and not self.quiet:
             sys.stdout.write("\n")
             self.in_think = False
@@ -1170,7 +1290,7 @@ class ThinkStreamer:
         self.emit_event("content", text=text)
         if self.quiet:
             return
-        sys.stdout.write(text)
+        sys.stdout.write(self._wrapper.feed(text))
         sys.stdout.flush()
         self._started_line = not text.endswith("\n")
 
@@ -1181,7 +1301,8 @@ class ThinkStreamer:
         if self.quiet:
             return
         rendered = text.replace("\n", "\n  " + style(GLYPH_THINK + " ", "thinking"))
-        sys.stdout.write(style(rendered, "thinking"))
+        styled = style(rendered, "thinking")
+        sys.stdout.write(self._wrapper.feed(styled))
         sys.stdout.flush()
         self._started_line = not text.endswith("\n")
 
@@ -1281,7 +1402,7 @@ can follow along without it cluttering the answer."""
 
 class AgentState:
     def __init__(self, *, workspace, base_url, model, allow_bash, session_id,
-                 yolo, theme_name, mcp_clients):
+                 yolo, theme_name, mcp_clients, wrap=True):
         self.workspace = workspace
         self.base_url = base_url
         self.model = model
@@ -1300,6 +1421,7 @@ class AgentState:
         self.system_prompt = SYSTEM_PROMPT_BASE
         self.system_override = None
         self.last_diff = None  # set by write_file / edit_file tool calls
+        self.wrap = wrap
 
     def system_message(self):
         body = self.system_override or self.system_prompt
@@ -1334,6 +1456,7 @@ def run_turn(state, user_message, *, json_emit=None):
         streamer = ThinkStreamer(
             quiet=bool(json_emit),
             emit_event=(lambda kind, text: json_emit(kind, text=text)) if json_emit else None,
+            wrap=state.wrap,
         )
         finished_tool_calls = []
         had_content = False
@@ -1519,6 +1642,7 @@ class SlashRouter:
             "/sh":      self.cmd_sh,
             "/yolo":    self.cmd_yolo,
             "/theme":   self.cmd_theme,
+            "/wrap":    self.cmd_wrap,
         }
 
     def names(self):
@@ -1699,6 +1823,16 @@ class SlashRouter:
         print(style(f"  theme -> {rest}", "ok"))
         return "continue"
 
+    def cmd_wrap(self, rest):
+        if rest in ("on", "yes", "true"):
+            self.state.wrap = True
+        elif rest in ("off", "no", "false"):
+            self.state.wrap = False
+        else:
+            self.state.wrap = not self.state.wrap
+        print(style(f"  word wrap {'on' if self.state.wrap else 'off'}", "ok"))
+        return "continue"
+
 
 def textwrap_short(s, n):
     s = s.replace("\n", " ")
@@ -1774,6 +1908,9 @@ def main():
     parser.add_argument("--system", help="Override the system prompt for this session.")
     parser.add_argument("--mcp", action="append", default=[],
         help="Shell command line that spawns a stdio MCP server. Repeatable.")
+    parser.add_argument("--no-wrap", action="store_true",
+        help="Disable word-boundary wrapping of model output; let the "
+             "terminal hard-wrap at the right edge instead.")
     parser.add_argument("--json", action="store_true",
         help="Emit one JSON event per line instead of styled output. "
              "Implies --no-banner.")
@@ -1826,6 +1963,7 @@ def main():
         workspace=workspace, base_url=args.base_url, model=args.model,
         allow_bash=args.allow_bash, session_id=session_id,
         yolo=args.yolo, theme_name=args.theme, mcp_clients=mcp_clients,
+        wrap=not args.no_wrap,
     )
     if args.system:
         state.system_override = args.system
@@ -1883,6 +2021,7 @@ def main():
             draw_status_footer(state)
             print(top)
             print(f"{lead}{one_shot}")
+            close_prompt_box(one_shot)
             print(bot)
             print()
         try:
