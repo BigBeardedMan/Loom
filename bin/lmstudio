@@ -414,6 +414,12 @@ class BoxedLineEditor:
         self.line = ""
         self.col = 0
         self._drawn_height = 0   # screen rows the box currently occupies
+        # Relative cursor position inside the box, 0-indexed from the top
+        # border. 0 = top, 1..N = input rows, N+1 = bottom. The wipe step
+        # of the next render uses this to move back to the top of the box
+        # before clearing - moving up by self._drawn_height instead would
+        # land *above* the box and march it up the screen on every redraw.
+        self._cursor_box_row = 0
         self._frozen_width = box_width()  # locked for the editor's lifetime
 
     @property
@@ -494,8 +500,16 @@ class BoxedLineEditor:
     # --- drawing --------------------------------------------------------
 
     def _render(self):
-        """Full redraw. Clears the previously drawn box (if any), then
-        renders top + content rows + bottom + positions the cursor."""
+        """Full redraw. Wipe the previously drawn box (cursor is inside it
+        at self._cursor_box_row), then render top + content rows + bottom
+        and reposition the cursor for the new content.
+
+        The wipe step must move up by `self._cursor_box_row` lines, NOT by
+        the full box height - the cursor lives *inside* the box between
+        renders, not below it. Using the box height here (the pre-fix bug)
+        moved the cursor above the box and clear-to-end-of-screen wiped
+        whatever was already there, marching the box up the viewport one
+        keystroke at a time."""
         width = self._frozen_width
         inner = self._inner_width
         bar = "─" * (width - 2)
@@ -503,14 +517,16 @@ class BoxedLineEditor:
         bot = style("╰" + bar + "╯", "border")
         right = style("│", "border")
 
-        # Wipe the previously drawn box.
         if self._drawn_height > 0:
             sys.stdout.write("\r")
-            sys.stdout.write("\033[" + str(self._drawn_height) + "A")
+            if self._cursor_box_row > 0:
+                sys.stdout.write("\033[" + str(self._cursor_box_row) + "A")
             sys.stdout.write("\033[J")
+        else:
+            sys.stdout.write("\r")
 
         rows, offsets = self._wrap()
-        height = len(rows) + 2  # top + N rows + bottom
+        height = len(rows) + 2  # top + N input rows + bottom
 
         sys.stdout.write(top + "\n")
         for i, row_text in enumerate(rows):
@@ -525,11 +541,9 @@ class BoxedLineEditor:
 
         self._drawn_height = height
 
-        # Position the cursor inside the box.
         row, col = self._cursor_rc(rows, offsets)
-        # We're now on the line right after the bottom border. Move up to
-        # the desired input row.
-        up = height - 1 - row
+        target = row + 1  # 0=top, 1..N=input rows, N+1=bot
+        up = height - target  # cursor is on the line below bot (offset `height`)
         if up > 0:
             sys.stdout.write("\033[" + str(up) + "A")
         sys.stdout.write("\r")
@@ -537,18 +551,18 @@ class BoxedLineEditor:
         if forward > 0:
             sys.stdout.write("\033[" + str(forward) + "C")
         sys.stdout.flush()
+        self._cursor_box_row = target
 
     def _leave_box(self):
-        """Move cursor to a clean line below the bottom border."""
-        rows, _ = self._wrap()
-        height = len(rows) + 2
-        row, _ = self._cursor_rc(rows, [0] * len(rows))
-        down = height - (row + 1)
+        """Move the cursor below the bottom border so further output starts
+        on a fresh line."""
+        down = self._drawn_height - self._cursor_box_row
         if down > 0:
             sys.stdout.write("\033[" + str(down) + "B")
-        sys.stdout.write("\r\n")
+        sys.stdout.write("\r")
         sys.stdout.flush()
         self._drawn_height = 0
+        self._cursor_box_row = 0
 
     # --- main loop ------------------------------------------------------
 
