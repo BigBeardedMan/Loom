@@ -721,7 +721,10 @@ class BoxedLineEditor:
 
 def draw_status_footer(state):
     """One-line status drawn above the prompt box. Approximate token count
-    (4 chars ≈ 1 token), wall-clock elapsed, model id, cwd, bash flag."""
+    (4 chars ≈ 1 token), wall-clock elapsed, model id, cwd, bash flag.
+    When LM Studio told us the model's context window we show usage as
+    "<used>/<max> (NN%)" so you can see how close you are to the cap,
+    Claude-Code style."""
     elapsed = int(time.time() - state.started_at)
     if elapsed < 60:
         elapsed_s = f"{elapsed}s"
@@ -730,11 +733,15 @@ def draw_status_footer(state):
     else:
         elapsed_s = f"{elapsed // 3600}h{(elapsed % 3600) // 60:02d}m"
     cwd_s = _shorten_path(state.workspace)
-    tokens_s = f"{state.approx_tokens:,} tok"
+    if state.context_window:
+        pct = min(100, int(state.approx_tokens * 100 / state.context_window))
+        tokens_s = f"{state.approx_tokens:,}/{state.context_window:,} tok ({pct}%)"
+    else:
+        tokens_s = f"{state.approx_tokens:,} tok"
     bash_s = "bash on" if state.allow_bash else "bash off"
     parts = [state.model, cwd_s, tokens_s, elapsed_s, bash_s]
     if state.context_files:
-        parts.insert(2, f"context: {len(state.context_files)}")
+        parts.insert(2, f"ctx: {len(state.context_files)} files")
     line = " " + style(" · ".join(parts), "footer")
     print(line)
 
@@ -1425,6 +1432,26 @@ def _http_json(url, timeout=5):
         return json.loads(resp.read().decode("utf-8"))
 
 
+def fetch_model_context_window(base_url, model_id):
+    """Ask LM Studio's /api/v0/models how big the loaded model's context
+    is, so we can show "X / Y tok (Z%)" in the status footer like Claude
+    Code does. Returns None on any failure - the footer just shows the
+    raw token count when we don't know the cap."""
+    base = base_url.rstrip("/")
+    v0_url = (base[:-len("/v1")] + "/api/v0/models"
+              if base.endswith("/v1") else base + "/api/v0/models")
+    try:
+        v0 = _http_json(v0_url)
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError):
+        return None
+    for entry in v0.get("data") or []:
+        if entry.get("id") == model_id:
+            ctx = entry.get("max_context_length") or entry.get("context_length")
+            if isinstance(ctx, int) and ctx > 0:
+                return ctx
+    return None
+
+
 def fetch_loaded_models(base_url):
     """List currently *loaded* model ids. Tries LM Studio's /api/v0/models
     first (state-aware), falls back to OpenAI-compatible /v1/models."""
@@ -1712,6 +1739,180 @@ def stream_completion(base_url, model, messages, tools):
 
 
 # =============================================================================
+# Orchestrator: loop detection + argument repair
+# =============================================================================
+#
+# Local models like Qwen3 / DeepSeek hit two predictable failure modes that
+# tank the agent loop:
+#
+#   1. They lock into a degenerate retry cycle (calling the same tool with
+#      the same broken arguments over and over, narrating "I keep making
+#      the same mistake" between attempts). Forwarding each failure to the
+#      model just makes the loop deeper.
+#
+#   2. They drop required arguments - typically `path` for write_file /
+#      edit_file or `command` for run_bash - while clearly *describing*
+#      the missing value in their narration ("The path is X. Let me create
+#      X with this HTML..."). The schema-violation error tells them
+#      nothing they don't already know.
+#
+# This block gives the orchestrator two compensating tricks:
+#
+#   - `detect_loop` watches the last few tool calls. If the model
+#     re-emits the same (tool, args) twice in a row and we'd be about to
+#     run it a third time, we synthesize an intervention message instead
+#     of dispatching. The message names the pattern explicitly. Local
+#     models almost always break out when the orchestrator points out
+#     they're stuck.
+#
+#   - `repair_args` runs *before* dispatch on calls with missing required
+#     fields, scanning the model's recent narration (assistant text from
+#     the in-progress turn) for the value it forgot to pass. Today this
+#     covers the two highest-leverage cases: path inference for file
+#     tools, command inference for run_bash. The repair is annotated in
+#     the tool result so the model sees what was fixed.
+
+_PATH_PATTERNS = (
+    # `path is X`, `path: X`, etc.
+    re.compile(r"path\s*(?:is|:|=)\s*[\"`']?([^\s\"`',;]+)[\"`']?", re.I),
+    # Backticked filename
+    re.compile(r"`([^`\s]+\.[A-Za-z0-9]{1,5})`"),
+    # `create X.html`, `write X.py`, etc.
+    re.compile(r"(?:create|write|edit|build|update)\s+(?:the\s+)?[\"`']?([\w./-]+\.[A-Za-z0-9]{1,5})[\"`']?", re.I),
+    # Bare relative path with extension
+    re.compile(r"\b([\w][\w./ -]*?\.[A-Za-z0-9]{1,5})\b"),
+)
+
+_COMMAND_PATTERNS = (
+    re.compile(r"```(?:bash|sh|zsh)?\s*\n([^\n][^`]*?)```", re.S),
+    re.compile(r"^\s*\$\s+(.+?)$", re.M),
+    re.compile(r"`([^`\n]{2,})`"),
+)
+
+
+def _canonical(args_obj):
+    try:
+        return json.dumps(args_obj, sort_keys=True)
+    except (TypeError, ValueError):
+        return str(args_obj)
+
+
+def detect_repeat_failure(history, name, args_canonical):
+    """True when the last two recorded tool calls match `(name, args)` and
+    both ended in error - i.e. this call would be the third identical
+    failed attempt in a row."""
+    if len(history) < 2:
+        return False
+    last = history[-1]
+    prev = history[-2]
+    return (last["name"] == prev["name"] == name
+            and last["args"] == prev["args"] == args_canonical
+            and last["error"] and prev["error"])
+
+
+def build_intervention_message(name, args, schema_summary):
+    """Synthetic tool-result body returned in place of the dispatch when
+    we catch the model in a retry loop. Names the pattern explicitly and
+    re-states the schema so the model has something concrete to fix."""
+    arg_dump = json.dumps(args, indent=2) if args else "{}"
+    return (
+        "ORCHESTRATOR INTERVENTION: you have called `" + name + "` three "
+        "times in a row with identical arguments and the call has failed "
+        "every time. Stop retrying with the same arguments.\n\n"
+        "Last attempt:\n" + arg_dump + "\n\n"
+        "Required schema:\n" + schema_summary + "\n\n"
+        "Action: respond in plain text (no tool calls) describing what "
+        "you intended to do, OR call `" + name + "` once with every "
+        "required field filled in concretely."
+    )
+
+
+def _scan_for_path(text, workspace):
+    """Look for a plausible workspace-relative path in `text`. Falls back
+    to None when nothing pattern-matches a filename."""
+    if not text:
+        return None
+    seen = set()
+    for pat in _PATH_PATTERNS:
+        for m in pat.finditer(text):
+            candidate = m.group(1).strip("'\"` ")
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            # Drop scheme-y or absolute non-workspace garbage.
+            if candidate.startswith(("http://", "https://", "/")):
+                continue
+            if "." not in candidate or candidate.startswith("."):
+                continue
+            # Sanity: a path can't contain spaces in our schema, but the
+            # model often writes spaces inside paths (e.g. "website dev").
+            # Keep them; resolve_in_workspace will validate.
+            return candidate
+    return None
+
+
+def _scan_for_command(text):
+    if not text:
+        return None
+    for pat in _COMMAND_PATTERNS:
+        m = pat.search(text)
+        if m:
+            cand = m.group(1).strip()
+            if cand and len(cand) < 400:
+                return cand
+    return None
+
+
+def repair_args(state, name, args, narration):
+    """Try to fill in the most common missing-argument cases by scanning
+    the model's recent narration. Returns (repaired_args, note) where
+    `note` is a human-readable summary suitable for the tool result."""
+    fixed = dict(args) if isinstance(args, dict) else {}
+    notes = []
+    if name in ("write_file", "edit_file"):
+        if not fixed.get("path"):
+            guess = _scan_for_path(narration, state.workspace)
+            if guess:
+                fixed["path"] = guess
+                notes.append("auto-repaired `path` = " + repr(guess)
+                             + " from your narration")
+    if name == "run_bash":
+        if not fixed.get("command"):
+            guess = _scan_for_command(narration)
+            if guess:
+                fixed["command"] = guess
+                notes.append("auto-repaired `command` = " + repr(guess)
+                             + " from your narration")
+    if name == "edit_file":
+        if not fixed.get("old_string") and "old_string" not in fixed:
+            # Hard to repair from text alone - leave it. The model will
+            # see the error and try again with concrete values.
+            pass
+    note = "  ".join(notes) if notes else None
+    return fixed, note
+
+
+def schema_summary_for(name):
+    """One-line argument summary for the named built-in tool. Used in the
+    orchestrator intervention text so the model sees a concrete schema."""
+    for spec in BUILTIN_TOOL_SCHEMAS:
+        fn = spec.get("function") or {}
+        if fn.get("name") == name:
+            params = fn.get("parameters") or {}
+            required = params.get("required") or []
+            props = params.get("properties") or {}
+            rows = []
+            for key in required:
+                kind = (props.get(key) or {}).get("type", "string")
+                rows.append("  " + key + " (" + kind + ", required)")
+            for key in (k for k in props if k not in required):
+                kind = (props.get(key) or {}).get("type", "string")
+                rows.append("  " + key + " (" + kind + ")")
+            return name + "(\n" + "\n".join(rows) + "\n)"
+    return name + "(...)"
+
+
+# =============================================================================
 # Session state container
 # =============================================================================
 
@@ -1766,6 +1967,12 @@ class AgentState:
         self.system_override = None
         self.last_diff = None  # set by write_file / edit_file tool calls
         self.wrap = wrap
+        # Rolling tool-call log for the loop-detection orchestrator. Each
+        # entry: {name, args (canonical JSON), error (bool)}.
+        self.tool_history = []
+        # Model's context window in tokens, queried once at session start
+        # via LM Studio's /api/v0/models. Used by the status footer.
+        self.context_window = None
 
     def system_message(self):
         body = self.system_override or self.system_prompt
@@ -1888,7 +2095,7 @@ def run_turn(state, user_message, *, json_emit=None):
                 _render_tool_call_line(name, args)
             if json_emit:
                 json_emit("tool_call", name=name, arguments=args)
-            result_text = _dispatch_tool(state, name, args)
+            result_text = _dispatch_tool(state, name, args, narration=assistant_text)
             state.absorb_text(result_text)
             if json_emit:
                 json_emit("tool_result", name=name, text=result_text)
@@ -1927,25 +2134,83 @@ def _render_tool_call_line(name, args):
     print(f"  {head} {style(preview, 'dim')}")
 
 
-def _dispatch_tool(state, name, args):
+def _dispatch_tool(state, name, args, *, narration=""):
+    """Run a tool through the orchestrator pipeline:
+
+      1. Loop detection - if this would be the third identical failed
+         attempt in a row, return an intervention message instead.
+      2. Argument repair - fill obvious missing fields (path, command)
+         by scanning the model's recent narration.
+      3. Permission gate - prompts y/n/a for dangerous tools.
+      4. Dispatch.
+
+    Every call (including interventions) is appended to state.tool_history
+    so subsequent calls can detect the loop pattern."""
+
+    args_in = args if isinstance(args, dict) else {}
+    canonical_in = _canonical(args_in)
+
+    if name in BUILTIN_TOOL_FUNCS and detect_repeat_failure(
+            state.tool_history, name, canonical_in):
+        intervention = build_intervention_message(
+            name, args_in, schema_summary_for(name))
+        _render_tool_result_summary(name, "orchestrator intervened (loop)", False)
+        state.tool_history.append({
+            "name": name, "args": canonical_in, "error": False,
+        })
+        return intervention
+
+    repaired, repair_note = repair_args(state, name, args_in, narration)
+    if repair_note:
+        args_in = repaired
+
     try:
         if name == "update_tasks":
-            count = state.sink.replace(args.get("tasks", []))
-            return f"Task list updated ({count} task{'' if count == 1 else 's'})."
+            count = state.sink.replace(args_in.get("tasks", []))
+            result = f"Task list updated ({count} task{'' if count == 1 else 's'})."
+            state.tool_history.append({
+                "name": name, "args": _canonical(args_in), "error": False,
+            })
+            return result
         if name.startswith("mcp__"):
-            return call_mcp_tool(state.mcp_clients, name, args)
+            result = call_mcp_tool(state.mcp_clients, name, args_in)
+            state.tool_history.append({
+                "name": name, "args": _canonical(args_in), "error": False,
+            })
+            return result
         if name == "run_bash" and not state.allow_bash:
+            state.tool_history.append({
+                "name": name, "args": canonical_in, "error": True,
+            })
             return "Error: run_bash disabled. Use --allow-bash or /bash on."
-        if name in DANGEROUS_TOOLS and not state.permissions.gate(name, args):
+        if name in DANGEROUS_TOOLS and not state.permissions.gate(name, args_in):
+            state.tool_history.append({
+                "name": name, "args": _canonical(args_in), "error": True,
+            })
             return f"Error: user denied {name}."
         func = BUILTIN_TOOL_FUNCS.get(name)
         if not func:
+            state.tool_history.append({
+                "name": name, "args": canonical_in, "error": True,
+            })
             return f"Error: unknown tool {name}"
-        result = func(state, args)
+        result = func(state, args_in)
         _render_tool_result_summary(name, result, True)
+        state.tool_history.append({
+            "name": name, "args": _canonical(args_in), "error": False,
+        })
+        if repair_note:
+            return result + "\n\n[orchestrator: " + repair_note + "]"
         return result
     except Exception as e:
         _render_tool_result_summary(name, str(e), False)
+        state.tool_history.append({
+            "name": name, "args": _canonical(args_in), "error": True,
+        })
+        if repair_note:
+            return ("Error: " + str(e)
+                    + "\n\n[orchestrator: " + repair_note + " - but the tool "
+                    "still failed, so the inferred value may be wrong]")
         return f"Error: {e}"
 
 
@@ -2312,6 +2577,7 @@ def main():
         yolo=args.yolo, theme_name=args.theme, mcp_clients=mcp_clients,
         wrap=not args.no_wrap,
     )
+    state.context_window = fetch_model_context_window(args.base_url, args.model)
     # --allow-bash from the CLI is meant as "I trust the agent to run bash
     # for this session" - enable the tool AND skip the per-call prompt.
     # /bash on inside the REPL keeps the prompt because that's a softer,
