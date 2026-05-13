@@ -80,7 +80,7 @@ xcodegen generate >/dev/null
 echo "==> xcodebuild Release (MARKETING_VERSION=${BUILD_CODE})"
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   xcodebuild \
-    -project Loom.xcodeproj \
+    -project LoomTestingEdition.xcodeproj \
     -scheme LoomTestingEdition \
     -configuration Release \
     -quiet \
