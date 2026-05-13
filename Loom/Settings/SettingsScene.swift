@@ -302,7 +302,17 @@ private struct EndpointEditor: View {
         .padding(20)
         .frame(width: 520)
         .onAppear {
-            prefill()
+            applyInitial()
+            if kind == .lmstudio {
+                Task { await lmsCLI.refresh() }
+            }
+        }
+        .onChange(of: initial?.id) { _, _ in
+            // Sheet content's @State persists across presentations, so
+            // re-applying `initial` (or the blank defaults when adding) on
+            // every change is what makes Edit show the right endpoint
+            // instead of whatever the previous open left behind.
+            applyInitial()
             if kind == .lmstudio {
                 Task { await lmsCLI.refresh() }
             }
@@ -527,14 +537,29 @@ private struct EndpointEditor: View {
         }
     }
 
-    private func prefill() {
-        guard let initial else { return }
-        displayName = initial.displayName
-        kind = initial.kind
-        baseURL = initial.baseURL
-        defaultModel = initial.defaultModel
-        requiresAuth = initial.requiresAuth
-        authToken = KeychainStore.load(account: initial.keychainAccount) ?? ""
+    /// Reset every @State field from `initial`, or to a clean "Add" baseline
+    /// when initial is nil. Called from both `onAppear` and `onChange(of:
+    /// initial?.id)` so the sheet content reflects whichever endpoint the
+    /// user clicked Edit on - or a blank form if they clicked Add.
+    private func applyInitial() {
+        testStatus = .idle
+        testMessage = ""
+        discoveredModels = []
+        if let initial {
+            displayName = initial.displayName
+            kind = initial.kind
+            baseURL = initial.baseURL
+            defaultModel = initial.defaultModel
+            requiresAuth = initial.requiresAuth
+            authToken = KeychainStore.load(account: initial.keychainAccount) ?? ""
+        } else {
+            displayName = ""
+            kind = .ollama
+            baseURL = LocalEndpoint.Kind.ollama.defaultBaseURL
+            defaultModel = ""
+            requiresAuth = false
+            authToken = ""
+        }
     }
 
     private func save() {
