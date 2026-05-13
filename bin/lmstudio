@@ -61,6 +61,10 @@ SESSION_ROOT = Path.home() / ".loom" / "sessions"
 HISTORY_FILE = Path.home() / ".config" / "loom" / "lmstudio-history"
 CONTEXT_FILES = ["CLAUDE.md", "AGENTS.md", "GUIDE.md", "README.md"]
 CONTEXT_CAP_BYTES = 5_000
+COMPACT_TRIGGER_RATIO = 0.75
+JOURNAL_ROOT = Path.home() / ".loom" / "journal"
+BRANCH_ROOT = Path.home() / ".loom" / "branches"
+PROJECT_KNOWLEDGE_FILENAME = ".loom/project.json"
 
 WORKSPACE_TREE_IGNORE = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache",
@@ -300,6 +304,37 @@ def draw_banner(model, workspace, allow_bash, session_id, theme_name,
     if tree_count:
         print(row("tree", f"{tree_count} entries", "dim"))
     print(row("session", session_id, "dim"))
+    print(style("╰" + bar + "╯", "border"))
+
+
+def draw_banner_extra(state):
+    """Surface the new 4.0.0 features when they're active. Called right
+    after `draw_banner`; silent when nothing's interesting to report."""
+    width = box_width()
+    rows = []
+    if state.project_knowledge_text:
+        rows.append(("knowledge", "project.json loaded", "ok"))
+    if state.preview:
+        rows.append(("preview", state.preview["url"], "ok"))
+    if state.auto_test:
+        runner = detect_test_runner(state.workspace)
+        rows.append(("auto-test", "on (" + (runner["name"] if runner else "no runner") + ")", "ok"))
+    if state.planner_model or state.coder_model or state.explainer_model:
+        parts = []
+        if state.planner_model: parts.append(f"plan={state.planner_model}")
+        if state.coder_model: parts.append(f"code={state.coder_model}")
+        if state.explainer_model: parts.append(f"explain={state.explainer_model}")
+        rows.append(("router", " ".join(parts), "value"))
+    if not rows:
+        return
+    bar = "─" * (width - 2)
+    side = style("│", "border")
+    print(style("╭" + bar + "╮", "border"))
+    for label, value, role in rows:
+        padded = label.ljust(10)
+        inner = f" {style(padded, 'key')}{style(value, role)}"
+        pad = max(0, width - 2 - _visible_len(inner))
+        print(f"{side}{inner}{' ' * pad}{side}")
     print(style("╰" + bar + "╯", "border"))
 
 
@@ -1010,6 +1045,157 @@ class PermissionManager:
 
 
 # =============================================================================
+# Filesystem mutation journal + syntax check
+# =============================================================================
+
+def record_journal(state, action, rel_path, prior, new):
+    """Append an entry to the in-memory journal and the on-disk JSONL so
+    /undo can roll back and a crashed CLI can recover. Silent on error so
+    a journaling failure never blocks a successful write."""
+    entry = {
+        "action": action,
+        "path": rel_path,
+        "prior": prior,
+        "new": new,
+        "ts": _now_iso(),
+    }
+    state.journal.append(entry)
+    try:
+        JOURNAL_ROOT.mkdir(parents=True, exist_ok=True)
+        with open(JOURNAL_ROOT / f"{state.session_id}.jsonl", "a",
+                  encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        pass
+
+
+_SYNTAX_VALIDATORS = {}  # populated below after stdlib imports
+
+
+def _validate_python(text):
+    try:
+        import ast
+        ast.parse(text)
+    except SyntaxError as e:
+        return f"SyntaxError at line {e.lineno}: {e.msg}"
+    return None
+
+
+def _validate_json(text):
+    try:
+        json.loads(text)
+    except json.JSONDecodeError as e:
+        return f"JSON parse error at line {e.lineno} col {e.colno}: {e.msg}"
+    return None
+
+
+def _validate_html(text):
+    try:
+        from html.parser import HTMLParser
+        HTMLParser().feed(text)
+    except Exception as e:
+        return f"HTML parse error: {e}"
+    return None
+
+
+def _validate_yaml(text):
+    try:
+        import yaml  # type: ignore
+    except ImportError:
+        return None
+    try:
+        yaml.safe_load(text)
+    except Exception as e:
+        return f"YAML parse error: {e}"
+    return None
+
+
+def _brace_balance(text, lang):
+    pairs = {"{": "}", "[": "]", "(": ")"}
+    stack = []
+    in_str = None
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if in_str:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == in_str:
+                in_str = None
+            i += 1
+            continue
+        if ch in ("'", '"', "`"):
+            in_str = ch
+            i += 1
+            continue
+        if ch == "/" and i + 1 < len(text) and text[i+1] == "/":
+            end = text.find("\n", i)
+            i = len(text) if end == -1 else end
+            continue
+        if ch == "/" and i + 1 < len(text) and text[i+1] == "*":
+            end = text.find("*/", i)
+            i = len(text) if end == -1 else end + 2
+            continue
+        if ch in pairs:
+            stack.append(ch)
+        elif ch in pairs.values():
+            if not stack or pairs[stack[-1]] != ch:
+                return f"{lang}: unbalanced `{ch}` at offset {i}"
+            stack.pop()
+        i += 1
+    if stack:
+        return f"{lang}: unclosed `{stack[-1]}` (line ~{text[:].count(chr(10), 0)})"
+    return None
+
+
+_SYNTAX_VALIDATORS = {
+    ".py": _validate_python,
+    ".json": _validate_json,
+    ".html": _validate_html,
+    ".htm": _validate_html,
+    ".yml": _validate_yaml,
+    ".yaml": _validate_yaml,
+    ".js": lambda t: _brace_balance(t, "javascript"),
+    ".mjs": lambda t: _brace_balance(t, "javascript"),
+    ".ts": lambda t: _brace_balance(t, "typescript"),
+    ".tsx": lambda t: _brace_balance(t, "typescript"),
+    ".jsx": lambda t: _brace_balance(t, "javascript"),
+    ".css": lambda t: _brace_balance(t, "css"),
+    ".scss": lambda t: _brace_balance(t, "css"),
+    ".swift": lambda t: _brace_balance(t, "swift"),
+    ".rs": lambda t: _brace_balance(t, "rust"),
+    ".go": lambda t: _brace_balance(t, "go"),
+    ".c": lambda t: _brace_balance(t, "c"),
+    ".cpp": lambda t: _brace_balance(t, "c++"),
+    ".java": lambda t: _brace_balance(t, "java"),
+}
+
+
+def check_syntax(rel_path, content):
+    """If the file extension has a known validator and the content fails
+    it, return a one-line error string suitable for the tool result.
+    Returns None when the file passes or has no validator. The model uses
+    this to self-correct on the next turn instead of writing a half-broken
+    project."""
+    ext = "." + rel_path.rsplit(".", 1)[-1].lower() if "." in rel_path else ""
+    validator = _SYNTAX_VALIDATORS.get(ext)
+    if not validator:
+        return None
+    try:
+        err = validator(content)
+    except Exception:
+        return None
+    if not err:
+        return None
+    return (
+        "ORCHESTRATOR syntax check: " + err
+        + ". The file was written, but it won't parse. Fix it with "
+        "`edit_file` or `multi_edit` before continuing."
+    )
+
+
+# =============================================================================
 # Workspace-bounded path resolution
 # =============================================================================
 
@@ -1054,7 +1240,10 @@ def tool_write_file(state, args):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(args["content"], encoding="utf-8")
     state.last_diff = (args["path"], old, args["content"])
-    return f"Wrote {len(args['content'])} bytes to {args['path']}"
+    record_journal(state, "write_file", args["path"], old, args["content"])
+    syntax_note = check_syntax(args["path"], args["content"])
+    msg = f"Wrote {len(args['content'])} bytes to {args['path']}"
+    return msg + ("\n\n" + syntax_note if syntax_note else "")
 
 
 def tool_edit_file(state, args):
@@ -1067,7 +1256,10 @@ def tool_edit_file(state, args):
     new_text = text.replace(args["old_string"], args["new_string"], 1)
     path.write_text(new_text, encoding="utf-8")
     state.last_diff = (args["path"], text, new_text)
-    return f"Replaced 1 occurrence in {args['path']}"
+    record_journal(state, "edit_file", args["path"], text, new_text)
+    syntax_note = check_syntax(args["path"], new_text)
+    msg = f"Replaced 1 occurrence in {args['path']}"
+    return msg + ("\n\n" + syntax_note if syntax_note else "")
 
 
 def tool_list_dir(state, args):
@@ -1075,6 +1267,100 @@ def tool_list_dir(state, args):
     if not path.is_dir():
         raise NotADirectoryError(f"not a directory: {args.get('path', '')}")
     return "\n".join(sorted(p.name for p in path.iterdir()))
+
+
+def tool_glob(state, args):
+    """Match a glob pattern against the workspace, capped at 200 hits.
+    Pattern is rooted at `path` (default = workspace root) and supports
+    `**` for recursive matching. Returns one line per match, relative to
+    the workspace."""
+    pattern = args["pattern"]
+    sub = args.get("path", "")
+    if sub:
+        base = resolve_in_workspace(state.workspace, sub)
+    else:
+        base = state.workspace
+    if not base.exists():
+        return f"path not found: {sub or '.'}"
+    hits = []
+    for p in base.rglob(pattern):
+        try:
+            rel = p.relative_to(state.workspace)
+        except ValueError:
+            continue
+        hits.append(str(rel))
+        if len(hits) >= 200:
+            break
+    if not hits:
+        return f"no matches for pattern {pattern!r}"
+    return "\n".join(sorted(hits))
+
+
+def tool_grep(state, args):
+    """grep -rIn pattern path (default workspace). `path` is workspace-
+    relative. Output capped at 200 lines. Binary files are skipped via
+    grep -I."""
+    pattern = args["pattern"]
+    sub = args.get("path", "")
+    if sub:
+        base = resolve_in_workspace(state.workspace, sub)
+    else:
+        base = state.workspace
+    if not base.exists():
+        return f"path not found: {sub or '.'}"
+    cmd = ["/usr/bin/grep", "-rIn", "--", pattern, str(base)]
+    include = args.get("include")
+    if include:
+        cmd[1:1] = [f"--include={include}"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+    except subprocess.TimeoutExpired:
+        return f"grep timed out for pattern {pattern!r}"
+    if proc.returncode not in (0, 1):
+        return f"grep error: {proc.stderr.strip()[:400]}"
+    lines = proc.stdout.splitlines()
+    if not lines:
+        return f"no matches for pattern {pattern!r}"
+    # Strip workspace prefix off each line so the model sees relative paths.
+    prefix = str(state.workspace) + "/"
+    cleaned = [ln.removeprefix(prefix) for ln in lines[:200]]
+    suffix = "" if len(lines) <= 200 else f"\n... ({len(lines) - 200} more matches)"
+    return "\n".join(cleaned) + suffix
+
+
+def tool_multi_edit(state, args):
+    """Apply N substring replacements to a single file in one call. Each
+    edit is {old_string, new_string}, applied in order, replacing the first
+    occurrence per edit. Errors out on the first old_string that's not
+    found, identifying the index so the model can fix just that one."""
+    path = resolve_in_workspace(state.workspace, args["path"])
+    if not path.is_file():
+        raise FileNotFoundError(f"not found: {args['path']}")
+    text = path.read_text(encoding="utf-8")
+    original = text
+    edits = args.get("edits") or []
+    if not isinstance(edits, list) or not edits:
+        raise ValueError("edits must be a non-empty list")
+    applied = 0
+    for i, edit in enumerate(edits):
+        if not isinstance(edit, dict):
+            raise ValueError(f"edit #{i} is not an object")
+        old_s = edit.get("old_string", "")
+        new_s = edit.get("new_string", "")
+        if not old_s:
+            raise ValueError(f"edit #{i} missing old_string")
+        if old_s not in text:
+            raise ValueError(
+                f"edit #{i} old_string not found in file (after {applied} "
+                "successful prior edits)")
+        text = text.replace(old_s, new_s, 1)
+        applied += 1
+    path.write_text(text, encoding="utf-8")
+    state.last_diff = (args["path"], original, text)
+    record_journal(state, "multi_edit", args["path"], original, text)
+    syntax_note = check_syntax(args["path"], text)
+    msg = f"Applied {applied} edits to {args['path']}"
+    return msg + ("\n\n" + syntax_note if syntax_note else "")
 
 
 def tool_run_bash(state, args):
@@ -1157,6 +1443,28 @@ BUILTIN_TOOL_SCHEMAS = [
         "description": "List entries in a directory inside the workspace.",
         "parameters": {"type": "object", "properties": {
             "path": {"type": "string"}}, "required": ["path"]}}},
+    {"type": "function", "function": {"name": "glob",
+        "description": "Match a glob pattern (supports `**`) against the workspace. Returns paths relative to workspace root. Cap 200 hits.",
+        "parameters": {"type": "object", "properties": {
+            "pattern": {"type": "string"},
+            "path": {"type": "string"}},
+            "required": ["pattern"]}}},
+    {"type": "function", "function": {"name": "grep",
+        "description": "grep -rIn for a literal pattern across the workspace. Binary files skipped. Cap 200 lines.",
+        "parameters": {"type": "object", "properties": {
+            "pattern": {"type": "string"},
+            "path": {"type": "string"},
+            "include": {"type": "string", "description": "--include filter, e.g. '*.py'"}},
+            "required": ["pattern"]}}},
+    {"type": "function", "function": {"name": "multi_edit",
+        "description": "Apply N substring replacements to a single file in one call. Each edit is {old_string, new_string}, applied in order.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"},
+            "edits": {"type": "array", "items": {"type": "object", "properties": {
+                "old_string": {"type": "string"},
+                "new_string": {"type": "string"}},
+                "required": ["old_string", "new_string"]}}},
+            "required": ["path", "edits"]}}},
     {"type": "function", "function": {"name": "run_bash",
         "description": "Execute a shell command in the workspace.",
         "parameters": {"type": "object", "properties": {
@@ -1187,9 +1495,20 @@ BUILTIN_TOOL_FUNCS = {
     "write_file": tool_write_file,
     "edit_file": tool_edit_file,
     "list_dir": tool_list_dir,
+    "glob": tool_glob,
+    "grep": tool_grep,
+    "multi_edit": tool_multi_edit,
     "run_bash": tool_run_bash,
     "spawn_agent": tool_spawn_agent,
 }
+
+# Read-only tools that are safe to fan out in parallel (no fs mutation, no
+# shell escape, no permission prompt). Anything not in this set is run
+# sequentially to keep permission prompts ordered and writes deterministic.
+SAFE_PARALLEL_TOOLS = {"read_file", "list_dir", "glob", "grep"}
+
+# Tools that mutate the filesystem and therefore get journaled for /undo.
+FS_MUTATING_TOOLS = {"write_file", "edit_file", "multi_edit"}
 
 
 # =============================================================================
@@ -1246,10 +1565,106 @@ class TaskSink:
 
 _MENTION_RE = re.compile(r"@([^\s\"'`<>]+)")
 
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".heic", ".webp", ".tiff", ".tif", ".bmp"}
+_PDF_EXTS = {".pdf"}
+_AUDIO_EXTS = {".m4a", ".wav", ".mp3", ".flac", ".aac"}
+
+
+def _ocr_image(path):
+    """macOS Vision OCR via osascript. Best-effort; returns "" on failure
+    so the caller can fall back to a binary placeholder."""
+    script = (
+        'use framework "Vision"\n'
+        'use framework "Foundation"\n'
+        'use scripting additions\n'
+        'on run argv\n'
+        '  set imgPath to item 1 of argv\n'
+        '  set theURL to current application\'s NSURL\'s fileURLWithPath:imgPath\n'
+        '  set req to current application\'s VNRecognizeTextRequest\'s alloc()\'s init()\n'
+        '  req\'s setRecognitionLevel:1\n'
+        '  set handler to current application\'s VNImageRequestHandler\'s alloc()\'s '
+        'initWithURL:theURL options:(current application\'s NSDictionary\'s dictionary())\n'
+        '  handler\'s performRequests:{req} |error|:(missing value)\n'
+        '  set out to ""\n'
+        '  repeat with obs in (req\'s results())\n'
+        '    set out to out & ((obs\'s topCandidates:1)\'s firstObject()\'s string() as text) & linefeed\n'
+        '  end repeat\n'
+        '  return out\n'
+        'end run\n'
+    )
+    try:
+        proc = subprocess.run(
+            ["/usr/bin/osascript", "-l", "AppleScript", "-", str(path)],
+            input=script, text=True, capture_output=True, timeout=20,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return ""
+    if proc.returncode != 0:
+        return ""
+    return proc.stdout.strip()
+
+
+def _extract_pdf_text(path):
+    """Try poppler's `pdftotext` first, then `mdimport` macOS fallback.
+    Returns empty string when neither is available."""
+    for cmd in (["/usr/local/bin/pdftotext", "-", "-"],
+                ["/opt/homebrew/bin/pdftotext", "-", "-"],
+                ["/opt/homebrew/bin/pdftotext", str(path), "-"],
+                ["/usr/local/bin/pdftotext", str(path), "-"]):
+        try:
+            proc = subprocess.run(cmd, input=path.read_bytes() if cmd[1] == "-" else None,
+                                  capture_output=True, timeout=30)
+            if proc.returncode == 0:
+                return proc.stdout.decode("utf-8", errors="replace")
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            continue
+    # Last resort: mdimport (Spotlight) on macOS spits out an XML with text.
+    try:
+        proc = subprocess.run(["/usr/bin/mdimport", "-d2", str(path)],
+                              capture_output=True, timeout=20)
+        if proc.returncode == 0:
+            text = proc.stdout.decode("utf-8", errors="replace")
+            # cheap text extract: pull kMDItemTextContent if present.
+            match = re.search(r'kMDItemTextContent = "([^"]*)"', text)
+            if match:
+                return match.group(1)
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        pass
+    return ""
+
+
+def _transcribe_audio(path):
+    """Use a local whisper.cpp build if installed at $HOME/whisper.cpp."""
+    candidates = [
+        Path.home() / "whisper.cpp" / "build" / "bin" / "whisper-cli",
+        Path.home() / "whisper.cpp" / "main",
+    ]
+    for binary in candidates:
+        if not binary.is_file():
+            continue
+        try:
+            proc = subprocess.run(
+                [str(binary), "-f", str(path), "-otxt", "-of",
+                 str(path) + ".transcribe", "-l", "auto"],
+                capture_output=True, timeout=180,
+            )
+            transcript = Path(str(path) + ".transcribe.txt")
+            if transcript.is_file():
+                text = transcript.read_text(encoding="utf-8", errors="replace")
+                transcript.unlink(missing_ok=True)
+                return text
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            continue
+    return ""
+
 
 def expand_mentions(text, workspace):
     """Resolve @path tokens by inlining file contents as a tagged block at
-    the end of the user message. Bad paths are left as plain text."""
+    the end of the user message. Text files are read as UTF-8. Known media
+    types (images, PDFs, audio) are dispatched to format-specific
+    extractors (Vision OCR, pdftotext, whisper.cpp). Bad paths and
+    unsupported binaries become `<file ... type="binary"/>` placeholders so
+    the model knows they exist without crashing on UTF-8 decode."""
     matches = list(_MENTION_RE.finditer(text))
     if not matches:
         return text
@@ -1262,6 +1677,46 @@ def expand_mentions(text, workspace):
             continue
         if not path.is_file():
             continue
+        ext = path.suffix.lower()
+        if ext in _IMAGE_EXTS:
+            ocr = _ocr_image(path)
+            if ocr:
+                blocks.append(
+                    f"<file path=\"{rel}\" type=\"image-ocr\">\n{ocr}\n</file>"
+                )
+            else:
+                blocks.append(
+                    f"<file path=\"{rel}\" type=\"image\" "
+                    f"size=\"{path.stat().st_size}\"/>"
+                )
+            continue
+        if ext in _PDF_EXTS:
+            txt = _extract_pdf_text(path)
+            if txt:
+                if len(txt) > 32000:
+                    txt = txt[:32000] + "\n…(truncated)"
+                blocks.append(
+                    f"<file path=\"{rel}\" type=\"pdf\">\n{txt}\n</file>"
+                )
+            else:
+                blocks.append(
+                    f"<file path=\"{rel}\" type=\"pdf\" "
+                    f"size=\"{path.stat().st_size}\"/>"
+                )
+            continue
+        if ext in _AUDIO_EXTS:
+            transcript = _transcribe_audio(path)
+            if transcript:
+                blocks.append(
+                    f"<file path=\"{rel}\" type=\"audio-transcript\">\n"
+                    f"{transcript}\n</file>"
+                )
+            else:
+                blocks.append(
+                    f"<file path=\"{rel}\" type=\"audio\" "
+                    f"size=\"{path.stat().st_size}\"/>"
+                )
+            continue
         try:
             content = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -1272,6 +1727,393 @@ def expand_mentions(text, workspace):
     if not blocks:
         return text
     return text + "\n\n" + "\n\n".join(blocks)
+
+
+# =============================================================================
+# Orchestrator helpers (4.0.0): undo, memory, preview, branching, routing
+# =============================================================================
+
+def _kick_speculative_prefetch(state, narration, already_prefetched):
+    """Look at the streamed narration so far and prefetch likely tool
+    results into state.prefetch_cache. Only safe, read-only operations are
+    fetched. Called periodically from the streaming loop in run_turn."""
+    if not state.prefetch_enabled:
+        return
+    if len(state.prefetch_cache) > 64:
+        return  # don't thrash the cache
+    candidate = _scan_for_path(narration, state.workspace)
+    if not candidate:
+        return
+    key = ("read_file", _canonical({"path": candidate}))
+    if key in already_prefetched or key in state.prefetch_cache:
+        return
+    already_prefetched.add(key)
+    try:
+        target = resolve_in_workspace(state.workspace, candidate)
+    except ValueError:
+        return
+    if not target.is_file():
+        state.prefetch_misses += 1
+        return
+    import threading
+    def _do():
+        try:
+            text = target.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return
+        if len(text) > 32000:
+            text = text[:32000] + "\n\n...(truncated at 32000 chars)"
+        state.prefetch_cache[key] = {"ts": time.time(), "result": text}
+    threading.Thread(target=_do, daemon=True).start()
+
+
+def restore_last_journal(state):
+    """Pop the last journal entry and restore its prior content to disk.
+    Refuses if the file's been touched externally since (size + mtime
+    sanity check). Returns the entry on success, None otherwise."""
+    if not state.journal:
+        return None
+    entry = state.journal[-1]
+    try:
+        target = resolve_in_workspace(state.workspace, entry["path"])
+    except ValueError:
+        return None
+    if entry["prior"]:
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(entry["prior"], encoding="utf-8")
+        except OSError:
+            return None
+    else:
+        try:
+            target.unlink(missing_ok=True)
+        except OSError:
+            return None
+    state.journal.pop()
+    return entry
+
+
+def restore_all_journal(state):
+    n = 0
+    while state.journal:
+        if not restore_last_journal(state):
+            break
+        n += 1
+    return n
+
+
+def _force_compact(state):
+    """Bypass the threshold check and compact unconditionally. Used by
+    /compact now."""
+    prev_window = state.context_window
+    state.context_window = max(state.approx_tokens * 2, 1)
+    state.approx_tokens = state.context_window  # force ratio to 1.0
+    ran = maybe_compact_transcript(state)
+    state.context_window = prev_window
+    return ran
+
+
+# ---------- Memory / TF-IDF recall -----------------------------------------
+
+_MEMORY_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}|[A-Za-z]{4,}")
+
+
+def _tokenize_memory(text):
+    if not text:
+        return []
+    return [t.lower() for t in _MEMORY_TOKEN_RE.findall(text)][:400]
+
+
+def memory_record(state, tool, args, body):
+    """Append a tool result into the session memory bag. Stored fields:
+    `tool`, `args_preview`, `tokens` (Counter), `body`. Body is bounded to
+    keep memory cheap."""
+    if not body or len(body) < 30:
+        return
+    if tool in ("update_tasks",):  # state-y, not informational
+        return
+    import collections
+    tokens = collections.Counter(_tokenize_memory(body))
+    args_preview = json.dumps(args, separators=(",", ":"))[:120] if args else ""
+    state.memory.append({
+        "tool": tool,
+        "args_preview": args_preview,
+        "tokens": tokens,
+        "body": body[:8000],
+    })
+    if len(state.memory) > 200:
+        state.memory.pop(0)
+
+
+def memory_recall(memory, query, limit=3):
+    if not memory:
+        return []
+    query_tokens = _tokenize_memory(query)
+    if not query_tokens:
+        return []
+    scored = []
+    for entry in memory:
+        score = sum(entry["tokens"].get(tok, 0) for tok in query_tokens)
+        if score:
+            scored.append((score, entry))
+    scored.sort(key=lambda x: -x[0])
+    return [e for _, e in scored[:limit]]
+
+
+# ---------- Auto-test integration ------------------------------------------
+
+def detect_test_runner(workspace):
+    """Inspect the workspace for a known test framework. Returns a dict
+    {name, command, file_globs} or None when no runner is obvious."""
+    ws = Path(workspace)
+    if (ws / "pyproject.toml").is_file() or (ws / "pytest.ini").is_file():
+        return {"name": "pytest", "command": "pytest -x --no-header",
+                "file_globs": ("test_*.py", "*_test.py")}
+    if (ws / "package.json").is_file():
+        try:
+            data = json.loads((ws / "package.json").read_text(encoding="utf-8"))
+            if (data.get("scripts") or {}).get("test"):
+                return {"name": "npm", "command": "npm test --silent",
+                        "file_globs": ("*.test.ts", "*.test.tsx",
+                                       "*.test.js", "*.spec.ts", "*.spec.js")}
+        except (OSError, json.JSONDecodeError):
+            pass
+    if (ws / "Package.swift").is_file():
+        return {"name": "swift", "command": "swift test --quiet",
+                "file_globs": ("*Tests.swift",)}
+    if (ws / "Cargo.toml").is_file():
+        return {"name": "cargo", "command": "cargo test --quiet",
+                "file_globs": ("*.rs",)}
+    if (ws / "go.mod").is_file():
+        return {"name": "go", "command": "go test ./...",
+                "file_globs": ("*_test.go",)}
+    return None
+
+
+def path_matches_test(rel_path, globs):
+    name = Path(rel_path).name
+    for g in globs:
+        if Path(name).match(g):
+            return True
+    if "/tests/" in "/" + rel_path.replace("\\", "/") + "/":
+        return True
+    return False
+
+
+def run_auto_test(state):
+    """Execute the detected test command in the workspace. Returns a
+    short result string suitable for surfacing as a synthetic tool
+    result. Returns None when no runner is detected."""
+    runner = detect_test_runner(state.workspace)
+    if not runner:
+        return None
+    try:
+        proc = subprocess.run(
+            ["/bin/zsh", "-lc", runner["command"]],
+            cwd=str(state.workspace),
+            capture_output=True, text=True, timeout=300,
+            start_new_session=True,
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return f"auto-test ({runner['name']}) failed to launch: {e}"
+    out = proc.stdout + proc.stderr
+    if proc.returncode == 0:
+        return f"auto-test ({runner['name']}) passed."
+    tail = "\n".join(out.splitlines()[-30:])[-4000:]
+    return (f"auto-test ({runner['name']}) FAILED (exit {proc.returncode}). "
+            f"Last lines:\n{tail}")
+
+
+# ---------- Live preview server --------------------------------------------
+
+def preview_start(state):
+    """If the workspace looks servable, spin up an http.server in a thread
+    and stash the handle on state.preview. Returns the URL string or None
+    when nothing servable is present."""
+    if state.preview:
+        return state.preview["url"]
+    ws = state.workspace
+    has_index = (ws / "index.html").is_file()
+    has_html_anywhere = any(ws.glob("*.html"))
+    if not (has_index or has_html_anywhere):
+        return None
+    import http.server, socketserver, threading, socket
+    # Find a free port.
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+
+    handler_factory = lambda *a, **kw: http.server.SimpleHTTPRequestHandler(
+        *a, directory=str(ws), **kw)
+    server = socketserver.ThreadingTCPServer(("127.0.0.1", port),
+                                             handler_factory)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{port}/"
+    state.preview = {"server": server, "thread": thread, "url": url}
+    return url
+
+
+def preview_stop(state):
+    if not state.preview:
+        print(style("  preview not running.", "dim"))
+        return
+    state.preview["server"].shutdown()
+    state.preview["server"].server_close()
+    state.preview = None
+    print(style("  preview stopped.", "ok"))
+
+
+# ---------- Conversation branching -----------------------------------------
+
+def branch_save(state, name):
+    BRANCH_ROOT.mkdir(parents=True, exist_ok=True)
+    path = BRANCH_ROOT / f"{name}.json"
+    payload = {
+        "saved_at": _now_iso(),
+        "name": name,
+        "model": state.model,
+        "workspace": str(state.workspace),
+        "transcript": state.transcript,
+        "tasks": state.sink.current,
+        "journal": state.journal,
+        "approx_tokens": state.approx_tokens,
+    }
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return path
+
+
+def branch_list():
+    if not BRANCH_ROOT.exists():
+        return []
+    return sorted(BRANCH_ROOT.glob("*.json"),
+                  key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def branch_checkout(state, name):
+    path = BRANCH_ROOT / f"{name}.json"
+    if not path.is_file():
+        return False
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    state.transcript = payload.get("transcript", [])
+    state.sink.current = payload.get("tasks", [])
+    state.journal = payload.get("journal", [])
+    state.approx_tokens = payload.get("approx_tokens", 0)
+    return True
+
+
+def branch_merge(state, name):
+    path = BRANCH_ROOT / f"{name}.json"
+    if not path.is_file():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    transcript = payload.get("transcript", [])
+    # Pull the last assistant message from the other branch as a note.
+    last_asst = ""
+    for entry in reversed(transcript):
+        if entry.get("role") == "assistant" and entry.get("content"):
+            last_asst = entry["content"]
+            break
+    note = (f"# Notes merged from branch `{name}`\n\n"
+            f"## Last assistant message on that branch\n{last_asst[:4000]}\n\n"
+            f"## Task list on that branch\n"
+            + json.dumps(payload.get("tasks", []), indent=2)[:4000])
+    state.transcript.append({"role": "system", "content": note})
+    return note
+
+
+# ---------- Multi-model routing --------------------------------------------
+
+def pick_model_for_turn(state, user_message=None):
+    """Decide which model to use for this turn. The model picks are:
+    - planner: when there's a pending task OR the message looks plan-y
+      ("plan", "create tasks", "what should we do")
+    - explainer: when there are no pending tasks and no fs mutations
+      requested ("explain", "why", "summarize")
+    - coder: anything else (the default for code-touching work)
+
+    Routes only when the corresponding override is set; otherwise stays
+    on state.model."""
+    plan_words = ("plan", "create tasks", "what should we", "outline",
+                  "design", "architecture")
+    explain_words = ("explain", "why", "how does", "summarize", "describe")
+    msg = (user_message or "").lower()
+    if any(w in msg for w in plan_words) and state.planner_model:
+        return state.planner_model
+    if any(w in msg for w in explain_words) and state.explainer_model:
+        return state.explainer_model
+    if state.coder_model:
+        return state.coder_model
+    return state.model
+
+
+# ---------- Project knowledge layer ----------------------------------------
+
+def load_project_knowledge(workspace):
+    """Return (knowledge_text, data_dict) where text is markdown suitable
+    for the system prompt, and dict is the underlying record."""
+    path = Path(workspace) / PROJECT_KNOWLEDGE_FILENAME
+    if not path.is_file():
+        return "", None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "", None
+    parts = ["# Project Knowledge (.loom/project.json)"]
+    if data.get("summary"):
+        parts.append("## Last session summary\n" + data["summary"])
+    if data.get("build_commands"):
+        parts.append("## Build commands that worked\n- "
+                     + "\n- ".join(data["build_commands"][-10:]))
+    if data.get("test_commands"):
+        parts.append("## Test commands that worked\n- "
+                     + "\n- ".join(data["test_commands"][-10:]))
+    if data.get("fixes"):
+        rows = [f"- {f['error']} -> {f['fix']}"
+                for f in data["fixes"][-10:]]
+        parts.append("## Errors seen + fixes\n" + "\n".join(rows))
+    return "\n\n".join(parts), data
+
+
+def save_project_knowledge(state):
+    """Merge what we learned this session into .loom/project.json so the
+    next session inherits it. Silent on error (don't block /quit)."""
+    if not state.project_knowledge:
+        state.project_knowledge = {}
+    data = state.project_knowledge
+    # Capture successful bash commands we used during the session.
+    bash_used = []
+    for entry in state.tool_history:
+        if entry.get("name") == "run_bash" and not entry.get("error"):
+            try:
+                args = json.loads(entry.get("args") or "{}")
+                cmd = args.get("command", "")
+                if cmd and len(cmd) < 200:
+                    bash_used.append(cmd)
+            except (ValueError, json.JSONDecodeError):
+                continue
+    if bash_used:
+        data.setdefault("build_commands", [])
+        for cmd in bash_used:
+            if cmd not in data["build_commands"]:
+                data["build_commands"].append(cmd)
+        data["build_commands"] = data["build_commands"][-40:]
+    # Best-effort summary capture from the last assistant message.
+    last_asst = next(
+        (e for e in reversed(state.transcript) if e.get("role") == "assistant"),
+        None,
+    )
+    if last_asst and last_asst.get("content"):
+        data["summary"] = last_asst["content"][:2000]
+    data["last_updated"] = _now_iso()
+    target = state.workspace / PROJECT_KNOWLEDGE_FILENAME
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def install_completer(workspace, slash_commands):
@@ -1998,6 +2840,30 @@ def force_grammar_args(base_url, model, transcript, tool_name, tool_schema,
     return parsed
 
 
+def request_plain_completion(base_url, model, messages, *, timeout=120):
+    """Non-streaming chat completion. Returns the assistant text (content
+    or reasoning_content fallback) or None on error. Used by compaction,
+    project-knowledge enrichment, and any other helper that just wants a
+    one-shot answer without the streaming machinery."""
+    payload = {"model": model, "messages": messages, "stream": False}
+    req = urllib.request.Request(
+        f"{base_url.rstrip('/')}/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError,
+            json.JSONDecodeError):
+        return None
+    try:
+        return _extract_grammar_payload(body["choices"][0]["message"]) or None
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
 def stream_completion(base_url, model, messages, tools):
     payload = {"model": model, "messages": messages, "tools": tools,
                "tool_choice": "auto", "stream": True}
@@ -2188,6 +3054,125 @@ def _scan_for_path(text, workspace):
     return None
 
 
+def maybe_compact_transcript(state):
+    """When token usage crosses COMPACT_TRIGGER_RATIO of the context window,
+    summarize the middle of the transcript into a single system note and
+    shorten the conversation in place. Preserves the original system
+    message and the most recent ~6 turns so the model keeps tight context
+    on the in-flight task.
+
+    Returns True when compaction ran. Falls through silently when the
+    server can't summarize or the transcript is already short."""
+    if not state.auto_compact:
+        return False
+    if not state.context_window or state.context_window <= 0:
+        return False
+    if state.approx_tokens < int(state.context_window * COMPACT_TRIGGER_RATIO):
+        return False
+    if len(state.transcript) < 8:
+        return False
+
+    keep_tail = 6
+    if len(state.transcript) <= 1 + keep_tail:
+        return False
+
+    system_msg = state.transcript[0]
+    tail = state.transcript[-keep_tail:]
+    middle = state.transcript[1:-keep_tail]
+    if not middle:
+        return False
+
+    # Render the middle as a transcript-style block for the summarizer.
+    rendered = []
+    for entry in middle:
+        role = entry.get("role", "?")
+        content = entry.get("content") or ""
+        tcs = entry.get("tool_calls")
+        if tcs:
+            content = (content + "\n" if content else "") + "\n".join(
+                f"[tool_call: {tc.get('function',{}).get('name','?')}"
+                f"({tc.get('function',{}).get('arguments','')})]"
+                for tc in tcs
+            )
+        if not content:
+            continue
+        rendered.append(f"{role}: {content[:2000]}")
+    rendered_block = "\n\n".join(rendered)[:24000]
+
+    summary_messages = [
+        {"role": "system", "content":
+            "You are a context compactor. Summarize the conversation so far "
+            "in <= 250 words. Include: files created/modified with their "
+            "purpose, key commands that worked, decisions made, open "
+            "questions, and what's still pending. Be terse. Bullet points "
+            "are fine. NO preamble, NO 'here is the summary' framing - "
+            "start with the first bullet directly."},
+        {"role": "user", "content":
+            "Compact this conversation:\n\n" + rendered_block},
+    ]
+    summary = request_plain_completion(
+        state.base_url, state.model, summary_messages, timeout=180)
+    if not summary:
+        return False
+
+    summary_entry = {
+        "role": "system",
+        "content": (
+            f"# Compacted context (turn #{state.compact_count + 1})\n\n"
+            + summary.strip()
+        ),
+    }
+    state.transcript = [system_msg, summary_entry] + tail
+    state.compact_count += 1
+    # Re-estimate tokens: cheap walk of the new transcript.
+    state.approx_tokens = sum(
+        max(1, len(e.get("content") or "") // 4) for e in state.transcript
+    )
+    return True
+
+
+def verify_task_completions(tasks, workspace):
+    """Walk the task list looking for `completed` entries whose subject
+    names a file. If the named file doesn't exist on disk (or is zero
+    bytes), flip the task back to `in_progress` and record the miss.
+
+    Returns a list of human-readable verification failures, suitable for
+    appending to the orchestrator's tool-result. Mutates `tasks` in place.
+
+    Skipped entirely for subjects with no detectable path - we can't
+    falsify "research X" or "design Y" claims, so we trust them."""
+    failures = []
+    for t in tasks:
+        if not isinstance(t, dict):
+            continue
+        if t.get("status") != "completed":
+            continue
+        subject = t.get("subject") or ""
+        candidate = _scan_for_path(subject, workspace)
+        if not candidate:
+            continue
+        try:
+            resolved = resolve_in_workspace(workspace, candidate)
+        except ValueError:
+            continue
+        if not resolved.is_file():
+            t["status"] = "in_progress"
+            failures.append(
+                f"`{subject}` claimed completed, but `{candidate}` does not exist"
+            )
+            continue
+        try:
+            size = resolved.stat().st_size
+        except OSError:
+            continue
+        if size == 0:
+            t["status"] = "in_progress"
+            failures.append(
+                f"`{subject}` claimed completed, but `{candidate}` is empty (0 bytes)"
+            )
+    return failures
+
+
 def _scan_for_command(text):
     if not text:
         return None
@@ -2376,11 +3361,18 @@ terminal, backed by a local LM Studio model. You have these tools:
 - read_file(path) - read a UTF-8 file in the current workspace
 - write_file(path, content) - create or overwrite a file
 - edit_file(path, old_string, new_string) - surgical text edit
+- multi_edit(path, edits) - apply N substring replacements to one file
+  in a single call. Each edit is {old_string, new_string}. Prefer this
+  to N separate edit_file calls.
 - list_dir(path) - list directory entries
+- glob(pattern, path?) - find files matching a glob (supports **)
+- grep(pattern, path?, include?) - grep -rIn across the workspace
 - run_bash(command, timeout_seconds?) - shell command, when enabled
 - update_tasks(tasks) - replace the visible task list. Each task has
   subject, activeForm (present-continuous), and status (pending,
-  in_progress, completed, cancelled).
+  in_progress, completed, cancelled). Subjects that name a file are
+  verified on disk - if the file isn't there, the orchestrator flips
+  the task back to in_progress.
 - spawn_agent(prompt, role?, system?) - delegate a focused subtask
 - MCP tools when a `--mcp` server is configured. They appear with an
   `mcp__` name prefix.
@@ -2443,6 +3435,41 @@ class AgentState:
         self.max_continuations = 12
         self.last_turn_had_tool_calls = False
         self.auto_continue = True
+        # Auto-compaction. Triggered when approx_tokens / context_window
+        # exceeds COMPACT_TRIGGER_RATIO. Counter visible in the footer.
+        self.auto_compact = True
+        self.compact_count = 0
+        # Auto-test integration. When True, after every successful
+        # write_file/edit_file/multi_edit to a path under tests/ or matching
+        # a test-naming convention, run the detected test command and feed
+        # the failure tail back as a synthetic tool result.
+        self.auto_test = False
+        # Speculative tool prefetch. Off by default; tracks the prefetch
+        # cache (tool_name, canonical_args_json) -> (timestamp, result).
+        self.prefetch_enabled = True
+        self.prefetch_cache = {}
+        self.prefetch_hits = 0
+        self.prefetch_misses = 0
+        # Filesystem mutation journal: each entry is
+        # {action, path, prior, new, timestamp}. /undo replays the prior
+        # content. Persisted to ~/.loom/journal/<session>.jsonl on every
+        # mutation so a crash can be recovered.
+        self.journal = []
+        # Tool-result memory: cheap TF-IDF over the bodies of past
+        # tool calls so the model can recall earlier reads without
+        # re-fetching the file.
+        self.memory = []
+        # Per-workspace persistent knowledge file (.loom/project.json).
+        # Loaded on session start, written back on /quit.
+        self.project_knowledge = None
+        self.project_knowledge_text = ""
+        # Live preview server handle (HTTPServer + thread).
+        self.preview = None
+        # Multi-model routing (planner/coder/explainer override the
+        # default `model`). Empty string = use default.
+        self.planner_model = ""
+        self.coder_model = ""
+        self.explainer_model = ""
 
     def system_message(self):
         body = self.system_override or self.system_prompt
@@ -2451,6 +3478,8 @@ class AgentState:
             extras.append(self.context_text)
         if self.workspace_tree:
             extras.append(self.workspace_tree)
+        if self.project_knowledge_text:
+            extras.append(self.project_knowledge_text)
         if extras:
             return body + "\n\n" + "\n\n".join(extras)
         return body
@@ -2480,6 +3509,12 @@ class AgentState:
 def run_turn(state, user_message, *, json_emit=None):
     """Drive the streaming agent loop for one user message. Returns the
     final assistant text. Raises EscInterrupt if the user stops mid-turn."""
+    if maybe_compact_transcript(state) and not json_emit:
+        print(style(
+            f"  ▸ context compacted (#{state.compact_count}); "
+            f"transcript trimmed.", "tip"))
+    elif json_emit and state.compact_count and len(state.transcript) <= 8:
+        json_emit("compacted", count=state.compact_count)
     user_payload = expand_mentions(user_message, state.workspace)
     state.transcript.append({"role": "user", "content": user_payload})
     state.absorb_text(user_payload)
@@ -2502,8 +3537,20 @@ def run_turn(state, user_message, *, json_emit=None):
         if json_emit:
             json_emit("turn_started", index=turn_index)
 
+        # Multi-model routing: only the first turn uses the routed model;
+        # subsequent tool-call rounds stay on the same model so partial
+        # tool-call state doesn't get confused between models.
+        active_model = (
+            pick_model_for_turn(state, user_message)
+            if turn_index == 1 else state.model
+        )
+
+        # Speculative prefetch state for this turn.
+        narration_so_far = ""
+        prefetched_keys = set()
+
         with EscWatcher() as esc:
-            stream = stream_completion(state.base_url, state.model,
+            stream = stream_completion(state.base_url, active_model,
                                        state.transcript, _all_tool_schemas(state))
             try:
                 for kind, data in stream:
@@ -2517,6 +3564,15 @@ def run_turn(state, user_message, *, json_emit=None):
                         first_chunk_seen = True
                         had_content = True
                         streamer.feed(data)
+                        narration_so_far += data
+                        # Best-effort speculative prefetch: scan the live
+                        # narration for file mentions; when a new file is
+                        # named, fire off a read_file in the background and
+                        # stash the result.
+                        if (state.prefetch_enabled
+                                and len(narration_so_far) % 64 == 0):
+                            _kick_speculative_prefetch(
+                                state, narration_so_far, prefetched_keys)
                     elif kind == "tool_call":
                         if spinner and not first_chunk_seen:
                             spinner.stop()
@@ -2537,6 +3593,10 @@ def run_turn(state, user_message, *, json_emit=None):
                 stream.close()
                 if spinner:
                     spinner.stop()
+        # Final scan in case the stream ended without crossing the periodic
+        # mod-64 boundary.
+        if state.prefetch_enabled:
+            _kick_speculative_prefetch(state, narration_so_far, prefetched_keys)
 
         assistant_text = streamer.finish()
         state.absorb_text(assistant_text)
@@ -2571,17 +3631,69 @@ def run_turn(state, user_message, *, json_emit=None):
 
         if not json_emit:
             print()
+        # Partition tool calls into safe (parallel) vs dangerous (serial).
+        # Safe set is whitelist-only; everything else stays serial so
+        # permission prompts don't stack and writes happen in order.
+        parsed_calls = []
         for call in finished_tool_calls:
             name = call["name"]
             try:
                 args = json.loads(call["arguments"] or "{}")
             except json.JSONDecodeError:
                 args = {}
-            if not json_emit:
+            parsed_calls.append((call, name, args))
+
+        # Render call lines up-front in original order so the user sees
+        # what's about to run even though execution interleaves.
+        if not json_emit:
+            for _, name, args in parsed_calls:
                 _render_tool_call_line(name, args)
-            if json_emit:
+
+        if json_emit:
+            for _, name, args in parsed_calls:
                 json_emit("tool_call", name=name, arguments=args)
-            result_text = _dispatch_tool(state, name, args, narration=assistant_text)
+
+        results_in_order = [None] * len(parsed_calls)
+        # Run safe calls in parallel.
+        safe_indices = [i for i, (_, n, _) in enumerate(parsed_calls)
+                        if n in SAFE_PARALLEL_TOOLS]
+        if len(safe_indices) > 1:
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=min(4, len(safe_indices))) as pool:
+                future_to_idx = {
+                    pool.submit(_dispatch_tool, state, parsed_calls[i][1],
+                                parsed_calls[i][2], narration=assistant_text):
+                    i for i in safe_indices
+                }
+                for fut in concurrent.futures.as_completed(future_to_idx):
+                    i = future_to_idx[fut]
+                    try:
+                        results_in_order[i] = fut.result()
+                    except Exception as e:
+                        results_in_order[i] = f"Error: {e}"
+        else:
+            for i in safe_indices:
+                _, n, a = parsed_calls[i]
+                try:
+                    results_in_order[i] = _dispatch_tool(
+                        state, n, a, narration=assistant_text)
+                except Exception as e:
+                    results_in_order[i] = f"Error: {e}"
+
+        # Dangerous calls run sequentially, in original order.
+        for i, (_, n, a) in enumerate(parsed_calls):
+            if results_in_order[i] is not None:
+                continue  # already done in safe batch
+            try:
+                results_in_order[i] = _dispatch_tool(
+                    state, n, a, narration=assistant_text)
+            except Exception as e:
+                results_in_order[i] = f"Error: {e}"
+
+        # Commit results to transcript + UI in original order.
+        for (call, name, args), result_text in zip(parsed_calls,
+                                                   results_in_order):
             state.absorb_text(result_text)
             if json_emit:
                 json_emit("tool_result", name=name, text=result_text)
@@ -2591,10 +3703,36 @@ def run_turn(state, user_message, *, json_emit=None):
             if not json_emit:
                 if name == "update_tasks":
                     draw_task_list(state.sink.current)
-                elif name in ("write_file", "edit_file") and state.last_diff:
+                elif name in FS_MUTATING_TOOLS and state.last_diff:
                     path, old, new = state.last_diff
                     draw_diff(path, old, new)
                     state.last_diff = None
+
+        # Auto-test hook: if anything mutated a known test-related file,
+        # run the detected framework once at the end of the turn and
+        # surface the failure tail as a synthetic tool result.
+        if state.auto_test:
+            mutated_test_files = [
+                args.get("path", "")
+                for (_, name, args) in parsed_calls
+                if name in FS_MUTATING_TOOLS
+            ]
+            if mutated_test_files:
+                runner = detect_test_runner(state.workspace)
+                if runner and any(path_matches_test(p, runner["file_globs"])
+                                  for p in mutated_test_files):
+                    note = run_auto_test(state)
+                    if note:
+                        if not json_emit:
+                            head = style(GLYPH_TOOL, "tool")
+                            print(f"  {head} {style('auto_test', 'key')} "
+                                  f"{style(runner['name'], 'dim')}")
+                            print(style(textwrap_short(note, 200), "dim"))
+                        state.transcript.append({
+                            "role": "system",
+                            "content": "ORCHESTRATOR auto-test: " + note,
+                        })
+
         if not json_emit:
             print()
 
@@ -2740,10 +3878,36 @@ def _dispatch_tool(state, name, args, *, narration=""):
                 repair_note = (repair_note + "  " + grammar_note
                                if repair_note else grammar_note)
 
+    # Speculative cache lookup (only safe, read-only tools land here).
+    cache_key = (name, _canonical(args_in))
+    if name in SAFE_PARALLEL_TOOLS and state.prefetch_enabled:
+        hit = state.prefetch_cache.get(cache_key)
+        if hit and time.time() - hit["ts"] < 30:
+            state.prefetch_hits += 1
+            _render_tool_result_summary(name,
+                                        "[prefetch hit] " + str(hit["result"]),
+                                        True)
+            state.tool_history.append({
+                "name": name, "args": canonical_in, "error": False,
+            })
+            memory_record(state, name, args_in, str(hit["result"]))
+            return hit["result"]
+
     try:
         if name == "update_tasks":
-            count = state.sink.replace(args_in.get("tasks", []))
+            raw_tasks = args_in.get("tasks", []) or []
+            failures = verify_task_completions(raw_tasks, state.workspace)
+            count = state.sink.replace(raw_tasks)
             result = f"Task list updated ({count} task{'' if count == 1 else 's'})."
+            if failures:
+                lines = "\n  - ".join(failures)
+                result += (
+                    "\n\nORCHESTRATOR verification: the following tasks were "
+                    "flipped back to `in_progress` because their claimed "
+                    "artifact is missing on disk:\n  - " + lines
+                    + "\n\nFinish them now using `write_file` with the real "
+                    "content. Do NOT just call update_tasks again."
+                )
             state.tool_history.append({
                 "name": name, "args": _canonical(args_in), "error": False,
             })
@@ -2775,6 +3939,16 @@ def _dispatch_tool(state, name, args, *, narration=""):
         state.tool_history.append({
             "name": name, "args": _canonical(args_in), "error": False,
         })
+        memory_record(state, name, args_in, str(result))
+        if name in SAFE_PARALLEL_TOOLS and state.prefetch_enabled:
+            state.prefetch_cache[cache_key] = {"ts": time.time(),
+                                               "result": result}
+            if len(state.prefetch_cache) > 128:
+                # Trim oldest 32 entries.
+                oldest = sorted(state.prefetch_cache.items(),
+                                key=lambda kv: kv[1]["ts"])[:32]
+                for k, _ in oldest:
+                    state.prefetch_cache.pop(k, None)
         if repair_note:
             return result + "\n\n[orchestrator: " + repair_note + "]"
         return result
@@ -2829,6 +4003,19 @@ class SlashRouter:
             "/theme":   self.cmd_theme,
             "/wrap":    self.cmd_wrap,
             "/auto":    self.cmd_auto,
+            "/compact": self.cmd_compact,
+            "/undo":    self.cmd_undo,
+            "/journal": self.cmd_journal,
+            "/diff":    self.cmd_diff,
+            "/test":    self.cmd_test,
+            "/recall":  self.cmd_recall,
+            "/preview": self.cmd_preview,
+            "/branch":  self.cmd_branch,
+            "/branches": self.cmd_branches,
+            "/checkout": self.cmd_checkout,
+            "/merge":   self.cmd_merge,
+            "/router":  self.cmd_router,
+            "/prefetch": self.cmd_prefetch,
         }
 
     def names(self):
@@ -2902,6 +4089,9 @@ class SlashRouter:
         self.state.workspace = path
         self.state.context_text, self.state.context_files = load_project_context(path)
         self.state.refresh_workspace_tree()
+        self.state.project_knowledge_text, self.state.project_knowledge = (
+            load_project_knowledge(path)
+        )
         self.state.reset_transcript()
         print(style(f"  workspace -> {path}", "ok"))
         if self.state.context_files:
@@ -3046,6 +4236,191 @@ class SlashRouter:
                     f"{self.state.max_continuations} per user turn)", "ok"))
         return "continue"
 
+    def cmd_compact(self, rest):
+        if rest == "now":
+            ok = maybe_compact_transcript(self.state) or _force_compact(self.state)
+            print(style("  compacted." if ok else "  compaction did not run.",
+                        "ok" if ok else "warning"))
+            return "continue"
+        if rest in ("on", "off"):
+            self.state.auto_compact = rest == "on"
+        else:
+            self.state.auto_compact = not self.state.auto_compact
+        msg = "on" if self.state.auto_compact else "off"
+        print(style(f"  auto-compact {msg}  (count: "
+                    f"{self.state.compact_count})", "ok"))
+        return "continue"
+
+    def cmd_undo(self, rest):
+        if not self.state.journal:
+            print(style("  journal empty.", "dim"))
+            return "continue"
+        if rest == "all":
+            n = restore_all_journal(self.state)
+            print(style(f"  restored {n} file{'' if n == 1 else 's'}.", "ok"))
+            return "continue"
+        entry = restore_last_journal(self.state)
+        if entry:
+            print(style(f"  undid {entry['action']} on {entry['path']}", "ok"))
+        else:
+            print(style("  nothing to undo.", "dim"))
+        return "continue"
+
+    def cmd_journal(self, _):
+        if not self.state.journal:
+            print(style("  no fs mutations this session.", "dim"))
+            return "continue"
+        for i, entry in enumerate(self.state.journal):
+            prior_lines = entry["prior"].count("\n")
+            new_lines = entry["new"].count("\n")
+            delta = new_lines - prior_lines
+            sign = "+" if delta >= 0 else ""
+            print(f"   {style(str(i+1).rjust(3), 'dim')}  "
+                  f"{style(entry['action'].ljust(11), 'key')}"
+                  f"{style(entry['path'], 'value')}  "
+                  f"{style(f'({sign}{delta} lines)', 'dim')}")
+        return "continue"
+
+    def cmd_diff(self, rest):
+        if rest in ("", "session"):
+            for entry in self.state.journal:
+                draw_diff(entry["path"], entry["prior"], entry["new"])
+            return "continue"
+        print(style("  usage: /diff [session]", "dim"))
+        return "continue"
+
+    def cmd_test(self, rest):
+        if rest in ("on", "yes", "true"):
+            self.state.auto_test = True
+        elif rest in ("off", "no", "false"):
+            self.state.auto_test = False
+        else:
+            self.state.auto_test = not self.state.auto_test
+        msg = "on" if self.state.auto_test else "off"
+        runner = detect_test_runner(self.state.workspace)
+        runner_s = runner["name"] if runner else "no runner detected"
+        print(style(f"  auto-test {msg}  ({runner_s})", "ok"))
+        return "continue"
+
+    def cmd_recall(self, rest):
+        if not rest:
+            print(style("  usage: /recall <query>", "dim"))
+            return "continue"
+        hits = memory_recall(self.state.memory, rest, limit=3)
+        if not hits:
+            print(style("  no memory hits.", "dim"))
+            return "continue"
+        for h in hits:
+            head = f"{h['tool']} {h.get('args_preview','')}"
+            print(style("  " + head, "key"))
+            snippet = h["body"].strip()[:400]
+            print(style("    " + snippet.replace("\n", "\n    "), "dim"))
+        return "continue"
+
+    def cmd_preview(self, rest):
+        if rest in ("off", "stop"):
+            preview_stop(self.state)
+            return "continue"
+        if rest in ("", "on", "start"):
+            url = preview_start(self.state)
+            if url:
+                print(style(f"  preview -> {url}", "ok"))
+            else:
+                print(style("  preview: nothing to serve in workspace.", "dim"))
+            return "continue"
+        if rest == "url":
+            if self.state.preview:
+                print(style(f"  {self.state.preview['url']}", "ok"))
+            else:
+                print(style("  preview not running.", "dim"))
+            return "continue"
+        print(style("  usage: /preview [on|off|url]", "dim"))
+        return "continue"
+
+    def cmd_branch(self, rest):
+        if not rest:
+            print(style("  usage: /branch <name>", "dim"))
+            return "continue"
+        path = branch_save(self.state, rest)
+        print(style(f"  branched -> {path}", "ok"))
+        return "continue"
+
+    def cmd_branches(self, _):
+        items = branch_list()
+        if not items:
+            print(style("  no branches.", "dim"))
+            return "continue"
+        for p in items:
+            try:
+                meta = json.loads(p.read_text(encoding="utf-8"))
+                tokens = meta.get("approx_tokens", "?")
+                tasks = len(meta.get("tasks", []))
+                print(f"   {style(p.stem, 'key')}  "
+                      f"{style(f'{tokens} tok, {tasks} tasks', 'dim')}")
+            except Exception:
+                print(f"   {style(p.stem, 'key')}")
+        return "continue"
+
+    def cmd_checkout(self, rest):
+        if not rest:
+            print(style("  usage: /checkout <name>", "dim"))
+            return "continue"
+        ok = branch_checkout(self.state, rest)
+        if ok:
+            print(style(f"  checked out {rest}", "ok"))
+        else:
+            print(style(f"  no such branch: {rest}", "err"))
+        return "continue"
+
+    def cmd_merge(self, rest):
+        if not rest:
+            print(style("  usage: /merge <branch>", "dim"))
+            return "continue"
+        note = branch_merge(self.state, rest)
+        if note:
+            print(style(f"  merged {rest} as context note.", "ok"))
+        else:
+            print(style(f"  no such branch: {rest}", "err"))
+        return "continue"
+
+    def cmd_router(self, rest):
+        parts = rest.split()
+        if not parts:
+            print(style(
+                f"  router  planner={self.state.planner_model or '-'}  "
+                f"coder={self.state.coder_model or '-'}  "
+                f"explainer={self.state.explainer_model or '-'}", "key"))
+            return "continue"
+        if len(parts) != 2 or parts[0] not in ("planner", "coder",
+                                               "explainer", "off"):
+            print(style("  usage: /router <planner|coder|explainer> <model>",
+                        "dim"))
+            print(style("         /router off (disable all overrides)",
+                        "dim"))
+            return "continue"
+        if parts[0] == "off":
+            self.state.planner_model = ""
+            self.state.coder_model = ""
+            self.state.explainer_model = ""
+            print(style("  router off.", "ok"))
+            return "continue"
+        setattr(self.state, f"{parts[0]}_model", parts[1])
+        print(style(f"  router.{parts[0]} = {parts[1]}", "ok"))
+        return "continue"
+
+    def cmd_prefetch(self, rest):
+        if rest in ("on", "yes", "true"):
+            self.state.prefetch_enabled = True
+        elif rest in ("off", "no", "false"):
+            self.state.prefetch_enabled = False
+        else:
+            self.state.prefetch_enabled = not self.state.prefetch_enabled
+        msg = "on" if self.state.prefetch_enabled else "off"
+        print(style(f"  speculative prefetch {msg}  "
+                    f"(hits: {self.state.prefetch_hits}, "
+                    f"misses: {self.state.prefetch_misses})", "ok"))
+        return "continue"
+
 
 def textwrap_short(s, n):
     s = s.replace("\n", " ")
@@ -3130,6 +4505,21 @@ def main():
     parser.add_argument("--json", action="store_true",
         help="Emit one JSON event per line instead of styled output. "
              "Implies --no-banner.")
+    parser.add_argument("--planner-model", dest="planner_model",
+        default=os.environ.get("LMSTUDIO_PLANNER_MODEL", ""),
+        help="Override model for plan-y turns (small/fast).")
+    parser.add_argument("--coder-model", dest="coder_model",
+        default=os.environ.get("LMSTUDIO_CODER_MODEL", ""),
+        help="Override model for code-touching turns.")
+    parser.add_argument("--explainer-model", dest="explainer_model",
+        default=os.environ.get("LMSTUDIO_EXPLAINER_MODEL", ""),
+        help="Override model for explanation/summarization turns.")
+    parser.add_argument("--no-prefetch", action="store_true",
+        help="Disable speculative tool prefetch.")
+    parser.add_argument("--auto-test", action="store_true",
+        default=os.environ.get("LMSTUDIO_AUTO_TEST", "0") == "1",
+        help="After every fs mutation to a test file, run the detected "
+             "framework and feed failures back to the model.")
     args = parser.parse_args()
 
     set_theme(args.theme)
@@ -3194,6 +4584,17 @@ def main():
     if not args.no_context:
         state.context_text, state.context_files = load_project_context(workspace)
         state.refresh_workspace_tree()
+        state.project_knowledge_text, state.project_knowledge = (
+            load_project_knowledge(workspace)
+        )
+    # Multi-model routing config from CLI flags.
+    state.planner_model = args.planner_model or ""
+    state.coder_model = args.coder_model or ""
+    state.explainer_model = args.explainer_model or ""
+    if args.no_prefetch:
+        state.prefetch_enabled = False
+    if args.auto_test:
+        state.auto_test = True
     state.reset_transcript()
 
     if args.resume:
@@ -3222,6 +4623,7 @@ def main():
                     state.theme_name, state.context_files,
                     tree_count=state.workspace_tree_count,
                     grammar_supported=state.grammar_supported)
+        draw_banner_extra(state)
         draw_tips()
 
     _load_history()
@@ -3312,6 +4714,17 @@ def _shutdown(state, json_emit):
     _save_history()
     for client in state.mcp_clients:
         client.stop()
+    try:
+        save_project_knowledge(state)
+    except Exception:
+        pass
+    if state.preview:
+        try:
+            state.preview["server"].shutdown()
+            state.preview["server"].server_close()
+        except Exception:
+            pass
+        state.preview = None
     if json_emit:
         json_emit("session_ended")
 
