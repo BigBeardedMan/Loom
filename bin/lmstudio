@@ -385,99 +385,170 @@ def close_prompt_box(user_input):
 # =============================================================================
 
 class BoxedLineEditor:
-    """Reads one line of input inside a pre-drawn closed box. Implements
-    just enough line-editing to feel like readline: printable chars,
-    backspace, ←/→ cursor, ↑/↓ history walk, Ctrl-A / Ctrl-E, Ctrl-K,
-    Ctrl-U, Ctrl-W, Ctrl-C, Ctrl-D, plus Esc (which raises EscInterrupt).
+    """Reads one line of input inside a closed box that wraps to multiple
+    rows as the user types. Implements enough readline-style chords to
+    feel native: printable chars, backspace, ←/→ cursor, ↑/↓ history,
+    Home/End, Ctrl-A/E, Ctrl-K, Ctrl-U, Ctrl-W, Ctrl-L, Ctrl-D, Ctrl-C.
 
-    Why not readline? Readline's redisplay clears the line on history
-    recall, which would wipe out the right border of our box. Doing the
-    editing ourselves keeps the box visually closed at all times -
-    every keystroke just rewrites the input region between the left
-    border + prompt and the right border."""
+    Esc clears the current edit in place (matches Claude Code) rather
+    than exiting - the previous behavior raised through the REPL loop,
+    which redrew a new empty box and left a trail of them on screen.
+
+    The box grows vertically: text wraps at word boundaries when possible
+    (falls back to hard wrap for long unbroken tokens), and continuation
+    rows are indented under the `❯` prefix so the input reads as one
+    logical line. Each redraw clears the previous box height with
+    `ESC[J` and rewrites from the top so a shrink (after delete/kill)
+    can't leave stale rows behind."""
 
     HISTORY_FILE = HISTORY_FILE
     HISTORY_LIMIT = 1000
 
+    LEAD_VISIBLE = 4   # "│ ❯ " on first row
+    CONT_VISIBLE = 4   # "│   " on continuation rows (aligned under text)
+
     def __init__(self, history):
-        # history: list of past entries, oldest first. Current edit goes
-        # in the trailing slot so we can walk back and forth like a shell.
         self.history = list(history)
         self.history.append("")
         self.hist_idx = len(self.history) - 1
         self.line = ""
         self.col = 0
-        self.lead_visible = 4  # "│ ❯ " = 4 visible columns
+        self._drawn_height = 0   # screen rows the box currently occupies
+        self._frozen_width = box_width()  # locked for the editor's lifetime
+
+    @property
+    def _inner_width(self):
+        return max(8, self._frozen_width - 5)
 
     def read(self):
-        """Pre-draw the closed box, position the cursor inside, then read
-        keys until Enter / Ctrl-D / Ctrl-C / Esc. Returns the line. Raises
-        EOFError on Ctrl-D at an empty prompt, KeyboardInterrupt on Ctrl-C,
-        EscInterrupt on Esc."""
         if not sys.stdin.isatty() or not sys.stdout.isatty():
             return input(style("│ ", "border")
                          + style(GLYPH_PROMPT + " ", "prompt"))
-
-        self._draw_box()
+        self._frozen_width = box_width()  # snapshot at session start
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
         try:
             new = list(old)
-            # Disable canonical + echo so we see one key at a time. Keep
-            # ISIG cleared so Ctrl-C raises here as a byte, not a signal.
             new[3] = new[3] & ~(termios.ICANON | termios.ECHO | termios.ISIG)
             termios.tcsetattr(fd, termios.TCSANOW, new)
+            self._render()
             return self._loop()
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
+    # --- wrap + cursor mapping -----------------------------------------
+
+    def _wrap(self):
+        """Wrap self.line into a list of visual rows, preferring word
+        boundaries but falling back to hard wrap when a word is wider
+        than the inner area. Returns (rows, row_start_offsets) where
+        row_start_offsets[i] is the linear index in self.line where row
+        i begins."""
+        width = self._inner_width
+        text = self.line
+        if not text:
+            return [""], [0]
+        rows = []
+        offsets = []
+        i = 0
+        while i < len(text):
+            offsets.append(i)
+            end = min(i + width, len(text))
+            if end >= len(text):
+                rows.append(text[i:end])
+                break
+            chunk = text[i:end]
+            # Find a break point: last space before end, but not at i itself.
+            space = chunk.rfind(" ")
+            if space > 0:
+                rows.append(text[i:i + space])
+                # Consume the breaking space so it doesn't appear on the
+                # next row's start.
+                i = i + space + 1
+            else:
+                rows.append(chunk)
+                i = end
+        if not rows:
+            rows = [""]
+            offsets = [0]
+        return rows, offsets
+
+    def _cursor_rc(self, rows, offsets):
+        """Map self.col (linear) to (row_index, col_within_row). When the
+        cursor sits at the very end of a row that ends with a consumed
+        space, it logically belongs on the start of the next row."""
+        if not rows:
+            return (0, 0)
+        for r in range(len(rows) - 1, -1, -1):
+            start = offsets[r]
+            if self.col >= start:
+                col_in_row = self.col - start
+                row_len = len(rows[r])
+                # If we're sitting on a consumed space at the boundary, the
+                # cursor visually lives at the start of the next row.
+                if col_in_row > row_len and r + 1 < len(rows):
+                    return (r + 1, 0)
+                return (r, min(col_in_row, row_len))
+        return (0, 0)
+
     # --- drawing --------------------------------------------------------
 
-    def _draw_box(self):
-        width = box_width()
+    def _render(self):
+        """Full redraw. Clears the previously drawn box (if any), then
+        renders top + content rows + bottom + positions the cursor."""
+        width = self._frozen_width
+        inner = self._inner_width
         bar = "─" * (width - 2)
         top = style("╭" + bar + "╮", "border")
         bot = style("╰" + bar + "╯", "border")
         right = style("│", "border")
-        lead = style("│ ", "border") + style(GLYPH_PROMPT + " ", "prompt")
-        inner = width - 5  # 4-char prefix + 1-char right border
-        sys.stdout.write(top + "\n")
-        sys.stdout.write(lead + " " * inner + right + "\n")
-        sys.stdout.write(bot + "\n")
-        # Park cursor on the input line (up 2 from current position),
-        # past the prefix.
-        sys.stdout.write("\033[2A\r" + "\033[" + str(self.lead_visible) + "C")
-        sys.stdout.flush()
 
-    def _redraw_input(self):
-        """Rewrite the input region (between prefix and right border) from
-        the current self.line, then reposition the cursor at self.col."""
-        width = box_width()
-        inner = width - 5
-        line = self.line
-        if len(line) > inner:
-            # Visually truncate if the user has typed past the inner area.
-            # We don't actually drop characters from self.line - just cap
-            # the display so the right border survives.
-            display = line[:inner]
-        else:
-            display = line + " " * (inner - len(line))
-        right = style("│", "border")
-        # Save state, go to col 0 of the line, advance past prefix, write
-        # the line region + right border, then move cursor to user's col.
+        # Wipe the previously drawn box.
+        if self._drawn_height > 0:
+            sys.stdout.write("\r")
+            sys.stdout.write("\033[" + str(self._drawn_height) + "A")
+            sys.stdout.write("\033[J")
+
+        rows, offsets = self._wrap()
+        height = len(rows) + 2  # top + N rows + bottom
+
+        sys.stdout.write(top + "\n")
+        for i, row_text in enumerate(rows):
+            if i == 0:
+                lead = (style("│ ", "border")
+                        + style(GLYPH_PROMPT + " ", "prompt"))
+            else:
+                lead = style("│   ", "border")
+            pad = max(0, inner - len(row_text))
+            sys.stdout.write(lead + row_text + " " * pad + right + "\n")
+        sys.stdout.write(bot + "\n")
+
+        self._drawn_height = height
+
+        # Position the cursor inside the box.
+        row, col = self._cursor_rc(rows, offsets)
+        # We're now on the line right after the bottom border. Move up to
+        # the desired input row.
+        up = height - 1 - row
+        if up > 0:
+            sys.stdout.write("\033[" + str(up) + "A")
         sys.stdout.write("\r")
-        sys.stdout.write("\033[" + str(self.lead_visible) + "C")
-        sys.stdout.write(display + right)
-        sys.stdout.write("\r")
-        col_visible = self.lead_visible + min(self.col, inner)
-        sys.stdout.write("\033[" + str(col_visible) + "C")
+        forward = self.LEAD_VISIBLE + col
+        if forward > 0:
+            sys.stdout.write("\033[" + str(forward) + "C")
         sys.stdout.flush()
 
     def _leave_box(self):
-        """Move the cursor below the bottom border so further output starts
-        on a fresh line."""
-        sys.stdout.write("\033[2B\r\n")
+        """Move cursor to a clean line below the bottom border."""
+        rows, _ = self._wrap()
+        height = len(rows) + 2
+        row, _ = self._cursor_rc(rows, [0] * len(rows))
+        down = height - (row + 1)
+        if down > 0:
+            sys.stdout.write("\033[" + str(down) + "B")
+        sys.stdout.write("\r\n")
         sys.stdout.flush()
+        self._drawn_height = 0
 
     # --- main loop ------------------------------------------------------
 
@@ -500,46 +571,50 @@ class BoxedLineEditor:
                 if not self.line:
                     self._leave_box()
                     raise EOFError
-                # Forward delete (emacs-style)
                 if self.col < len(self.line):
                     self.line = self.line[:self.col] + self.line[self.col + 1:]
-                    self._redraw_input()
+                    self._render()
                 continue
 
-            if o == 0x1b:  # Esc or start of an escape sequence
+            if o == 0x1b:  # Esc or start of CSI sequence
                 nxt = self._read_with_timeout(0.04)
                 if nxt is None:
-                    self._leave_box()
-                    raise EscInterrupt
+                    # Plain Esc: clear the current edit in place. The previous
+                    # behavior (raise to the REPL loop) drew a fresh empty
+                    # box on top of the existing one, leaving a stack.
+                    if self.line:
+                        self.line = ""
+                        self.col = 0
+                        self._render()
+                    continue
                 if nxt == "[":
                     seq = sys.stdin.read(1)
                     self._handle_csi(seq)
-                # OSC / alt-key bindings ignored; swallow and continue
                 continue
 
             if o == 0x7f or o == 0x08:  # Backspace
                 if self.col > 0:
                     self.line = self.line[:self.col - 1] + self.line[self.col:]
                     self.col -= 1
-                    self._redraw_input()
+                    self._render()
                 continue
 
             if o == 0x01:  # Ctrl-A
                 self.col = 0
-                self._redraw_input()
+                self._render()
                 continue
             if o == 0x05:  # Ctrl-E
                 self.col = len(self.line)
-                self._redraw_input()
+                self._render()
                 continue
             if o == 0x0b:  # Ctrl-K
                 self.line = self.line[:self.col]
-                self._redraw_input()
+                self._render()
                 continue
             if o == 0x15:  # Ctrl-U
                 self.line = self.line[self.col:]
                 self.col = 0
-                self._redraw_input()
+                self._render()
                 continue
             if o == 0x17:  # Ctrl-W
                 i = self.col
@@ -549,15 +624,13 @@ class BoxedLineEditor:
                     i -= 1
                 self.line = self.line[:i] + self.line[self.col:]
                 self.col = i
-                self._redraw_input()
+                self._render()
                 continue
-            if o == 0x0c:  # Ctrl-L (redraw)
-                self._redraw_input()
+            if o == 0x0c:  # Ctrl-L (full redraw)
+                self._render()
                 continue
 
-            if o >= 32:  # printable byte (UTF-8 multibyte handled below)
-                # If this is a UTF-8 lead byte, read continuation bytes.
-                # 0xc0-0xdf -> 1 cont; 0xe0-0xef -> 2; 0xf0-0xf7 -> 3.
+            if o >= 32:  # printable
                 extra = 0
                 if o >= 0xf0:
                     extra = 3
@@ -569,40 +642,38 @@ class BoxedLineEditor:
                     ch += sys.stdin.read(extra)
                 self.line = self.line[:self.col] + ch + self.line[self.col:]
                 self.col += 1
-                self._redraw_input()
+                self._render()
                 continue
 
     def _handle_csi(self, seq):
-        if seq == "A":  # up - history previous
+        if seq == "A":
             self._history_step(-1)
-        elif seq == "B":  # down - history next
+        elif seq == "B":
             self._history_step(+1)
-        elif seq == "C":  # right
+        elif seq == "C":
             if self.col < len(self.line):
                 self.col += 1
-                self._redraw_input()
-        elif seq == "D":  # left
+                self._render()
+        elif seq == "D":
             if self.col > 0:
                 self.col -= 1
-                self._redraw_input()
-        elif seq == "H":  # home
+                self._render()
+        elif seq == "H":
             self.col = 0
-            self._redraw_input()
-        elif seq == "F":  # end
+            self._render()
+        elif seq == "F":
             self.col = len(self.line)
-            self._redraw_input()
-        # Other CSI sequences (page up/down etc) silently ignored.
+            self._render()
 
     def _history_step(self, delta):
         target = self.hist_idx + delta
         if not (0 <= target < len(self.history)):
             return
-        # Snapshot the current edit before stepping away
         self.history[self.hist_idx] = self.line
         self.hist_idx = target
         self.line = self.history[self.hist_idx]
         self.col = len(self.line)
-        self._redraw_input()
+        self._render()
 
     @staticmethod
     def _read_with_timeout(t):
@@ -613,8 +684,6 @@ class BoxedLineEditor:
             except (OSError, ValueError):
                 return None
         return None
-
-    # --- history file I/O ----------------------------------------------
 
     @classmethod
     def load_history(cls):
