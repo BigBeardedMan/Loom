@@ -528,6 +528,13 @@ class BoxedLineEditor:
         try:
             new = list(old)
             new[3] = new[3] & ~(termios.ICANON | termios.ECHO | termios.ISIG)
+            # 8.0.3: VMIN/VTIME are required when ICANON is off; the prior
+            # manual setup forgot these, so sys.stdin.read(1) had
+            # undefined blocking behavior on some terminals (could return
+            # "" immediately, losing the byte after Esc and breaking
+            # arrow-key handling). 1/0 = block until exactly 1 byte.
+            new[6][termios.VMIN] = 1
+            new[6][termios.VTIME] = 0
             termios.tcsetattr(fd, termios.TCSANOW, new)
             # Enable bracketed paste so the terminal wraps pasted text in
             # ESC[200~ ... ESC[201~. Without this, pasted newlines look
@@ -700,8 +707,16 @@ class BoxedLineEditor:
                     self._render()
                 continue
 
-            if o == 0x1b:  # Esc or start of CSI sequence
-                nxt = self._read_with_timeout(0.04)
+            if o == 0x1b:  # Esc or start of CSI / SS3 sequence
+                # 8.0.3: bumped from 40ms -> 120ms. Slower terminals (SSH,
+                # tmux, certain GPU-accelerated emulators) can split the
+                # `\x1b` from the trailing `[A` by more than 40ms, which
+                # caused arrow keys to be misread as a plain Esc, wiping
+                # the user's in-progress line and silently swallowing the
+                # arrow. Also: handle SS3 prefix `\x1bOA` for terminals in
+                # application-cursor-key mode (some `screen`, tmux setups,
+                # and a few older xterm builds).
+                nxt = self._read_with_timeout(0.12)
                 if nxt is None:
                     # Plain Esc: clear the current edit in place. The previous
                     # behavior (raise to the REPL loop) drew a fresh empty
@@ -711,14 +726,21 @@ class BoxedLineEditor:
                         self.col = 0
                         self._render()
                     continue
-                if nxt == "[":
-                    seq = sys.stdin.read(1)
-                    if seq.isdigit():
+                if nxt in ("[", "O"):
+                    seq = self._read_with_timeout(0.12)
+                    if not seq:
+                        # Lone Esc[ or EscO with no follow-up: treat as Esc.
+                        if self.line:
+                            self.line = ""
+                            self.col = 0
+                            self._render()
+                        continue
+                    if nxt == "[" and seq.isdigit():
                         # Multi-byte CSI (ESC[200~ paste-start, ESC[5~ pgup,
-                        # etc.). Drain until ~ or letter.
+                        # ESC[1;5A Ctrl-Up, etc.). Drain until ~ or letter.
                         tail = seq
                         while True:
-                            ch2 = self._read_with_timeout(0.08)
+                            ch2 = self._read_with_timeout(0.12)
                             if ch2 is None:
                                 break
                             tail += ch2
@@ -726,6 +748,10 @@ class BoxedLineEditor:
                                 break
                         if tail == "200~":
                             self._handle_paste()
+                        elif tail.endswith("A"):
+                            self._history_step(-1)
+                        elif tail.endswith("B"):
+                            self._history_step(+1)
                         # Other multi-byte sequences (Page Up, etc.) ignored.
                     else:
                         self._handle_csi(seq)
@@ -3486,6 +3512,9 @@ def aggressive_batch_steps(state, narration, json_emit=None):
             task["status"] = "completed"
             results.append({"index": idx, "path": forced.get("path"),
                             "ok": True, "message": result})
+            # 8.0.3: a successful batched write_file counts as progress
+            # for the zero-progress guard, same as any direct tool call.
+            state.progress_this_turn = True
         except Exception as e:
             results.append({"index": idx, "path": forced.get("path"),
                             "ok": False, "message": str(e)})
@@ -6825,6 +6854,16 @@ class AgentState:
         self.max_continuations = 12
         self.last_turn_had_tool_calls = False
         self.auto_continue = True
+        # 8.0.3 — zero-progress guard. Set True by _dispatch_tool when any
+        # non-update_tasks tool succeeds OR when update_tasks completes a
+        # task (status flips to "completed"). Reset to False at the top of
+        # each run_turn. drive_user_message tracks consecutive False turns
+        # and breaks the continuation loop after 2 unproductive rounds so
+        # the model can't loop forever just narrating + calling
+        # update_tasks({}) on repeat.
+        self.progress_this_turn = False
+        self.zero_progress_streak = 0
+        self.max_zero_progress_streak = 2
         # Auto-compaction. Triggered when approx_tokens / context_window
         # exceeds COMPACT_TRIGGER_RATIO. Counter visible in the footer.
         self.auto_compact = True
@@ -6987,6 +7026,10 @@ class AgentState:
 def run_turn(state, user_message, *, json_emit=None):
     """Drive the streaming agent loop for one user message. Returns the
     final assistant text. Raises EscInterrupt if the user stops mid-turn."""
+    # 8.0.3: reset the zero-progress flag at the top of every turn so the
+    # orchestrator can detect rounds where the model did nothing
+    # substantive (e.g. only narrated + called update_tasks({})).
+    state.progress_this_turn = False
     if maybe_compact_transcript(state) and not json_emit:
         print(style(
             f"  ▸ context compacted (#{state.compact_count}); "
@@ -7334,6 +7377,7 @@ def drive_user_message(state, user_message, *, json_emit=None):
     one turn: pending tasks AND post-completion promise narration both
     force another round. Returns the final assistant text."""
     state.continuation_count = 0
+    state.zero_progress_streak = 0
     final_text = run_turn(state, user_message, json_emit=json_emit)
 
     if not state.auto_continue:
@@ -7341,9 +7385,34 @@ def drive_user_message(state, user_message, *, json_emit=None):
             state.sink.mark_remaining_complete()
         return final_text
 
+    stopped_for_zero_progress = False
     while state.continuation_count < state.max_continuations:
         followup = should_auto_continue(state, final_text)
         if not followup:
+            break
+        # 8.0.3: zero-progress guard. The PRIOR run_turn just finished, so
+        # state.progress_this_turn reflects what that round actually did.
+        # If consecutive rounds make no progress (model only narrates, or
+        # spams update_tasks({}) with no status flip and no tool calls),
+        # break out and hand control back to the user instead of looping
+        # to max_continuations.
+        if state.progress_this_turn:
+            state.zero_progress_streak = 0
+        else:
+            state.zero_progress_streak += 1
+        if state.zero_progress_streak >= state.max_zero_progress_streak:
+            stopped_for_zero_progress = True
+            if json_emit:
+                json_emit("orchestrator_stopped",
+                          attempts=state.continuation_count,
+                          reason="zero_progress")
+            else:
+                print()
+                print(style(
+                    f"  orchestrator stopped after "
+                    f"{state.zero_progress_streak} unproductive "
+                    f"continuation(s) - the model kept narrating without "
+                    f"using tools. Control returned to you.", "warning"))
             break
         state.continuation_count += 1
         if json_emit:
@@ -7362,7 +7431,8 @@ def drive_user_message(state, user_message, *, json_emit=None):
             print()
         final_text = run_turn(state, followup, json_emit=json_emit)
 
-    if state.continuation_count >= state.max_continuations:
+    if (not stopped_for_zero_progress
+            and state.continuation_count >= state.max_continuations):
         if json_emit:
             json_emit("orchestrator_stopped",
                       attempts=state.continuation_count)
@@ -7551,9 +7621,49 @@ def _dispatch_tool(state, name, args, *, narration=""):
 
     try:
         if name == "update_tasks":
-            raw_tasks = args_in.get("tasks", []) or []
+            # 8.0.3: refuse calls that omit `tasks` entirely. Pre-8.0.3 a
+            # bare update_tasks({}) call would silently clear the visible
+            # task list and the orchestrator would loop forever because the
+            # model thought it had "checked in" while making zero progress.
+            if not isinstance(args_in, dict) or "tasks" not in args_in:
+                state.tool_history.append({
+                    "name": name, "args": _canonical(args_in), "error": True,
+                })
+                return (
+                    "Error: update_tasks requires a `tasks` array. Example: "
+                    "update_tasks({\"tasks\": [{\"subject\": \"create app.py\", "
+                    "\"activeForm\": \"Creating app.py\", \"status\": "
+                    "\"pending\"}]}). The existing task list was NOT modified. "
+                    "If you meant to act on the next task, use write_file or "
+                    "edit_file instead - do not re-call update_tasks."
+                )
+            raw_tasks = args_in.get("tasks")
+            if not isinstance(raw_tasks, list):
+                state.tool_history.append({
+                    "name": name, "args": _canonical(args_in), "error": True,
+                })
+                return (
+                    "Error: update_tasks `tasks` must be an array. "
+                    "Existing task list was NOT modified."
+                )
+            # 8.0.3: track whether THIS update_tasks call actually flipped
+            # a task to completed compared with the prior list. Counts as
+            # progress only if a status moved from non-completed to
+            # completed.
+            prior_completed = {
+                (t.get("subject") or "")
+                for t in (state.sink.current or [])
+                if t.get("status") == "completed"
+            }
             failures = verify_task_completions(raw_tasks, state.workspace)
             count = state.sink.replace(raw_tasks)
+            new_completed = {
+                (t.get("subject") or "")
+                for t in raw_tasks
+                if t.get("status") == "completed"
+            }
+            if new_completed - prior_completed:
+                state.progress_this_turn = True
             result = f"Task list updated ({count} task{'' if count == 1 else 's'})."
             if failures:
                 lines = "\n  - ".join(failures)
@@ -7573,6 +7683,7 @@ def _dispatch_tool(state, name, args, *, narration=""):
             state.tool_history.append({
                 "name": name, "args": _canonical(args_in), "error": False,
             })
+            state.progress_this_turn = True
             return result
         if name == "run_bash" and not state.allow_bash:
             state.tool_history.append({
@@ -7600,6 +7711,10 @@ def _dispatch_tool(state, name, args, *, narration=""):
             "name": name, "args": _canonical(args_in), "error": False,
             "elapsed_ms": elapsed_ms,
         })
+        # 8.0.3: every successful non-update_tasks tool counts as real
+        # progress for the zero-progress guard. update_tasks has its own
+        # path above (counts only on a real status flip).
+        state.progress_this_turn = True
         memory_record(state, name, args_in, str(result))
         # post-tool-use hook. Stdout becomes a system note appended after
         # the tool result, so the model sees structured observations.

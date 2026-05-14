@@ -644,3 +644,9 @@ General-purpose 3B–4B models will usually skip `update_tasks` or call it once 
 **Box drawing looks broken after resizing the terminal** — boxes recompute width on each new prompt, so the next turn after a resize renders cleanly. The in-flight box on the line you resized over stays at its original width until you submit.
 
 **Tasks aren't appearing in Loom's Tasks pane** — confirm Loom is running and Settings → Tasks "Stale window" isn't set so tight the session is being hidden. Check `~/.loom/tasks/<session>/`; if files are there, the pickup is on Loom's side.
+
+## 8.0.3 fixes
+
+- `update_tasks({})` (empty call) no longer silently clears the visible task list. The dispatcher refuses the call, returns a schema-aware error, and preserves the existing tasks. This was the root cause of the 8.0.x "model loops forever narrating without writing files" pattern.
+- Zero-progress orchestrator guard. The continuation loop tracks consecutive turns where no real tool work happened (only narration + bare `update_tasks` calls) and breaks out after 2 unproductive rounds, returning control to the user instead of running through the full 12 continuations.
+- Up/down arrow history fixed. Three causes were in play simultaneously: the Esc-to-CSI peek timeout (40 ms) was too tight for some terminals, VMIN/VTIME were never set in the manual termios setup so `read(1)` could return early with no bytes, and `\x1bOA`-style SS3 application-cursor-key sequences weren't handled. All three are addressed.
