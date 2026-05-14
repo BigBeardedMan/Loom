@@ -79,8 +79,13 @@ enum GitHubReleaseFetcher {
         var request = URLRequest(url: url)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("Loom-Updater", forHTTPHeaderField: "User-Agent")
-        // 10s timeout — we'd rather drop a poll than block the loop.
-        request.timeoutInterval = 10
+        // 8.0.18: 30s timeout (was 10s). The previous 10s budget timed
+        // out on slower networks and DNS-laggy connections; the user's
+        // logs showed NSURLErrorDomain -1001 hitting repeatedly even
+        // though the API itself was up. 30s is conservative enough for
+        // typical home internet variability while still letting us
+        // surface real outages within a minute.
+        request.timeoutInterval = 30
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -109,7 +114,8 @@ enum GitHubReleaseFetcher {
         var request = URLRequest(url: url)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("Loom-Updater", forHTTPHeaderField: "User-Agent")
-        request.timeoutInterval = 10
+        // 8.0.18: 30s (was 10s). See note on fetchLatest above.
+        request.timeoutInterval = 30
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -273,7 +279,8 @@ enum GitHubReleaseFetcher {
     /// the full line or just the hex (some publishers emit only the digest).
     private static func fetchExpectedChecksum(at url: URL) async throws -> String {
         var request = URLRequest(url: url)
-        request.timeoutInterval = 10
+        // 8.0.18: 30s (was 10s). See note on fetchLatest above.
+        request.timeoutInterval = 30
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw FetcherError.badStatus(http.statusCode)

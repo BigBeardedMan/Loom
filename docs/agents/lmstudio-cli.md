@@ -651,6 +651,26 @@ General-purpose 3B–4B models will usually skip `update_tasks` or call it once 
 - Zero-progress orchestrator guard. The continuation loop tracks consecutive turns where no real tool work happened (only narration + bare `update_tasks` calls) and breaks out after 2 unproductive rounds, returning control to the user instead of running through the full 12 continuations.
 - Up/down arrow history fixed. Three causes were in play simultaneously: the Esc-to-CSI peek timeout (40 ms) was too tight for some terminals, VMIN/VTIME were never set in the manual termios setup so `read(1)` could return early with no bytes, and `\x1bOA`-style SS3 application-cursor-key sequences weren't handled. All three are addressed.
 
+## 8.0.18 — fix the actual reason the update pill never showed
+
+Root cause from the user's running app log:
+
+```
+Update check failed: Error Domain=NSURLErrorDomain Code=-1001
+"The request timed out."
+URL: https://api.github.com/repos/BigBeardedMan/Loom/releases?per_page=30
+```
+
+The 10-second timeout on the GitHub API request was too tight for the user's network. Every poll cycle timed out, so the manifest never got written, so `refresh()` never set `available`, so the pill never appeared.
+
+Three layered fixes:
+
+1. **Bump every URLRequest timeout from 10s → 30s** in `GitHubReleaseFetcher` (releases list, latest, checksum sidecar). Slow networks, DNS lag, and busy laptops were all paying the price for a budget tuned to a fast desktop.
+
+2. **Add a one-shot retry on transient errors** in `UpdateService.checkRemote`. URLError codes `-1001` (timed out), `-1009` (not connected), `-1004` (cannot connect), `-1005` (network connection lost) get a 3-second backoff and one more attempt before reporting failure. Drops the cost of an unlucky moment from "wait 60s for the next poll" to "wait 3s and retry inline."
+
+3. **Diagnosed in passing**: the user's `/Applications/Loom Testing Edition.app` doesn't exist — they were running directly from the staging directory. The apply script swaps the staged bundle INTO `installedBundleURL`, which is hard-coded to `/Applications/Loom Testing Edition.app`. Without a real install there, no manifest gets cleared after apply, no clean handoff. **Manual one-time step:** download `LoomTestingEdition-8.0.18.dmg` from the GitHub release, drag the app into `/Applications`, launch from there. After that, the pill mechanism works.
+
 ## 8.0.17 — session-start auto-route (force the upgrade)
 
 8.0.16 fixed the auto-load picker but auto-load only fires when nothing is loaded. A user with a 4B model already loaded from a prior session stayed on that model forever, even when their qwen3.5-9b was sitting on disk unused.
