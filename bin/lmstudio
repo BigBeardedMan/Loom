@@ -5989,6 +5989,103 @@ def _locate_lms_cli():
     return None
 
 
+# 8.0.14 — friendly install detection.
+LMSTUDIO_DOWNLOAD_URL = "https://lmstudio.ai/"
+
+
+def detect_lmstudio_installation(base_url):
+    """Probe whether LM Studio is installed and reachable on this host.
+    Returns a dict {installed, server_reachable, lms_cli_path,
+    app_path}. Used at the top of the entrypoint to give friendly
+    messages before any normal check fires.
+
+    "Installed" is true when ANY of the standard markers exist:
+        - the lms CLI on PATH or at ~/.lmstudio/bin/lms
+        - the LM Studio macOS .app at /Applications/LM Studio.app
+        - the user's ~/.lmstudio directory (LM Studio creates this
+          on first launch even if the CLI helper hasn't been linked
+          via `lms bootstrap` yet)
+    """
+    lms_cli = _locate_lms_cli()
+    app_path = None
+    for candidate in (
+        Path("/Applications") / "LM Studio.app",
+        Path.home() / "Applications" / "LM Studio.app",
+    ):
+        if candidate.is_dir():
+            app_path = str(candidate)
+            break
+    lmstudio_dir = Path.home() / ".lmstudio"
+    installed = bool(lms_cli or app_path or lmstudio_dir.is_dir())
+
+    # Quick reachability check - HEAD-equivalent GET on /v1/models
+    # with a short timeout. Don't raise; just record the result.
+    server_reachable = False
+    base = (base_url or "").rstrip("/")
+    if base:
+        try:
+            req = urllib.request.Request(f"{base}/models",
+                                          headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                # Any 2xx means there's an OpenAI-compatible server.
+                server_reachable = 200 <= resp.status < 300
+        except (urllib.error.HTTPError, urllib.error.URLError, OSError):
+            server_reachable = False
+
+    return {
+        "installed":        installed,
+        "server_reachable": server_reachable,
+        "lms_cli_path":     lms_cli,
+        "app_path":         app_path,
+    }
+
+
+def print_lmstudio_missing_help(status, base_url):
+    """Friendly multi-line message for users who run `lmstudio` without
+    LM Studio installed or with the server cold. Goes to stderr."""
+    if not status["installed"]:
+        print(file=sys.stderr)
+        print(style(
+            "  LM Studio does not appear to be installed on this Mac.",
+            "err"), file=sys.stderr)
+        print(file=sys.stderr)
+        print(style("  This CLI talks to LM Studio's local model server. "
+                    "Install it from:", "warning"), file=sys.stderr)
+        print(file=sys.stderr)
+        print(f"    {style(LMSTUDIO_DOWNLOAD_URL, 'value')}",
+              file=sys.stderr)
+        print(file=sys.stderr)
+        print(style(
+            "  After install: open LM Studio, download a small (4B-class) "
+            "tool-use model from inside the app (Discover tab), then "
+            "re-run `lmstudio`. The CLI auto-loads a default model on "
+            "first launch.", "dim"), file=sys.stderr)
+        print(file=sys.stderr)
+        return
+    # Installed but server unreachable.
+    print(file=sys.stderr)
+    print(style(
+        f"  LM Studio is installed but the local server isn't reachable "
+        f"at {base_url}.", "err"), file=sys.stderr)
+    print(file=sys.stderr)
+    print(style("  Start it one of these ways:", "warning"), file=sys.stderr)
+    print(file=sys.stderr)
+    print(style("    1. Open LM Studio.app, click Developer in the left "
+                "sidebar, then Local Server → Start.", "dim"),
+          file=sys.stderr)
+    if status["lms_cli_path"]:
+        print(style(f"    2. Run: {style('lms server start', 'value')}",
+                    "dim"), file=sys.stderr)
+    else:
+        print(style("    2. Or install the `lms` CLI helper: open LM "
+                    "Studio, then run `~/.lmstudio/bin/lms bootstrap` to "
+                    "add it to PATH.", "dim"), file=sys.stderr)
+    print(file=sys.stderr)
+    print(style("  Download LM Studio: " + LMSTUDIO_DOWNLOAD_URL, "dim"),
+          file=sys.stderr)
+    print(file=sys.stderr)
+
+
 _OOM_HINTS = (
     "insufficient system resources",
     "would likely overload",
@@ -10164,6 +10261,15 @@ def main():
                                  and "NO_COLOR" not in os.environ
                                  and args.theme != "mono"
                                  and not args.json))
+
+    # 8.0.14: friendly install / server check BEFORE any model probing.
+    # When LM Studio isn't installed, the user gets a clean message with
+    # the download URL instead of a Python URLError. When it's installed
+    # but the server is cold, they get start-the-server instructions.
+    install_status = detect_lmstudio_installation(args.base_url)
+    if not install_status["server_reachable"]:
+        print_lmstudio_missing_help(install_status, args.base_url)
+        sys.exit(2)
 
     if not args.model:
         try:

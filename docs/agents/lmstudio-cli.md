@@ -651,6 +651,20 @@ General-purpose 3B–4B models will usually skip `update_tasks` or call it once 
 - Zero-progress orchestrator guard. The continuation loop tracks consecutive turns where no real tool work happened (only narration + bare `update_tasks` calls) and breaks out after 2 unproductive rounds, returning control to the user instead of running through the full 12 continuations.
 - Up/down arrow history fixed. Three causes were in play simultaneously: the Esc-to-CSI peek timeout (40 ms) was too tight for some terminals, VMIN/VTIME were never set in the manual termios setup so `read(1)` could return early with no bytes, and `\x1bOA`-style SS3 application-cursor-key sequences weren't handled. All three are addressed.
 
+## 8.0.14 — friendly install detection
+
+If someone runs `lmstudio` without LM Studio installed at all, the CLI now detects that and points them to the download page instead of erroring out with a Python URLError.
+
+Three distinguishable failure modes at startup, each with its own message:
+
+1. **Not installed.** No `lms` CLI on PATH, no `~/.lmstudio` directory, no `LM Studio.app` in /Applications. Prints "LM Studio does not appear to be installed on this Mac" with the download URL and a one-line walkthrough: install → open app → Discover tab → download a 4B model → re-run `lmstudio` (auto-load picks it up on first launch).
+
+2. **Installed but server cold.** App markers found, but no response from `/v1/models`. Prints "LM Studio is installed but the local server isn't reachable" with two ways to start it: open the app and click Developer → Local Server → Start, or run `lms server start` from the shell.
+
+3. **Reachable.** Normal session flow continues.
+
+Detection is a fast pre-flight: 2-second timeout on `/v1/models`, plus filesystem checks for `~/.lmstudio`, `/Applications/LM Studio.app`, and `~/Applications/LM Studio.app`. Runs before any other model probing so the first thing a brand-new user sees is the friendly nudge, not a stack trace.
+
 ## 8.0.13 — zero-config model selection
 
 Until 8.0.13, launching the CLI with no model loaded in LM Studio errored out and demanded the user load one manually. Now the CLI inspects `lms ls --json`, picks the best small tool-use model on disk, and loads it automatically.
