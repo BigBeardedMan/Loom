@@ -650,3 +650,9 @@ General-purpose 3B–4B models will usually skip `update_tasks` or call it once 
 - `update_tasks({})` (empty call) no longer silently clears the visible task list. The dispatcher refuses the call, returns a schema-aware error, and preserves the existing tasks. This was the root cause of the 8.0.x "model loops forever narrating without writing files" pattern.
 - Zero-progress orchestrator guard. The continuation loop tracks consecutive turns where no real tool work happened (only narration + bare `update_tasks` calls) and breaks out after 2 unproductive rounds, returning control to the user instead of running through the full 12 continuations.
 - Up/down arrow history fixed. Three causes were in play simultaneously: the Esc-to-CSI peek timeout (40 ms) was too tight for some terminals, VMIN/VTIME were never set in the manual termios setup so `read(1)` could return early with no bytes, and `\x1bOA`-style SS3 application-cursor-key sequences weren't handled. All three are addressed.
+
+## 8.0.4 fixes
+
+- Progress snapshot order. In 8.0.3 the new-completions snapshot was taken AFTER `verify_task_completions` mutated `raw_tasks` in place, so a legitimate completion that got false-flipped by the verifier was counted as zero progress. The snapshot now happens before the verify call, and progress is only credited when verify reports no failures.
+- Duplicate subjects in the task list no longer collide in the progress check. Switched from `set` to `collections.Counter` so two tasks with the same subject string register as two distinct completions.
+- Partial escape sequences from slow terminals no longer wipe the input line. When `Esc + [` or `Esc + O` arrived but the trailing byte missed the 120 ms window, the editor previously assumed the user pressed plain Esc twice and cleared the buffer. It now drops the partial sequence and resumes editing.

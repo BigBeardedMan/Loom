@@ -40,6 +40,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -729,11 +730,14 @@ class BoxedLineEditor:
                 if nxt in ("[", "O"):
                     seq = self._read_with_timeout(0.12)
                     if not seq:
-                        # Lone Esc[ or EscO with no follow-up: treat as Esc.
-                        if self.line:
-                            self.line = ""
-                            self.col = 0
-                            self._render()
+                        # 8.0.4: incomplete escape sequence (Esc[ or EscO
+                        # with no trailing byte). Almost always terminal
+                        # latency splitting the arrow-key bytes; the user
+                        # did not intend to clear their input. Drop the
+                        # partial sequence and continue without touching
+                        # self.line. The prior behavior wiped the line
+                        # whenever a single CSI byte arrived just past the
+                        # 120ms window.
                         continue
                     if nxt == "[" and seq.isdigit():
                         # Multi-byte CSI (ESC[200~ paste-start, ESC[5~ pgup,
@@ -7646,23 +7650,31 @@ def _dispatch_tool(state, name, args, *, narration=""):
                     "Error: update_tasks `tasks` must be an array. "
                     "Existing task list was NOT modified."
                 )
-            # 8.0.3: track whether THIS update_tasks call actually flipped
-            # a task to completed compared with the prior list. Counts as
-            # progress only if a status moved from non-completed to
-            # completed.
-            prior_completed = {
+            # 8.0.3/8.0.4: progress detection. We compare the model's
+            # CLAIMED completions in `raw_tasks` against the prior list
+            # using multiset semantics (collections.Counter) so duplicate
+            # subjects don't collide. We snapshot the claim BEFORE calling
+            # verify_task_completions, because verify mutates `raw_tasks`
+            # in place (flipping failed completions back to in_progress),
+            # which would otherwise erase the model's intent before we
+            # could measure it. Final gate: only credit progress when
+            # verify reports zero failures - if the model lied about a
+            # completion, do not count the round as progress, otherwise
+            # the zero-progress guard never trips on a model that
+            # repeatedly bogus-completes tasks.
+            prior_completed = Counter(
                 (t.get("subject") or "")
                 for t in (state.sink.current or [])
                 if t.get("status") == "completed"
-            }
-            failures = verify_task_completions(raw_tasks, state.workspace)
-            count = state.sink.replace(raw_tasks)
-            new_completed = {
+            )
+            claimed_completed = Counter(
                 (t.get("subject") or "")
                 for t in raw_tasks
-                if t.get("status") == "completed"
-            }
-            if new_completed - prior_completed:
+                if isinstance(t, dict) and t.get("status") == "completed"
+            )
+            failures = verify_task_completions(raw_tasks, state.workspace)
+            count = state.sink.replace(raw_tasks)
+            if (claimed_completed - prior_completed) and not failures:
                 state.progress_this_turn = True
             result = f"Task list updated ({count} task{'' if count == 1 else 's'})."
             if failures:
