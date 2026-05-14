@@ -651,6 +651,21 @@ General-purpose 3B–4B models will usually skip `update_tasks` or call it once 
 - Zero-progress orchestrator guard. The continuation loop tracks consecutive turns where no real tool work happened (only narration + bare `update_tasks` calls) and breaks out after 2 unproductive rounds, returning control to the user instead of running through the full 12 continuations.
 - Up/down arrow history fixed. Three causes were in play simultaneously: the Esc-to-CSI peek timeout (40 ms) was too tight for some terminals, VMIN/VTIME were never set in the manual termios setup so `read(1)` could return early with no bytes, and `\x1bOA`-style SS3 application-cursor-key sequences weren't handled. All three are addressed.
 
+## 8.0.8 — auto-scale that actually scales
+
+8.0.7 detected the small context but failed to bump it on memory-constrained systems. Live-testing on a 36 GB Mac with Gemma 4 31B revealed why: LM Studio's JIT load defaults to `parallel=4`, which keeps four KV cache slots in memory simultaneously. Most agent workloads run one completion at a time, so three of those slots are pure waste.
+
+8.0.8 changes the autoscale strategy:
+
+- Always force `--parallel 1` on the reload. That alone shrinks the KV cache by 75% per token.
+- Always `lms unload <id>` before the load, so the new instance reclaims the original identifier instead of being assigned `:2` / `:3` / etc.
+- Initial target raised to `min(--autoscale-max, model_cap)` rather than `loaded * 4`. With parallel=1 the bigger sizes actually fit.
+- Default `--autoscale-min` raised to 16384 and `--autoscale-max` to 65536.
+
+Verified on the same hardware that previously refused any bump: Gemma 4 31B (Q4_K_M) now loads at 65536 context, parallel=1, using the same 33.84 GB unified memory that 4096 context previously required. The trick is that llama.cpp on Apple Silicon mmaps the model weights, so weights page in on demand and the in-memory delta is only the actively-used KV cache.
+
+Also: when a non-OOM error happens mid-ladder, autoscale tries to restore the prior loaded size before returning so the user isn't left with no model loaded.
+
 ## 8.0.7 — auto-scale model context at session start
 
 LM Studio's JIT loader gives many models a tiny default `loaded_context_length` (often just 4096) even when the model's GGUF supports 32k, 128k, or 262k. The lmstudio CLI now bumps this automatically.

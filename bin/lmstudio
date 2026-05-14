@@ -5890,56 +5890,76 @@ _OOM_HINTS = (
 
 
 def auto_scale_context(base_url, model_id, target_minimum,
-                       max_target=32768, gpu="max"):
+                       max_target=32768, gpu="max", parallel=1):
     """If the model's loaded_context_length is below target_minimum AND
     its max_context_length supports more, reload via the `lms` CLI with
     a larger context. Returns (success, message, new_context).
 
-    8.0.7: when LM Studio refuses the requested size with an OOM-class
-    error, we step the target down (75% -> 50% -> 33% -> 25%) and retry
-    until either a load succeeds or we exhaust the candidate ladder.
-    This makes the autoscale safe to enable by default - it won't lock
-    a user with a 16GB Mac out of the agent just because the model's
-    GGUF cap is 262k. The bumped context is still always >= the prior
-    loaded amount, never smaller.
+    8.0.8: always unload-then-load and force `--parallel 1` on the
+    reload. The default LM Studio JIT load uses parallel=4 which
+    multiplies the KV cache by 4 - on Apple Silicon unified memory,
+    that single setting is the difference between a 4k context fitting
+    AND a 128k context fitting at exactly the same memory footprint
+    (KV cache is 4x smaller per slot). The agent only runs one
+    completion at a time anyway, so the user gives up nothing.
 
-    A 4k Gemma 4 31B canonically fails at 16k (~37GB needed) but
-    succeeds at 6-8k (~22-25GB). The ladder finds the sweet spot
-    automatically."""
+    OOM-retry ladder: 100% -> 75% -> 50% -> 33% -> 25% of initial
+    target. Stops at the first successful load. Non-OOM errors (bad
+    model id, server cold) abort immediately - no point retrying.
+
+    Final verification compares the API's reported
+    loaded_context_length AFTER reload against the prior value, so a
+    `lms` exit-0 with no actual context change is treated as
+    inconclusive rather than success."""
     info = fetch_model_info(base_url, model_id)
     if not info:
         return False, "could not query /api/v0/models", None
     loaded = info.get("loaded_context_length")
     cap = info.get("max_context_length")
+    current_parallel = info.get("parallel") or info.get("max_parallel") or None
     if not isinstance(loaded, int) or loaded <= 0:
         return False, ("loaded_context_length unavailable; LM Studio "
                         "may be too old"), None
-    if loaded >= target_minimum:
+    # 8.0.8: even if loaded >= target, force-reload when parallel > 1
+    # and we can squeeze a much bigger context out by dropping parallel.
+    # Otherwise short-circuit.
+    can_dramatic_bump = (isinstance(cap, int) and cap > loaded * 2
+                         and (current_parallel or 1) > 1)
+    if loaded >= target_minimum and not can_dramatic_bump:
         return True, (f"loaded context is {loaded} (>= target "
                       f"{target_minimum}); no reload needed"), loaded
     if isinstance(cap, int) and cap > 0:
         upper = min(max_target, cap)
     else:
         upper = max_target
-    initial_target = max(target_minimum, min(upper, loaded * 4))
+    # With parallel=1 the KV cache is small enough that we can usually
+    # take a big jump. Initial target = full max_target (capped to model
+    # cap), not just 4x current. The ladder steps back if that fails.
+    initial_target = max(target_minimum, upper)
     if initial_target <= loaded:
         return False, (f"no headroom: loaded {loaded}, "
                        f"max_target {max_target}, cap {cap}"), loaded
     lms_cmd = _locate_lms_cli()
     if not lms_cmd:
         return False, "`lms` CLI not found at ~/.lmstudio/bin/lms or on PATH", loaded
-    # Build the OOM-retry ladder. Each step has to remain strictly larger
-    # than the currently-loaded context, otherwise we'd be downgrading.
     candidates = []
     for frac in (1.0, 0.75, 0.5, 0.33, 0.25):
         c = max(loaded + 1, int(initial_target * frac))
-        # Round to a multiple of 1024 so we don't pick weird values.
         c = (c // 1024) * 1024 if c >= 1024 else c
         if c > loaded and c not in candidates:
             candidates.append(c)
+    # Unload the existing instance first so the reload reclaims its
+    # identifier (otherwise lms appends ":2" / ":3" / ...) and we don't
+    # double-instance the model in memory.
+    try:
+        subprocess.run([lms_cmd, "unload", model_id],
+                       capture_output=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        pass  # if unload hangs, try the load anyway
     last_error = ""
     for cand in candidates:
-        cmd = [lms_cmd, "load", model_id, "-c", str(cand), "-y"]
+        cmd = [lms_cmd, "load", model_id, "-c", str(cand), "-y",
+               "--parallel", str(parallel)]
         if gpu:
             cmd.extend(["--gpu", gpu])
         try:
@@ -5952,19 +5972,39 @@ def auto_scale_context(base_url, model_id, target_minimum,
             new_loaded = (after.get("loaded_context_length")
                           if after else None)
             if isinstance(new_loaded, int) and new_loaded > loaded:
+                tag = (f" (requested {cand})" if new_loaded != cand
+                       else "")
                 return True, (f"context bumped {loaded} -> {new_loaded}"
-                              + (f" (requested {cand})" if new_loaded != cand
-                                 else "")), new_loaded
-            return True, (f"lms returned 0 but loaded context still "
-                          f"{new_loaded}"), new_loaded
+                              + tag + f", parallel={parallel}"), new_loaded
+            # lms returned 0 but the API didn't reflect a change. Try
+            # the next candidate rather than reporting a phantom success.
+            last_error = (f"lms exit 0 at {cand} but loaded still "
+                          f"{new_loaded}")
+            continue
         err_raw = (proc.stderr or b"").decode("utf-8", "replace")
         err_low = err_raw.lower()
         last_error = err_raw.strip()[:200]
         if any(h in err_low for h in _OOM_HINTS):
-            # OOM-class - back off and try a smaller candidate.
             continue
-        # Non-OOM failure (bad model id, server down). Stop the ladder.
+        # Try to re-load the original size so the user isn't left with
+        # nothing loaded after a non-OOM failure.
+        try:
+            subprocess.run(
+                [lms_cmd, "load", model_id, "-c", str(loaded), "-y",
+                 "--parallel", str(parallel)],
+                capture_output=True, timeout=120)
+        except Exception:
+            pass
         return False, f"lms load failed: {last_error}", loaded
+    # All candidates exhausted. Try to leave the model in its prior
+    # loaded state so the user can still run a session.
+    try:
+        subprocess.run(
+            [lms_cmd, "load", model_id, "-c", str(loaded), "-y",
+             "--parallel", str(parallel)],
+            capture_output=True, timeout=120)
+    except Exception:
+        pass
     return False, (f"all targets exhausted; smallest tried "
                    f"{candidates[-1] if candidates else '?'}; "
                    f"last error: {last_error}"), loaded
@@ -9396,17 +9436,19 @@ def main():
              "--autoscale-min, we reload via the `lms` CLI with a "
              "larger context up to --autoscale-max or the model's cap.")
     parser.add_argument("--autoscale-min", type=int,
-        default=int(os.environ.get("LMSTUDIO_AUTOSCALE_MIN", "8192")),
+        default=int(os.environ.get("LMSTUDIO_AUTOSCALE_MIN", "16384")),
         help="Minimum loaded_context_length to accept without reloading. "
-             "Default 8192 fits the essentials tool schema + most "
-             "prompts. Pick 16384+ if you have RAM headroom; 4096 "
-             "to disable.")
+             "Default 16384. The autoscale also force-reloads when the "
+             "current parallel slot count > 1 and the model cap allows "
+             "a much bigger context, since dropping parallel from 4 to 1 "
+             "frees 75% of the KV cache.")
     parser.add_argument("--autoscale-max", type=int,
-        default=int(os.environ.get("LMSTUDIO_AUTOSCALE_MAX", "32768")),
-        help="Hard cap on the autoscale target. The reload picks "
-             "min(autoscale_max, model_cap, max(autoscale_min, loaded*4)). "
-             "If the requested size OOMs, the ladder steps down 75% -> "
-             "50% -> 33% -> 25% until LM Studio accepts.")
+        default=int(os.environ.get("LMSTUDIO_AUTOSCALE_MAX", "65536")),
+        help="Hard cap on the autoscale target. Reload picks "
+             "min(autoscale_max, model_cap). If that OOMs, the ladder "
+             "steps down 75%% / 50%% / 33%% / 25%% until LM Studio "
+             "accepts. Default 65536 (64k) is achievable for most "
+             "models on most hardware when parallel=1.")
     parser.add_argument("--loop", action="store_true",
         help="Autonomous-loop mode. After each turn, re-enter the session "
              "until the model calls `loop_complete`.")
