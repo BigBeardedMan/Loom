@@ -62,7 +62,9 @@ SESSION_ROOT = Path.home() / ".loom" / "sessions"
 HISTORY_FILE = Path.home() / ".config" / "loom" / "lmstudio-history"
 CONTEXT_FILES = ["CLAUDE.md", "AGENTS.md", "GUIDE.md", "README.md"]
 CONTEXT_CAP_BYTES = 5_000
-COMPACT_TRIGGER_RATIO = 0.75
+# 8.0.12: was 0.75. Lowered so compaction kicks in earlier, leaving
+# more usable headroom on the back half of long sessions.
+COMPACT_TRIGGER_RATIO = 0.60
 JOURNAL_ROOT = Path.home() / ".loom" / "journal"
 BRANCH_ROOT = Path.home() / ".loom" / "branches"
 PROJECT_KNOWLEDGE_FILENAME = ".loom/project.json"
@@ -1333,10 +1335,41 @@ def resolve_in_workspace(workspace: Path, rel: str) -> Path:
 # =============================================================================
 
 def tool_read_file(state, args):
+    """8.0.12: offset/limit support + smart head+tail truncation for
+    huge files. The original behavior (return full content up to 32k
+    chars) loaded the entire file into the transcript every time,
+    which the agent kept re-tokenizing on every subsequent turn.
+    Files > 1500 lines now return a head + tail slice with a "use
+    offset/limit for specifics" hint so the model can ask for a range
+    rather than holding the whole file in context forever."""
     path = resolve_in_workspace(state.workspace, args["path"])
     if not path.is_file():
         raise FileNotFoundError(f"not found: {args['path']}")
     text = path.read_text(encoding="utf-8", errors="replace")
+    offset = args.get("offset")
+    limit = args.get("limit")
+    if offset or limit:
+        lines = text.split("\n")
+        start = max(0, int(offset or 1) - 1)  # 1-indexed -> 0-indexed
+        end = start + int(limit) if limit else len(lines)
+        end = min(end, len(lines))
+        slice_text = "\n".join(lines[start:end])
+        header = (f"[lines {start+1}-{end} of {len(lines)} in "
+                  f"{args['path']}]\n")
+        return header + slice_text
+    lines = text.split("\n")
+    if len(lines) > 1500:
+        head = "\n".join(lines[:100])
+        tail = "\n".join(lines[-50:])
+        return (
+            f"[showing lines 1-100 + last 50 of {len(lines)} total in "
+            f"{args['path']}]\n"
+            f"{head}\n\n"
+            f"... [TRUNCATED {len(lines) - 150} lines in the middle. "
+            f"Call read_file again with offset=<line> limit=<count> to "
+            f"see a specific range] ...\n\n"
+            f"{tail}"
+        )
     if len(text) > 32000:
         return text[:32000] + "\n\n...(truncated at 32000 chars)"
     return text
@@ -2794,9 +2827,18 @@ def tool_exec_js(state, args):
 
 BUILTIN_TOOL_SCHEMAS = [
     {"type": "function", "function": {"name": "read_file",
-        "description": "Read a UTF-8 text file inside the current workspace.",
+        "description": "Read a UTF-8 text file in the workspace. Files "
+                       "longer than 1500 lines auto-truncate to head + "
+                       "tail with a marker; pass offset (1-indexed line) "
+                       "and limit (line count) to request a specific "
+                       "range.",
         "parameters": {"type": "object", "properties": {
-            "path": {"type": "string"}}, "required": ["path"]}}},
+            "path":   {"type": "string"},
+            "offset": {"type": "integer",
+                       "description": "1-indexed starting line"},
+            "limit":  {"type": "integer",
+                       "description": "max lines to return"},
+        }, "required": ["path"]}}},
     {"type": "function", "function": {"name": "write_file",
         "description": "Create or overwrite a UTF-8 text file in the workspace.",
         "parameters": {"type": "object", "properties": {
@@ -6600,14 +6642,66 @@ def _extract_grammar_payload(message):
     return ""
 
 
-def probe_grammar_support(base_url, model):
+GRAMMAR_PROBE_CACHE_DIR = Path.home() / ".loom" / "cache" / "grammar"
+GRAMMAR_PROBE_CACHE_TTL = 7 * 24 * 3600  # 7 days
+
+
+def _grammar_probe_cache_path(base_url, model):
+    """One cache file per (base_url, model) pair. Sanitize the model id
+    so it works as a filename on every platform we ship on."""
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", f"{base_url}__{model}")
+    return GRAMMAR_PROBE_CACHE_DIR / f"{safe[:120]}.json"
+
+
+def _grammar_probe_cached(base_url, model):
+    """Return cached probe result if fresh, else None."""
+    path = _grammar_probe_cache_path(base_url, model)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    ts = data.get("ts", 0)
+    if time.time() - ts > GRAMMAR_PROBE_CACHE_TTL:
+        return None
+    return bool(data.get("supported", False))
+
+
+def _grammar_probe_save(base_url, model, supported):
+    """Persist a probe result. Best-effort; cache miss next time on
+    write failure is fine."""
+    try:
+        GRAMMAR_PROBE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        path = _grammar_probe_cache_path(base_url, model)
+        path.write_text(json.dumps({
+            "ts": int(time.time()),
+            "model": model,
+            "base_url": base_url,
+            "supported": bool(supported),
+        }), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def probe_grammar_support(base_url, model, *, use_cache=True):
     """Ask LM Studio for a tiny structured response with a json_schema
     response_format. Returns True if the server accepts it, False otherwise
     (older servers, non-LM-Studio backends, MLX kernels without grammar).
 
+    8.0.12: results are cached to ~/.loom/cache/grammar/<key>.json with a
+    7-day TTL. Subsequent sessions with the same model skip the 5-10s
+    startup probe entirely. Pass use_cache=False to force a fresh probe.
+
     Disabled entirely when LMSTUDIO_NO_GRAMMAR=1 is set."""
     if os.environ.get("LMSTUDIO_NO_GRAMMAR") == "1":
         return False
+    if use_cache:
+        cached = _grammar_probe_cached(base_url, model)
+        if cached is not None:
+            return cached
     payload = {
         "model": model,
         "messages": [{"role": "user", "content":
@@ -6652,7 +6746,9 @@ def probe_grammar_support(base_url, model):
         result = json.loads(text)
     except (TypeError, json.JSONDecodeError):
         return False
-    return isinstance(result, dict) and "ok" in result
+    supported = isinstance(result, dict) and "ok" in result
+    _grammar_probe_save(base_url, model, supported)
+    return supported
 
 
 def force_grammar_args(base_url, model, transcript, tool_name, tool_schema,
@@ -6985,6 +7081,40 @@ def _scan_for_path(text, workspace):
                 continue
             return candidate
     return None
+
+
+def prune_stale_tool_results(state, *, keep_recent=6, head_chars=240):
+    """8.0.12: replace the bodies of older tool result messages with a
+    short head + a pruned marker. Run at the top of every run_turn so
+    each turn pays for the full bodies of only the most recent N tool
+    results, not the entire session history.
+
+    The model can re-call any tool to get the full result back. This
+    is a CHEAP win on multi-task workflows: a session that ran
+    `read_file` on a 500-line file 5 turns ago doesn't keep paying
+    2k+ tokens for that content in every subsequent API call.
+
+    Returns the number of messages that got pruned. 0 is the no-op."""
+    tool_indices = [i for i, msg in enumerate(state.transcript)
+                    if msg.get("role") == "tool"]
+    if len(tool_indices) <= keep_recent:
+        return 0
+    pruned = 0
+    for idx in tool_indices[:-keep_recent]:
+        msg = state.transcript[idx]
+        content = msg.get("content") or ""
+        # Skip already-pruned entries (idempotent).
+        if "[pruned: full result was" in content:
+            continue
+        if len(content) <= head_chars + 80:
+            continue  # already small, no win
+        head = content[:head_chars].rstrip()
+        msg["content"] = (
+            f"{head}\n... [pruned: full result was {len(content)} chars. "
+            f"Re-call the tool if you need the rest.]"
+        )
+        pruned += 1
+    return pruned
 
 
 def maybe_compact_transcript(state):
@@ -7844,6 +7974,12 @@ def run_turn(state, user_message, *, json_emit=None):
             f"transcript trimmed.", "tip"))
     elif json_emit and state.compact_count and len(state.transcript) <= 8:
         json_emit("compacted", count=state.compact_count)
+    # 8.0.12: replace older tool-result bodies with one-line summaries
+    # so each turn doesn't keep paying for 5-old read_file dumps. The
+    # model can re-call any tool to fetch the full content back.
+    pruned = prune_stale_tool_results(state)
+    if pruned and not json_emit:
+        print(style(f"  ▸ pruned {pruned} stale tool result(s)", "dim"))
     # Flush any external file-change notifications collected by the watcher.
     ext_note = flush_external_change_notes(state)
     if ext_note:

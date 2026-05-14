@@ -651,6 +651,20 @@ General-purpose 3B–4B models will usually skip `update_tasks` or call it once 
 - Zero-progress orchestrator guard. The continuation loop tracks consecutive turns where no real tool work happened (only narration + bare `update_tasks` calls) and breaks out after 2 unproductive rounds, returning control to the user instead of running through the full 12 continuations.
 - Up/down arrow history fixed. Three causes were in play simultaneously: the Esc-to-CSI peek timeout (40 ms) was too tight for some terminals, VMIN/VTIME were never set in the manual termios setup so `read(1)` could return early with no bytes, and `\x1bOA`-style SS3 application-cursor-key sequences weren't handled. All three are addressed.
 
+## 8.0.12 — multi-task transcript economy
+
+Targets the "slow after 3-4 tasks" pattern by reducing per-turn token waste. The agent's API calls send the entire transcript on every turn; older messages keep paying tokens forever. This release adds four mechanisms that keep the working set small.
+
+1. **Stale tool-result pruning.** At the top of every turn, walk the transcript and replace older tool result bodies with a 240-char head plus a "[pruned: full result was N chars, re-call to fetch]" marker. Keeps the most recent six tool results full. A session that read a 500-line file 5 turns ago stops paying 2k+ tokens for it on every subsequent API call. The model can re-call any tool if it needs the rest.
+
+2. **`read_file` truncation at source.** Files longer than 1500 lines now return the first 100 + last 50 lines with a `[TRUNCATED ... use offset/limit for range]` marker. The new `offset` (1-indexed start line) and `limit` (line count) arguments let the model fetch any specific range instead of dragging the whole file into context. Schema advertises the new parameters so models discover them naturally.
+
+3. **Cached grammar probe.** The session-startup grammar capability probe is now cached to `~/.loom/cache/grammar/<key>.json` with a 7-day TTL. Subsequent sessions with the same model skip the 5-10 second live probe. Force a re-probe by deleting the cache file or setting `LMSTUDIO_NO_GRAMMAR=1`.
+
+4. **Lower auto-compact threshold.** `COMPACT_TRIGGER_RATIO` dropped from 0.75 to 0.60. Compaction kicks in earlier, leaving more usable headroom on the back half of long sessions before the model starts losing context.
+
+These compose with the existing 8.0.9 `cache_prompt: true` to give the agent a much smaller working set across turns. The stable prefix (system prompt + tool catalogue) stays cached, the dynamic tail (recent tool results + assistant messages) stays the only thing actively burning compute.
+
 ## 8.0.11 — Shift+Tab mode cycle (4 modes, Claude Code parity)
 
 Updated to four modes matching Claude Code exactly. Press Shift+Tab to cycle:
