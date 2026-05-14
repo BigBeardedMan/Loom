@@ -651,6 +651,18 @@ General-purpose 3B–4B models will usually skip `update_tasks` or call it once 
 - Zero-progress orchestrator guard. The continuation loop tracks consecutive turns where no real tool work happened (only narration + bare `update_tasks` calls) and breaks out after 2 unproductive rounds, returning control to the user instead of running through the full 12 continuations.
 - Up/down arrow history fixed. Three causes were in play simultaneously: the Esc-to-CSI peek timeout (40 ms) was too tight for some terminals, VMIN/VTIME were never set in the manual termios setup so `read(1)` could return early with no bytes, and `\x1bOA`-style SS3 application-cursor-key sequences weren't handled. All three are addressed.
 
+## 8.0.15 — fix mouse-click random-char injection
+
+Clicking inside the input box was inserting characters like `0;42;15` into the in-flight line. Cause: when a terminal has SGR mouse tracking enabled (vim or tmux often leave it on for the parent shell), a click emits `\x1b[<0;42;15M`. The editor's CSI handler only recognized digit-prefixed multi-byte sequences, so the `<` parameter prefix fell through to `_handle_csi("<")` (a no-op) and the trailing `0;42;15M` bytes were read as individual printable characters and inserted into the line.
+
+Two fixes layered:
+
+1. **Drain any CSI sequence that isn't one of the known single-byte commands** (A/B/C/D/H/F/Z). Anything else is multi-byte and gets consumed until its terminator (`~` or any alpha). Covers SGR mouse press/release (M / m), DEC private mode replies, function keys, and any other CSI sequence the terminal might send.
+
+2. **Explicitly disable all mouse tracking modes** at session start: `\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l`. Belt + suspenders so the terminal stops sending mouse events altogether even if a parent program (vim, tmux) left them on.
+
+Note: with this fix, mouse clicks are silently consumed rather than corrupting input. Click-to-position-cursor inside the input is a separate feature (would require enabling SGR mouse, parsing click coordinates, mapping them to a char offset in the wrapped line) — currently not implemented; cursor positioning is via arrow keys, Home/End, Ctrl-A/E.
+
 ## 8.0.14 — friendly install detection
 
 If someone runs `lmstudio` without LM Studio installed at all, the CLI now detects that and points them to the download page instead of erroring out with a Python URLError.

@@ -557,7 +557,19 @@ class BoxedLineEditor:
             # ESC[200~ ... ESC[201~. Without this, pasted newlines look
             # identical to Enter and we submit on the first \n in the
             # paste buffer, firing each pasted line as its own prompt.
-            sys.stdout.write("\033[?2004h")
+            #
+            # 8.0.15: also explicitly disable every mouse-tracking mode
+            # the terminal might have on from a prior program (vim,
+            # tmux, etc.). When mouse tracking is active, a single
+            # click in the input box generates ESC[<0;42;15M which our
+            # editor would otherwise leak as printable characters.
+            # ?1000 = X10 mouse, ?1002 = button-event, ?1003 = any-event,
+            # ?1006 = SGR encoding, ?1015 = urxvt encoding.
+            sys.stdout.write(
+                "\033[?2004h"
+                "\033[?1000l\033[?1002l\033[?1003l"
+                "\033[?1006l\033[?1015l"
+            )
             sys.stdout.flush()
             try:
                 self._render()
@@ -771,9 +783,29 @@ class BoxedLineEditor:
                         # whenever a single CSI byte arrived just past the
                         # 120ms window.
                         continue
-                    if nxt == "[" and seq.isdigit():
-                        # Multi-byte CSI (ESC[200~ paste-start, ESC[5~ pgup,
-                        # ESC[1;5A Ctrl-Up, etc.). Drain until ~ or letter.
+                    # 8.0.15: single-byte CSI commands we actually handle
+                    # (arrow keys, Home/End, Shift+Tab). Anything else is
+                    # a multi-byte sequence that must be drained to its
+                    # terminator, otherwise the trailing bytes leak as
+                    # printable input.
+                    #
+                    # The canonical offender is SGR mouse: clicking in
+                    # the box emits `\x1b[<0;42;15M`, where `<` is the
+                    # CSI parameter prefix. Pre-8.0.15 the handler hit
+                    # `_handle_csi("<")` (a no-op), then read each of
+                    # `0;42;15M` as a separate character and inserted
+                    # them into self.line.
+                    SINGLE_BYTE_CSI = "ABCDHFZ"
+                    if nxt == "[" and seq not in SINGLE_BYTE_CSI:
+                        # Multi-byte CSI. Drain until terminator: any
+                        # alpha (A-Z, a-z) or `~`. Common patterns:
+                        #   ESC[200~              bracketed paste start
+                        #   ESC[201~              bracketed paste end
+                        #   ESC[5~                Page Up
+                        #   ESC[1;5A              Ctrl-Up
+                        #   ESC[<0;42;15M         SGR mouse press
+                        #   ESC[<0;42;15m         SGR mouse release
+                        #   ESC[?2004h            bracketed paste enable
                         tail = seq
                         while True:
                             ch2 = self._read_with_timeout(0.12)
@@ -788,7 +820,9 @@ class BoxedLineEditor:
                             self._history_step(-1)
                         elif tail.endswith("B"):
                             self._history_step(+1)
-                        # Other multi-byte sequences (Page Up, etc.) ignored.
+                        # Mouse events (terminator M or m), DEC private
+                        # mode responses, function keys, etc. are
+                        # silently consumed without modifying the line.
                     else:
                         self._handle_csi(seq)
                 continue
