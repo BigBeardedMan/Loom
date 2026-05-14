@@ -651,6 +651,35 @@ General-purpose 3B–4B models will usually skip `update_tasks` or call it once 
 - Zero-progress orchestrator guard. The continuation loop tracks consecutive turns where no real tool work happened (only narration + bare `update_tasks` calls) and breaks out after 2 unproductive rounds, returning control to the user instead of running through the full 12 continuations.
 - Up/down arrow history fixed. Three causes were in play simultaneously: the Esc-to-CSI peek timeout (40 ms) was too tight for some terminals, VMIN/VTIME were never set in the manual termios setup so `read(1)` could return early with no bytes, and `\x1bOA`-style SS3 application-cursor-key sequences weren't handled. All three are addressed.
 
+## 8.0.19 — dual-load + per-turn routing (Claude-style)
+
+The user asked: "Why can't I use a low-end model, then have it switch mid-generation to a better one for tool calls?" 8.0.19 does the next best thing — loads two models simultaneously and routes each turn to the appropriate one.
+
+How it works:
+
+1. **At session start, dual-load both a planner and a coder.** `auto_load_dual_models` picks the best small fast model (default ~4B, jan-v1-4b on the test system) AND the best stronger coder-class (default ~9B, qwen/qwen3.5-9b). Both loaded with `--parallel 1` to keep memory usage minimal.
+
+2. **Per-turn routing in `pick_model_for_turn`.** The router scans the user message for intent:
+   - **Coder words** (write, create, build, scaffold, implement, fix, refactor, code, generate, function, class, module, etc.) → `coder_model`.
+   - **Explainer words** (explain, why, how does, summarize, describe) → `explainer_model` (falls back to planner).
+   - **Planner words** (plan, outline, design, what should we) → `planner_model`.
+   - **Default**: coder when set, else `state.model`.
+
+3. **Streaming completion stays on the picked model** for the duration of the turn. We don't (yet) swap mid-stream — that's a much harder problem because the inference state lives inside the model. Per-turn is the practical middle ground and covers 90% of the real win.
+
+Memory cost on the test system: 4B + 9B GGUFs at Q4 plus runtime = ~9 GB total. Easily fits alongside the model weights of either alone (~33 GB previously for the 31B Gemma).
+
+OOM fallback: if the second load OOMs, the agent continues with just the coder; the routing slots stay empty and `pick_model_for_turn` falls through to `state.model`. The banner shows `family qwen3 (native tools)` instead of dual.
+
+Flags:
+
+- `--dual-load` (default on, `LMSTUDIO_DUAL_LOAD=0` to disable).
+- `--no-dual-load` shorthand.
+- `--planner-size N` (default 4).
+- `--coder-size N` (default 9).
+
+About mid-stream model swap. Real Claude-style "switch model mid-generation" requires re-prompting the new model with the same conversation when a tool call header appears. That's a bigger feature (would need explicit stream-cancel + handoff prompt + KV state transfer). Per-turn routing covers the bulk of the perceived benefit. Open a follow-up if you want true mid-stream swap.
+
 ## 8.0.18 — fix the actual reason the update pill never showed
 
 Root cause from the user's running app log:

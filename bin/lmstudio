@@ -4242,23 +4242,43 @@ def branch_merge(state, name):
 # ---------- Multi-model routing --------------------------------------------
 
 def pick_model_for_turn(state, user_message=None):
-    """Decide which model to use for this turn. The model picks are:
-    - planner: when there's a pending task OR the message looks plan-y
-      ("plan", "create tasks", "what should we do")
-    - explainer: when there are no pending tasks and no fs mutations
-      requested ("explain", "why", "summarize")
-    - coder: anything else (the default for code-touching work)
+    """8.0.19: route each turn to the right loaded model. Priority:
 
-    Routes only when the corresponding override is set; otherwise stays
-    on state.model."""
-    plan_words = ("plan", "create tasks", "what should we", "outline",
-                  "design", "architecture")
-    explain_words = ("explain", "why", "how does", "summarize", "describe")
+      1. CODER words ("write/create/build/scaffold/implement/fix/
+         refactor/add/make/code/generate/file"). Force coder when set.
+      2. EXPLAINER words ("explain/why/how does/summarize/describe").
+         Use explainer when set, else planner.
+      3. PLANNER words ("plan/outline/design/what should we").
+         Use planner when set.
+      4. Default: coder if set, else state.model.
+
+    Coder is the safe default for code-touching work; the planner only
+    wins on pure-text turns where speed matters more than capability.
+    The model rotation happens at the API call level, so the streaming
+    response is whatever model is picked here for the duration of the
+    completion."""
+    code_words = (
+        "write", "create", "build", "scaffold", "implement", "code",
+        "generate", "fix", "refactor", "add ", "make a", "make the",
+        "set up", "set-up", "setup ", "file", "function", "class",
+        "module", "component", "endpoint", "schema", "migration",
+        "test for", "tests for", "rewrite",
+    )
+    plan_words = (
+        "plan", "outline", "design", "architecture", "what should we",
+        "what would", "should i", "should we", "approach for",
+    )
+    explain_words = (
+        "explain", "why", "how does", "how do", "summarize",
+        "describe", "what is", "tell me about",
+    )
     msg = (user_message or "").lower()
+    if any(w in msg for w in code_words) and state.coder_model:
+        return state.coder_model
+    if any(w in msg for w in explain_words):
+        return state.explainer_model or state.planner_model or state.model
     if any(w in msg for w in plan_words) and state.planner_model:
         return state.planner_model
-    if any(w in msg for w in explain_words) and state.explainer_model:
-        return state.explainer_model
     if state.coder_model:
         return state.coder_model
     return state.model
@@ -6374,6 +6394,81 @@ def pick_default_model(models, *, prefer_b=7, max_b=12):
         return None
     candidates.sort()
     return candidates[0][1]
+
+
+def auto_load_dual_models(base_url, *, planner_b=4, coder_b=9, max_b=12,
+                           ctx=16384, parallel=1, gpu="max"):
+    """8.0.19: load BOTH a small fast planner model and a stronger coder
+    model simultaneously, so per-turn routing has something to actually
+    route between. Returns (planner_id, coder_id) - either can be None
+    if loading that role failed (typically due to memory constraint).
+
+    The trade-off: dual-loading uses more memory (~9GB for 4B+9B Q4
+    GGUFs on top of the runtime) but enables Claude-style per-turn
+    model routing. Most coding sessions become noticeably better
+    because the coder model handles tool sequences while the planner
+    handles narration/Q&A turns quickly.
+
+    On OOM during the second load, returns (None, coder_id) so the
+    session continues on the single model. Caller decides what to do.
+
+    Memory floor is the coder model itself; the planner is the bonus.
+    If the user's machine can't fit even the coder, callers should
+    fall back to auto_load_default_model with a smaller target."""
+    available = fetch_available_models()
+    if not available:
+        return None, None, "no available models on disk"
+    # Pick the coder first using the existing logic (coder-bias).
+    coder = pick_default_model(available, prefer_b=coder_b, max_b=max_b)
+    if not coder:
+        return None, None, f"no model in 1-{max_b}B range"
+    # Pick the planner from the remaining candidates. Use a tighter
+    # max so we genuinely get a small fast model, not another mid-size.
+    planner_candidates = [m for m in available if m["key"] != coder]
+    planner = pick_default_model(planner_candidates,
+                                  prefer_b=planner_b,
+                                  max_b=planner_b + 2)
+    lms_cmd = _locate_lms_cli()
+    if not lms_cmd:
+        return None, None, "`lms` CLI not found"
+    # Wipe existing loads first so we don't fight stale identifiers.
+    try:
+        subprocess.run([lms_cmd, "unload", "--all"],
+                       capture_output=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        pass
+    # Load coder (bigger, takes longer).
+    cmd_coder = [lms_cmd, "load", coder, "-y",
+                 "--parallel", str(parallel), "-c", str(ctx)]
+    if gpu:
+        cmd_coder.extend(["--gpu", gpu])
+    try:
+        proc = subprocess.run(cmd_coder, capture_output=True, timeout=240)
+    except subprocess.TimeoutExpired:
+        return None, None, f"timeout loading coder {coder}"
+    if proc.returncode != 0:
+        err = (proc.stderr or b"").decode("utf-8", "replace")[:200]
+        return None, None, f"coder load failed: {err}"
+    if not planner:
+        return None, coder, f"coder {coder} loaded; no planner candidate"
+    # Load planner alongside.
+    cmd_planner = [lms_cmd, "load", planner, "-y",
+                   "--parallel", str(parallel), "-c", str(ctx)]
+    if gpu:
+        cmd_planner.extend(["--gpu", gpu])
+    try:
+        proc = subprocess.run(cmd_planner, capture_output=True, timeout=180)
+    except subprocess.TimeoutExpired:
+        return None, coder, f"coder {coder} loaded; planner timed out"
+    if proc.returncode != 0:
+        err = (proc.stderr or b"").decode("utf-8", "replace")[:200]
+        err_low = err.lower()
+        if any(h in err_low for h in _OOM_HINTS):
+            return None, coder, (f"coder {coder} loaded; planner "
+                                  f"{planner} skipped (insufficient RAM)")
+        return None, coder, f"coder loaded; planner load failed: {err}"
+    return planner, coder, (f"dual-loaded planner={planner} + "
+                             f"coder={coder} at {ctx}-tok context")
 
 
 def auto_load_default_model(base_url, *, prefer_b=7, max_b=12,
@@ -10290,6 +10385,25 @@ def main():
              "if a model is already loaded, the CLI may swap to a stronger "
              "coder-class model when one is on disk. Pass an explicit "
              "--model X to lock in a choice regardless.")
+    parser.add_argument("--dual-load", action="store_true",
+        default=os.environ.get("LMSTUDIO_DUAL_LOAD", "1") == "1",
+        help="At session start, load BOTH a small fast planner model AND "
+             "a stronger coder model simultaneously. Per-turn routing "
+             "then picks the right one based on intent: coder for "
+             "write/build/scaffold turns, planner for narration / Q&A. "
+             "Default on. Falls back to single-load if the second "
+             "model OOMs.")
+    parser.add_argument("--no-dual-load", dest="dual_load",
+        action="store_false",
+        help="Disable dual-loading. Single model only.")
+    parser.add_argument("--planner-size", type=int,
+        default=int(os.environ.get("LMSTUDIO_PLANNER_SIZE", "4")),
+        help="Preferred planner model size (B params). Default 4.")
+    parser.add_argument("--coder-size", type=int,
+        default=int(os.environ.get("LMSTUDIO_CODER_SIZE", "9")),
+        help="Preferred coder model size (B params). Default 9 - "
+             "qwen3.5-9b class fits the typical Mac with plenty of "
+             "RAM headroom alongside a 4B planner.")
     parser.add_argument("--loop", action="store_true",
         help="Autonomous-loop mode. After each turn, re-enter the session "
              "until the model calls `loop_complete`.")
@@ -10364,6 +10478,39 @@ def main():
                     prefer_b=args.default_size,
                     max_b=args.default_size_max,
                 )
+
+        # 8.0.19: dual-load. If the user wants Claude-style per-turn
+        # routing (small fast model for narration, big model for
+        # coding work), load BOTH at session start. Falls through to
+        # the single-model auto-route paths below on any failure.
+        if args.dual_load and not args.no_auto_route:
+            if not args.no_banner and not args.json:
+                print(style(
+                    f"  ▸ dual-loading planner ({args.planner_size}B) + "
+                    f"coder ({args.coder_size}B) for per-turn routing…",
+                    "tip"))
+            planner, coder, dual_msg = auto_load_dual_models(
+                args.base_url,
+                planner_b=args.planner_size,
+                coder_b=args.coder_size,
+                max_b=args.default_size_max,
+            )
+            if coder:
+                args.model = coder
+                # Stash for state hookup after AgentState exists.
+                args._dual_loaded_coder = coder
+                args._dual_loaded_planner = planner
+                if not args.no_banner and not args.json:
+                    print(style(f"  ▸ {dual_msg}", "ok"))
+                # Skip the rest of the single-load branches.
+                loaded = [coder]
+                optimal_from_disk = coder
+            else:
+                if not args.no_banner and not args.json:
+                    print(style(
+                        f"  ▸ dual-load failed: {dual_msg}; falling back "
+                        f"to single-model auto-route", "warning"))
+                # Fall through to the normal single-load logic below.
 
         if len(loaded) == 1:
             # A model is loaded. Auto-route may want to swap it for a
@@ -10632,6 +10779,15 @@ def main():
     state.planner_model = args.planner_model or ""
     state.coder_model = args.coder_model or ""
     state.explainer_model = args.explainer_model or ""
+    # 8.0.19: if dual-load succeeded, override the routing slots so
+    # pick_model_for_turn has the right targets. Explicit --planner-model
+    # / --coder-model flags still win because they were set above.
+    dual_planner = getattr(args, "_dual_loaded_planner", None)
+    dual_coder = getattr(args, "_dual_loaded_coder", None)
+    if dual_planner and not state.planner_model:
+        state.planner_model = dual_planner
+    if dual_coder and not state.coder_model:
+        state.coder_model = dual_coder
     if args.no_prefetch:
         state.prefetch_enabled = False
     if args.auto_test:
