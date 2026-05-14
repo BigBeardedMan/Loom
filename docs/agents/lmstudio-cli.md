@@ -651,6 +651,20 @@ General-purpose 3B–4B models will usually skip `update_tasks` or call it once 
 - Zero-progress orchestrator guard. The continuation loop tracks consecutive turns where no real tool work happened (only narration + bare `update_tasks` calls) and breaks out after 2 unproductive rounds, returning control to the user instead of running through the full 12 continuations.
 - Up/down arrow history fixed. Three causes were in play simultaneously: the Esc-to-CSI peek timeout (40 ms) was too tight for some terminals, VMIN/VTIME were never set in the manual termios setup so `read(1)` could return early with no bytes, and `\x1bOA`-style SS3 application-cursor-key sequences weren't handled. All three are addressed.
 
+## 8.0.10 — Shift+Tab mode cycle
+
+Claude Code-style mode switcher in the input box. Press Shift+Tab to cycle through three modes:
+
+- **default** — permissions gate dangerous tools. Normal behavior.
+- **PLAN** — read-only. Blocks every write_file / edit_file / multi_edit / run_bash / background_bash / git_commit / ship_it / spawn_agent call at the dispatcher level. Allowed: read_file, list_dir, glob, grep, find_todos, git read-only tools, update_tasks, recall.
+- **AUTO-ACCEPT** — flips `permissions.yolo = True` so permission prompts are skipped. Equivalent to `--yolo` for the duration the mode is active.
+
+The active mode renders as a colored pill in the input box's top border: `╭── [PLAN] ──────╮`. Default mode shows no pill (clean look for the common case).
+
+On every mode change, a synthetic system note is appended to the transcript so the model knows about the switch on the next turn ("USER toggled mode → PLAN: read-only..."). The hard block in `_dispatch_tool` still catches violations regardless, so a model that ignores the system note can't accidentally write files in plan mode.
+
+For terminals without Shift+Tab (some `screen` / `tmux` configs), `/mode <name>` switches by name. `/mode` with no argument shows the cycle and current setting.
+
 ## 8.0.9 — multi-task performance
 
 Five additions targeting wall-clock latency on multi-tool workflows. None of them help GPU throughput, but together they shave a lot of waste off each round-trip.

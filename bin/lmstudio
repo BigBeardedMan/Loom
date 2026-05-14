@@ -261,6 +261,7 @@ def _visible_len(s):
 
 TIPS = [
     "↑ / ↓ walk through previous prompts · Ctrl-R reverse-search history",
+    "Shift+Tab cycles modes: default → PLAN (read-only) → AUTO-ACCEPT (yolo)",
     "Esc during a running turn stops it · Ctrl-D or /quit to exit",
     "type @path/to/file to inline a file's contents (Tab completes)",
     "slash commands: /help, /clear, /model, /bash, /cwd, /save, /resume, /cost",
@@ -509,7 +510,7 @@ class BoxedLineEditor:
     LEAD_VISIBLE = 4   # "│ ❯ " on first row
     CONT_VISIBLE = 4   # "│   " on continuation rows (aligned under text)
 
-    def __init__(self, history):
+    def __init__(self, history, state=None):
         self.history = list(history)
         self.history.append("")
         self.hist_idx = len(self.history) - 1
@@ -523,6 +524,10 @@ class BoxedLineEditor:
         # land *above* the box and march it up the screen on every redraw.
         self._cursor_box_row = 0
         self._frozen_width = box_width()  # locked for the editor's lifetime
+        # 8.0.10: weak reference to AgentState for the Shift+Tab mode
+        # cycle. Optional - editor still works for tools that build a
+        # bare editor outside the agent loop.
+        self.state = state
 
     @property
     def _inner_width(self):
@@ -641,6 +646,22 @@ class BoxedLineEditor:
         inner = self._inner_width
         bar = "─" * (width - 2)
         top = style("╭" + bar + "╮", "border")
+        # 8.0.10: when a non-default mode is active, render its pill in
+        # the top border. Format: ╭── [MODE] ──...──╮. Skips silently
+        # for default mode so the editor looks normal in the common case.
+        if self.state is not None and self.state.mode_index != 0:
+            mode = self.state.mode
+            pill = f" [{mode['label']}] "
+            pill_visible = len(pill)
+            if pill_visible + 4 < width:
+                # 2 dashes on the left, then pill (styled), then dashes to
+                # fill out the rest of the bar. Total visible matches `bar`.
+                left_dashes = "─" * 2
+                right_dashes = "─" * (width - 2 - 2 - pill_visible)
+                styled_pill = style(pill, mode["color"])
+                top = (style("╭" + left_dashes, "border")
+                       + styled_pill
+                       + style(right_dashes + "╮", "border"))
         bot = style("╰" + bar + "╯", "border")
         right = style("│", "border")
 
@@ -883,6 +904,12 @@ class BoxedLineEditor:
         elif seq == "F":
             self.col = len(self.line)
             self._render()
+        elif seq == "Z":
+            # 8.0.10: Shift+Tab cycles the mode (default -> plan ->
+            # auto-accept -> default). Redraw picks up the new pill.
+            if self.state is not None:
+                self.state.cycle_mode()
+                self._render()
 
     def _history_step(self, delta):
         target = self.hist_idx + delta
@@ -3130,6 +3157,37 @@ SAFE_PARALLEL_TOOLS = {
 
 # Tools that mutate the filesystem and therefore get journaled for /undo.
 FS_MUTATING_TOOLS = {"write_file", "edit_file", "multi_edit"}
+
+
+# 8.0.10 — Shift+Tab mode cycle. Three modes parallel to Claude Code.
+# AgentState.mode_index indexes into this list; cycle_mode() rotates.
+MODES = [
+    {
+        "name":  "default",
+        "label": "default",
+        "color": "value",
+        "blurb": "permissions gate dangerous tools",
+    },
+    {
+        "name":  "plan",
+        "label": "PLAN",
+        "color": "tip",
+        "blurb": "read-only: no writes, edits, or shell",
+    },
+    {
+        "name":  "auto-accept",
+        "label": "AUTO-ACCEPT",
+        "color": "ok",
+        "blurb": "skip permission prompts",
+    },
+]
+
+# Tools blocked in plan mode. Caught by _dispatch_tool before the call
+# reaches the tool function.
+PLAN_MODE_BLOCKED = (FS_MUTATING_TOOLS | {
+    "run_bash", "background_bash", "kill_shell",
+    "git_commit", "ship_it", "spawn_agent",
+})
 
 
 # =============================================================================
@@ -7487,6 +7545,15 @@ class AgentState:
         # saves the model from filler-prose tokens we'd discard anyway.
         # Only meaningful when adapter.native_tools is False.
         self.early_stop_text_tool_call = True
+        # 8.0.10 — Claude Code-style mode cycle. Shift+Tab in the
+        # BoxedLineEditor advances mode_index by one, wrapping at the
+        # end of MODES. Each mode toggles a small bundle of behaviors:
+        #   default     - permissions gate FS mutations + bash
+        #   plan        - blocks every write tool + run_bash entirely
+        #   auto-accept - permissions.yolo = True; no prompts
+        # The current mode pill renders in the box top border so the
+        # user sees what they're in before submitting.
+        self.mode_index = 0
         # Auto-compaction. Triggered when approx_tokens / context_window
         # exceeds COMPACT_TRIGGER_RATIO. Counter visible in the footer.
         self.auto_compact = True
@@ -7613,8 +7680,59 @@ class AgentState:
         # schema. /tools full overrides back to False.
         self.essential_tools_only = self.adapter.default_essential_only
 
+    @property
+    def mode(self):
+        """Current mode dict from MODES."""
+        return MODES[self.mode_index % len(MODES)]
+
+    def cycle_mode(self):
+        """Advance to the next mode and apply side effects. Called from
+        BoxedLineEditor on Shift+Tab. Returns the new mode dict."""
+        self.mode_index = (self.mode_index + 1) % len(MODES)
+        new = self.mode
+        if new["name"] == "auto-accept":
+            # YOLO: permission prompts off. Stays on until cycled away.
+            self.permissions.yolo = True
+        else:
+            self.permissions.yolo = self.yolo
+        # Inject a system note so the model learns about the switch on
+        # the next turn. The hard block in _dispatch_tool catches plan
+        # mode violations even when the model misses this hint, but
+        # telling it upfront avoids wasted attempts.
+        note = f"USER toggled mode → {new['label']}: {new['blurb']}."
+        if new["name"] == "plan":
+            note += (
+                "\n\nYou are now in PLAN MODE. Read-only. Do NOT call "
+                "write_file, edit_file, multi_edit, run_bash, "
+                "git_commit, ship_it, or spawn_agent. Plan in prose; "
+                "the user will toggle out of plan mode when ready to act."
+            )
+        elif new["name"] == "auto-accept":
+            note += (
+                "\n\nAUTO-ACCEPT mode: permission prompts are off. "
+                "Be careful with destructive actions - the user is "
+                "trusting you to act without confirmation."
+            )
+        self.transcript.append({"role": "system", "content": note})
+        return new
+
     def system_message(self):
         body = self.system_override or self.system_prompt
+        # 8.0.10: in plan mode, prepend a hard rule so the model knows
+        # it's read-only this round.
+        if self.mode["name"] == "plan":
+            body = (
+                "# PLAN MODE\n\n"
+                "You are in PLAN MODE this turn. Do NOT call any tool that "
+                "writes, edits, deletes, commits, runs shell, or spawns "
+                "subagents. Allowed tools: read_file, list_dir, glob, "
+                "grep, find_todos, git_status, git_diff, git_log, "
+                "git_blame, git_show, ast_summary, symbol_search, "
+                "browser_screenshot, web_search, web_fetch, update_tasks "
+                "(for tracking only), recall, project_knowledge_*. Plan "
+                "and propose changes in prose. The user will switch out "
+                "of PLAN MODE when ready to act.\n\n"
+            ) + body
         # 8.0.6: for non-native-tool families (Gemma, Phi-3, Llama 2),
         # PREPEND the text-mode instructions so they're the first thing
         # the model sees - small / instruction-tuned models otherwise
@@ -8328,6 +8446,21 @@ def _dispatch_tool(state, name, args, *, narration=""):
             return hit["result"]
 
     try:
+        # 8.0.10: plan mode hard-block. Catches any write/edit/bash/spawn
+        # call regardless of permissions. Returns a clean error string
+        # so the model sees what's blocked and why.
+        if (state.mode["name"] == "plan"
+                and name in PLAN_MODE_BLOCKED):
+            state.tool_history.append({
+                "name": name, "args": _canonical(args_in), "error": True,
+            })
+            return (
+                f"Error: `{name}` is blocked - PLAN MODE is active. "
+                "This turn is read-only. Continue planning, then Shift+Tab "
+                "out of PLAN MODE before taking action. Allowed: read_file, "
+                "list_dir, glob, grep, find_todos, git_status/diff/log, "
+                "update_tasks."
+            )
         if name == "update_tasks":
             # 8.0.3: refuse calls that omit `tasks` entirely. Pre-8.0.3 a
             # bare update_tasks({}) call would silently clear the visible
@@ -8550,6 +8683,7 @@ class SlashRouter:
             "/model-info": self.cmd_model_info,
             "/tools":   self.cmd_tools,
             "/autoscale": self.cmd_autoscale,
+            "/mode":    self.cmd_mode,
         }
 
     def names(self):
@@ -8652,6 +8786,41 @@ class SlashRouter:
                 "response text. Performance is acceptable for write_file "
                 "/ edit_file workloads but multi-tool turns may be slower.",
                 "dim"))
+        return "continue"
+
+    def cmd_mode(self, rest):
+        """Show the active mode or switch to one by name. Same cycle as
+        Shift+Tab but typed: /mode (show), /mode plan, /mode default,
+        /mode auto-accept."""
+        rest = rest.strip().lower()
+        if not rest:
+            cur = self.state.mode
+            print(style(f"  mode: {cur['label']}", "key"))
+            print(style(f"  {cur['blurb']}", "dim"))
+            print()
+            for i, m in enumerate(MODES):
+                marker = "*" if i == self.state.mode_index else " "
+                print(f"   {marker} {style(m['label'], m['color'])} "
+                      f"{style('— ' + m['blurb'], 'dim')}")
+            print()
+            print(style("  /mode <name> to switch · "
+                        "Shift+Tab to cycle inline", "dim"))
+            return "continue"
+        names = [m["name"] for m in MODES]
+        targets = {n: i for i, n in enumerate(names)}
+        targets.update({m["label"].lower(): i for i, m in enumerate(MODES)})
+        if rest not in targets:
+            print(style(f"  unknown mode: {rest}", "warning"))
+            print(style(f"  available: {', '.join(names)}", "dim"))
+            return "continue"
+        # Roll the index until we reach the target so cycle_mode() side
+        # effects all fire in order. (Simpler than duplicating the
+        # transition logic here.)
+        while self.state.mode_index != targets[rest]:
+            self.state.cycle_mode()
+        cur = self.state.mode
+        print(style(f"  mode: {cur['label']} — {cur['blurb']}",
+                    cur["color"]))
         return "continue"
 
     def cmd_autoscale(self, rest):
@@ -9868,7 +10037,8 @@ def main():
 
     while True:
         draw_status_footer(state)
-        editor = BoxedLineEditor(history=BoxedLineEditor.load_history())
+        editor = BoxedLineEditor(history=BoxedLineEditor.load_history(),
+                                  state=state)
         try:
             user_in = editor.read().strip()
         except EOFError:
