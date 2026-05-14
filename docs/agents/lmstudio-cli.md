@@ -651,6 +651,32 @@ General-purpose 3B–4B models will usually skip `update_tasks` or call it once 
 - Zero-progress orchestrator guard. The continuation loop tracks consecutive turns where no real tool work happened (only narration + bare `update_tasks` calls) and breaks out after 2 unproductive rounds, returning control to the user instead of running through the full 12 continuations.
 - Up/down arrow history fixed. Three causes were in play simultaneously: the Esc-to-CSI peek timeout (40 ms) was too tight for some terminals, VMIN/VTIME were never set in the manual termios setup so `read(1)` could return early with no bytes, and `\x1bOA`-style SS3 application-cursor-key sequences weren't handled. All three are addressed.
 
+## 8.0.7 — auto-scale model context at session start
+
+LM Studio's JIT loader gives many models a tiny default `loaded_context_length` (often just 4096) even when the model's GGUF supports 32k, 128k, or 262k. The lmstudio CLI now bumps this automatically.
+
+How it works:
+
+1. At session start, query `/api/v0/models` for the loaded model's `loaded_context_length` and `max_context_length`.
+2. If `loaded_context_length < --autoscale-min` (default 8192) AND the cap allows more, build a candidate ladder: `min(autoscale-max, cap, loaded * 4)` at 100% / 75% / 50% / 33% / 25%.
+3. For each candidate (highest first), shell out to `lms load <model> -c <target> -y --gpu max`. On a non-OOM error, abort. On an OOM error ("insufficient system resources", "out of memory", "would likely overload"), step down to the next candidate.
+4. Stop at the first successful load. Update the status footer with the new size.
+
+Hard cases handled cleanly:
+
+- Very large models on tight RAM (e.g. Gemma 4 31B on 36 GB) - the ladder exhausts, the agent logs a clear warning, and starts the session on the smaller context. Tool surface auto-trims to the essentials.
+- `lms` not on PATH - falls back to `~/.lmstudio/bin/lms`. If neither exists, skips autoscale with a one-line note.
+- Server cold - autoscale fails silently and the agent reports the underlying connection error on the next call.
+
+Manual control:
+
+- `--no-autoscale` skips at session start.
+- `--autoscale-min N` raises or lowers the threshold (LMSTUDIO_AUTOSCALE_MIN env var).
+- `--autoscale-max N` caps the ladder's top candidate.
+- `/autoscale <target>` mid-session to bump again. `/autoscale max` targets the model's cap. `/autoscale` with no argument shows current loaded/cap values.
+
+Also: `fetch_model_context_window` now reads `loaded_context_length` (the runtime capacity) rather than `max_context_length` (the GGUF cap). The status footer no longer shows misleading "262k context" for a model actually loaded with 4k.
+
 ## 8.0.6 — text-mode tool calling actually works on Gemma
 
 The 8.0.5 framework was correct in shape but the model still wouldn't tool-call from a prose-heavy plan. 8.0.6 adds three reinforcements so Gemma (and other text-mode families) reliably emit JSON tool calls instead of writing essays:

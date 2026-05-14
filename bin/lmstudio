@@ -5831,7 +5831,28 @@ def fetch_model_context_window(base_url, model_id):
     """Ask LM Studio's /api/v0/models how big the loaded model's context
     is, so we can show "X / Y tok (Z%)" in the status footer like Claude
     Code does. Returns None on any failure - the footer just shows the
-    raw token count when we don't know the cap."""
+    raw token count when we don't know the cap.
+
+    8.0.7: prefer `loaded_context_length` (the actual runtime capacity)
+    over `max_context_length` (the model's hard cap from the GGUF). The
+    two can differ wildly - e.g. a 262k-cap Gemma 4 model loaded with
+    only 4k of context. The status footer should show what the model
+    CAN ACCEPT, not what it could accept if reloaded."""
+    info = fetch_model_info(base_url, model_id)
+    if not info:
+        return None
+    ctx = (info.get("loaded_context_length")
+           or info.get("context_length")
+           or info.get("max_context_length"))
+    if isinstance(ctx, int) and ctx > 0:
+        return ctx
+    return None
+
+
+def fetch_model_info(base_url, model_id):
+    """Return the full /api/v0/models entry for the named model id, or
+    None when LM Studio doesn't expose v0 or the model isn't listed.
+    Used by both context detection and auto-scaling."""
     base = base_url.rstrip("/")
     v0_url = (base[:-len("/v1")] + "/api/v0/models"
               if base.endswith("/v1") else base + "/api/v0/models")
@@ -5841,10 +5862,112 @@ def fetch_model_context_window(base_url, model_id):
         return None
     for entry in v0.get("data") or []:
         if entry.get("id") == model_id:
-            ctx = entry.get("max_context_length") or entry.get("context_length")
-            if isinstance(ctx, int) and ctx > 0:
-                return ctx
+            return entry
     return None
+
+
+def _locate_lms_cli():
+    """Find the lms CLI. Standard install lives at ~/.lmstudio/bin/lms;
+    PATH lookup is the fallback."""
+    on_path = shutil.which("lms")
+    if on_path:
+        return on_path
+    candidate = Path.home() / ".lmstudio" / "bin" / "lms"
+    if candidate.is_file() and os.access(candidate, os.X_OK):
+        return str(candidate)
+    return None
+
+
+_OOM_HINTS = (
+    "insufficient system resources",
+    "would likely overload",
+    "out of memory",
+    "vram",
+    "ggml_metal",
+    "metalbuffer_new",
+    "failed to load model",
+)
+
+
+def auto_scale_context(base_url, model_id, target_minimum,
+                       max_target=32768, gpu="max"):
+    """If the model's loaded_context_length is below target_minimum AND
+    its max_context_length supports more, reload via the `lms` CLI with
+    a larger context. Returns (success, message, new_context).
+
+    8.0.7: when LM Studio refuses the requested size with an OOM-class
+    error, we step the target down (75% -> 50% -> 33% -> 25%) and retry
+    until either a load succeeds or we exhaust the candidate ladder.
+    This makes the autoscale safe to enable by default - it won't lock
+    a user with a 16GB Mac out of the agent just because the model's
+    GGUF cap is 262k. The bumped context is still always >= the prior
+    loaded amount, never smaller.
+
+    A 4k Gemma 4 31B canonically fails at 16k (~37GB needed) but
+    succeeds at 6-8k (~22-25GB). The ladder finds the sweet spot
+    automatically."""
+    info = fetch_model_info(base_url, model_id)
+    if not info:
+        return False, "could not query /api/v0/models", None
+    loaded = info.get("loaded_context_length")
+    cap = info.get("max_context_length")
+    if not isinstance(loaded, int) or loaded <= 0:
+        return False, ("loaded_context_length unavailable; LM Studio "
+                        "may be too old"), None
+    if loaded >= target_minimum:
+        return True, (f"loaded context is {loaded} (>= target "
+                      f"{target_minimum}); no reload needed"), loaded
+    if isinstance(cap, int) and cap > 0:
+        upper = min(max_target, cap)
+    else:
+        upper = max_target
+    initial_target = max(target_minimum, min(upper, loaded * 4))
+    if initial_target <= loaded:
+        return False, (f"no headroom: loaded {loaded}, "
+                       f"max_target {max_target}, cap {cap}"), loaded
+    lms_cmd = _locate_lms_cli()
+    if not lms_cmd:
+        return False, "`lms` CLI not found at ~/.lmstudio/bin/lms or on PATH", loaded
+    # Build the OOM-retry ladder. Each step has to remain strictly larger
+    # than the currently-loaded context, otherwise we'd be downgrading.
+    candidates = []
+    for frac in (1.0, 0.75, 0.5, 0.33, 0.25):
+        c = max(loaded + 1, int(initial_target * frac))
+        # Round to a multiple of 1024 so we don't pick weird values.
+        c = (c // 1024) * 1024 if c >= 1024 else c
+        if c > loaded and c not in candidates:
+            candidates.append(c)
+    last_error = ""
+    for cand in candidates:
+        cmd = [lms_cmd, "load", model_id, "-c", str(cand), "-y"]
+        if gpu:
+            cmd.extend(["--gpu", gpu])
+        try:
+            proc = subprocess.run(cmd, capture_output=True, timeout=240)
+        except subprocess.TimeoutExpired:
+            last_error = f"timeout at {cand}"
+            continue
+        if proc.returncode == 0:
+            after = fetch_model_info(base_url, model_id)
+            new_loaded = (after.get("loaded_context_length")
+                          if after else None)
+            if isinstance(new_loaded, int) and new_loaded > loaded:
+                return True, (f"context bumped {loaded} -> {new_loaded}"
+                              + (f" (requested {cand})" if new_loaded != cand
+                                 else "")), new_loaded
+            return True, (f"lms returned 0 but loaded context still "
+                          f"{new_loaded}"), new_loaded
+        err_raw = (proc.stderr or b"").decode("utf-8", "replace")
+        err_low = err_raw.lower()
+        last_error = err_raw.strip()[:200]
+        if any(h in err_low for h in _OOM_HINTS):
+            # OOM-class - back off and try a smaller candidate.
+            continue
+        # Non-OOM failure (bad model id, server down). Stop the ladder.
+        return False, f"lms load failed: {last_error}", loaded
+    return False, (f"all targets exhausted; smallest tried "
+                   f"{candidates[-1] if candidates else '?'}; "
+                   f"last error: {last_error}"), loaded
 
 
 def fetch_loaded_models(base_url):
@@ -8331,6 +8454,7 @@ class SlashRouter:
             "/memory":  self.cmd_memory,
             "/model-info": self.cmd_model_info,
             "/tools":   self.cmd_tools,
+            "/autoscale": self.cmd_autoscale,
         }
 
     def names(self):
@@ -8433,6 +8557,47 @@ class SlashRouter:
                 "response text. Performance is acceptable for write_file "
                 "/ edit_file workloads but multi-tool turns may be slower.",
                 "dim"))
+        return "continue"
+
+    def cmd_autoscale(self, rest):
+        """Manually trigger context auto-scale, or query current state."""
+        rest = rest.strip()
+        info = fetch_model_info(self.state.base_url, self.state.model)
+        if not info:
+            print(style("  could not query /api/v0/models", "warning"))
+            return "continue"
+        loaded = info.get("loaded_context_length")
+        cap = info.get("max_context_length")
+        print(style(f"  model:     {self.state.model}", "key"))
+        print(style(f"  loaded:    {loaded}", "value"))
+        print(style(f"  cap:       {cap}", "dim"))
+        if not rest:
+            print(style(
+                "  usage: /autoscale <target>  - bump context to <target>\n"
+                "         /autoscale max       - bump to model cap\n"
+                "         /autoscale 32768     - bump to 32k", "dim"))
+            return "continue"
+        if rest == "max":
+            target = cap
+        else:
+            try:
+                target = int(rest)
+            except ValueError:
+                print(style(f"  invalid target: {rest}", "err"))
+                return "continue"
+        if not isinstance(target, int) or target <= 0:
+            print(style("  invalid target", "err"))
+            return "continue"
+        ok, msg, new_loaded = auto_scale_context(
+            self.state.base_url, self.state.model,
+            target_minimum=target, max_target=target,
+        )
+        if ok:
+            print(style(f"  {msg}", "ok"))
+            if new_loaded:
+                self.state.context_window = new_loaded
+        else:
+            print(style(f"  {msg}", "err"))
         return "continue"
 
     def cmd_tools(self, rest):
@@ -9224,6 +9389,24 @@ def main():
              "score the turn and save a lesson to project knowledge.")
     parser.add_argument("--no-plugins", action="store_true",
         help="Skip auto-loading ~/.loom/tools/*.py plugins.")
+    parser.add_argument("--no-autoscale", action="store_true",
+        default=os.environ.get("LMSTUDIO_NO_AUTOSCALE", "0") == "1",
+        help="Skip the session-start auto-scale of the model's loaded "
+             "context length. By default if the loaded context is below "
+             "--autoscale-min, we reload via the `lms` CLI with a "
+             "larger context up to --autoscale-max or the model's cap.")
+    parser.add_argument("--autoscale-min", type=int,
+        default=int(os.environ.get("LMSTUDIO_AUTOSCALE_MIN", "8192")),
+        help="Minimum loaded_context_length to accept without reloading. "
+             "Default 8192 fits the essentials tool schema + most "
+             "prompts. Pick 16384+ if you have RAM headroom; 4096 "
+             "to disable.")
+    parser.add_argument("--autoscale-max", type=int,
+        default=int(os.environ.get("LMSTUDIO_AUTOSCALE_MAX", "32768")),
+        help="Hard cap on the autoscale target. The reload picks "
+             "min(autoscale_max, model_cap, max(autoscale_min, loaded*4)). "
+             "If the requested size OOMs, the ladder steps down 75% -> "
+             "50% -> 33% -> 25% until LM Studio accepts.")
     parser.add_argument("--loop", action="store_true",
         help="Autonomous-loop mode. After each turn, re-enter the session "
              "until the model calls `loop_complete`.")
@@ -9307,6 +9490,40 @@ def main():
         yolo=args.yolo, theme_name=args.theme, mcp_clients=mcp_clients,
         wrap=not args.no_wrap,
     )
+    # 8.0.7: auto-scale the model's loaded context BEFORE we measure it,
+    # so a model loaded with 4k of context (LM Studio's tiny JIT default
+    # for some Gemma / Phi / Llama 3 builds) gets bumped via the `lms`
+    # CLI. The full tool schema set is ~5k tokens; system prompt +
+    # workspace tree + first user message usually push past 4k before
+    # the model emits a token. When LM Studio refuses the target with
+    # an OOM, auto_scale_context steps down through 75% / 50% / 33% /
+    # 25% candidates until either a load succeeds or the model's memory
+    # footprint just won't shrink further (very large models on
+    # memory-constrained systems). Skip with --no-autoscale.
+    if not args.no_autoscale:
+        ok, msg, new_ctx = auto_scale_context(
+            args.base_url, args.model,
+            target_minimum=args.autoscale_min,
+            max_target=args.autoscale_max,
+        )
+        if not args.no_banner and not args.json:
+            if ok and new_ctx and "bumped" in msg:
+                print(style(f"  ▸ autoscale: {msg}", "tip"))
+            elif ok:
+                print(style(f"  ▸ autoscale: {msg}", "dim"))
+            else:
+                # Non-fatal: continue with whatever context LM Studio
+                # has loaded. Make sure the user knows they may need a
+                # smaller model if tool calls fail.
+                print(style(f"  ▸ autoscale could not bump context: {msg}",
+                            "dim"))
+                if new_ctx and new_ctx < 8192:
+                    print(style(
+                        f"  ▸ running on {new_ctx}-token context - the "
+                        f"agent will trim tools and may struggle on "
+                        f"complex prompts. Consider a smaller model "
+                        f"or `lms load <model> -c 8192` manually.",
+                        "warning"))
     state.context_window = fetch_model_context_window(args.base_url, args.model)
     state.grammar_supported = probe_grammar_support(args.base_url, state.model)
     # Tool-surface fits: when the model's reported context is tight (under
