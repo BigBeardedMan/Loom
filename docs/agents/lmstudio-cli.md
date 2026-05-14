@@ -651,6 +651,26 @@ General-purpose 3B–4B models will usually skip `update_tasks` or call it once 
 - Zero-progress orchestrator guard. The continuation loop tracks consecutive turns where no real tool work happened (only narration + bare `update_tasks` calls) and breaks out after 2 unproductive rounds, returning control to the user instead of running through the full 12 continuations.
 - Up/down arrow history fixed. Three causes were in play simultaneously: the Esc-to-CSI peek timeout (40 ms) was too tight for some terminals, VMIN/VTIME were never set in the manual termios setup so `read(1)` could return early with no bytes, and `\x1bOA`-style SS3 application-cursor-key sequences weren't handled. All three are addressed.
 
+## 8.0.17 — session-start auto-route (force the upgrade)
+
+8.0.16 fixed the auto-load picker but auto-load only fires when nothing is loaded. A user with a 4B model already loaded from a prior session stayed on that model forever, even when their qwen3.5-9b was sitting on disk unused.
+
+8.0.17 makes auto-route actually swap. At session start:
+
+1. Read the currently-loaded models from `/api/v0/models`.
+2. Compute the optimal pick from disk via `pick_default_model` (coder-family bias, prefer 7B, cap 12B).
+3. If a model is loaded but the optimal pick differs, unload the loaded one and load the optimal via `lms load ... --parallel 1 -c 16384`.
+
+Side effects:
+
+- Explicit `--model X` skips the swap entirely.
+- `--no-auto-route` (or `LMSTUDIO_NO_AUTO_ROUTE=1`) skips the swap and uses whatever's loaded.
+- Multiple models loaded: pick the optimal one of them.
+
+Dry-run on the test system: `jan-v1-4b` loaded → optimal pick `qwen/qwen3.5-9b` → swap planned. After install, every session with auto-route on will move the user onto a coder-class model when one is available, no manual `lms load` required.
+
+The swap costs ~10 seconds (unload + reload). Trade-off: one-time tax for a measurably stronger model for the rest of the session. Use `--no-auto-route` if you want the launch to be instant.
+
 ## 8.0.16 — coder-aware default + faster update pill
 
 Two real fixes from the field.

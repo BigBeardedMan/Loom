@@ -10284,6 +10284,12 @@ def main():
         help="Hard upper bound on auto-load size in billions. Default 12 "
              "lets a 9B qwen-coder beat a 7B gemma when both are on disk. "
              "Larger models skipped to keep startup fast.")
+    parser.add_argument("--no-auto-route", action="store_true",
+        default=os.environ.get("LMSTUDIO_NO_AUTO_ROUTE", "0") == "1",
+        help="Skip the session-start auto-route. Without this flag, even "
+             "if a model is already loaded, the CLI may swap to a stronger "
+             "coder-class model when one is on disk. Pass an explicit "
+             "--model X to lock in a choice regardless.")
     parser.add_argument("--loop", action="store_true",
         help="Autonomous-loop mode. After each turn, re-enter the session "
              "until the model calls `loop_complete`.")
@@ -10339,8 +10345,60 @@ def main():
         except RuntimeError as e:
             print(style(f"error: {e}", "err"), file=sys.stderr)
             sys.exit(2)
+        # 8.0.17: compute the optimal model FROM DISK once, then use it
+        # as the auto-route target regardless of what's currently
+        # loaded. Without this step, a user who already had a tiny 4B
+        # loaded (perhaps from a prior auto-load) stayed on that model
+        # forever even when their 9B qwen-coder was sitting on disk
+        # unused. Auto-route forces the upgrade so coding tasks aren't
+        # silently bottlenecked by a generalist 4B.
+        optimal_from_disk = None
+        if not args.no_auto_route:
+            try:
+                _available = fetch_available_models()
+            except Exception:
+                _available = []
+            if _available:
+                optimal_from_disk = pick_default_model(
+                    _available,
+                    prefer_b=args.default_size,
+                    max_b=args.default_size_max,
+                )
+
         if len(loaded) == 1:
-            args.model = loaded[0]
+            # A model is loaded. Auto-route may want to swap it for a
+            # stronger pick. Only swap when:
+            #   - auto-route is enabled (not --no-auto-route)
+            #   - the optimal pick differs from what's loaded
+            #   - the optimal pick is genuinely loadable (we're not
+            #     about to OOM the user on the swap)
+            if (optimal_from_disk
+                    and optimal_from_disk != loaded[0]
+                    and not args.no_auto_route):
+                if not args.no_banner and not args.json:
+                    print(style(
+                        f"  ▸ auto-route: {loaded[0]} loaded; "
+                        f"{optimal_from_disk} is a stronger pick. "
+                        f"Swapping…", "tip"))
+                chosen, msg = auto_load_default_model(
+                    args.base_url,
+                    prefer_b=args.default_size,
+                    max_b=args.default_size_max,
+                )
+                if chosen:
+                    args.model = chosen
+                    if not args.no_banner and not args.json:
+                        print(style(f"  ▸ {msg}", "ok"))
+                else:
+                    # Swap failed - fall back to whatever's loaded.
+                    args.model = loaded[0]
+                    if not args.no_banner and not args.json:
+                        print(style(
+                            f"  ▸ swap to {optimal_from_disk} failed "
+                            f"({msg}); staying on {loaded[0]}",
+                            "warning"))
+            else:
+                args.model = loaded[0]
         elif len(loaded) == 0:
             # 8.0.13: auto-load the smallest tool-use model on disk
             # rather than erroring out. The Mac running this CLI almost
@@ -10371,11 +10429,22 @@ def main():
             if not args.no_banner and not args.json:
                 print(style(f"  ▸ {msg}", "ok"))
         else:
-            print(style("error: multiple models loaded. Pass --model or set "
-                  "LMSTUDIO_MODEL to one of:", "err"), file=sys.stderr)
-            for m in loaded:
-                print(f"  {m}", file=sys.stderr)
-            sys.exit(2)
+            # Multiple models loaded. If the optimal pick is one of them,
+            # use that. Otherwise let the user disambiguate.
+            if optimal_from_disk and optimal_from_disk in loaded:
+                args.model = optimal_from_disk
+                if not args.no_banner and not args.json:
+                    print(style(
+                        f"  ▸ auto-route: picked {optimal_from_disk} "
+                        f"from {len(loaded)} loaded models", "tip"))
+            else:
+                print(style(
+                    "error: multiple models loaded. Pass --model or "
+                    "set LMSTUDIO_MODEL to one of:", "err"),
+                    file=sys.stderr)
+                for m in loaded:
+                    print(f"  {m}", file=sys.stderr)
+                sys.exit(2)
 
     workspace = Path(args.workspace).resolve()
     if not workspace.is_dir():
