@@ -261,7 +261,7 @@ def _visible_len(s):
 
 TIPS = [
     "↑ / ↓ walk through previous prompts · Ctrl-R reverse-search history",
-    "Shift+Tab cycles modes: default → PLAN (read-only) → AUTO-ACCEPT (yolo)",
+    "Shift+Tab cycles modes: default → PLAN → ACCEPT EDITS → BYPASS PERMISSIONS",
     "Esc during a running turn stops it · Ctrl-D or /quit to exit",
     "type @path/to/file to inline a file's contents (Tab completes)",
     "slash commands: /help, /clear, /model, /bash, /cwd, /save, /resume, /cost",
@@ -3159,8 +3159,9 @@ SAFE_PARALLEL_TOOLS = {
 FS_MUTATING_TOOLS = {"write_file", "edit_file", "multi_edit"}
 
 
-# 8.0.10 — Shift+Tab mode cycle. Three modes parallel to Claude Code.
-# AgentState.mode_index indexes into this list; cycle_mode() rotates.
+# 8.0.10/8.0.11 — Shift+Tab mode cycle. Four modes parallel to Claude
+# Code. AgentState.mode_index indexes into this list; cycle_mode()
+# rotates and applies side effects.
 MODES = [
     {
         "name":  "default",
@@ -3175,10 +3176,16 @@ MODES = [
         "blurb": "read-only: no writes, edits, or shell",
     },
     {
-        "name":  "auto-accept",
-        "label": "AUTO-ACCEPT",
+        "name":  "accept-edits",
+        "label": "ACCEPT EDITS",
         "color": "ok",
-        "blurb": "skip permission prompts",
+        "blurb": "auto-approve writes; bash still gates",
+    },
+    {
+        "name":  "bypass-permissions",
+        "label": "BYPASS PERMISSIONS",
+        "color": "warning",
+        "blurb": "no prompts ever (yolo + bash)",
     },
 ]
 
@@ -7689,16 +7696,47 @@ class AgentState:
         """Advance to the next mode and apply side effects. Called from
         BoxedLineEditor on Shift+Tab. Returns the new mode dict."""
         self.mode_index = (self.mode_index + 1) % len(MODES)
+        return self._apply_mode()
+
+    def set_mode(self, name):
+        """Jump to a specific mode by name without cycling through the
+        intermediates. Useful for --bypass-bash startup flag and the
+        /mode <name> slash command."""
+        for i, m in enumerate(MODES):
+            if m["name"] == name or m["label"].lower() == name.lower():
+                self.mode_index = i
+                return self._apply_mode()
+        return self.mode
+
+    def _apply_mode(self):
+        """Apply side effects for the current mode_index. Resets
+        permissions to a known baseline first, then layers on whatever
+        the new mode wants. Appends a system note for the model."""
         new = self.mode
-        if new["name"] == "auto-accept":
-            # YOLO: permission prompts off. Stays on until cycled away.
+        # Reset baseline before each transition so we don't accumulate
+        # state from prior modes (e.g. allowed_forever entries from
+        # ACCEPT EDITS bleeding into a return to default).
+        self.permissions.yolo = self.yolo  # restore launch-time yolo
+        for tool_name in FS_MUTATING_TOOLS | {"run_bash"}:
+            self.permissions.allowed_forever.discard(tool_name)
+        # Re-apply launch-time --allow-bash auto-approve, if any.
+        if self.allow_bash:
+            self.permissions.allowed_forever.add("run_bash")
+        # Layer on mode-specific effects.
+        if new["name"] == "accept-edits":
+            # Writes auto-approved; bash still gates unless --allow-bash.
+            self.permissions.allowed_forever.update(FS_MUTATING_TOOLS)
+        elif new["name"] == "bypass-permissions":
+            # Full yolo: no prompts on anything. Also flip allow_bash on
+            # so the run_bash dispatcher doesn't refuse with the
+            # "bash disabled" early-return.
             self.permissions.yolo = True
-        else:
-            self.permissions.yolo = self.yolo
-        # Inject a system note so the model learns about the switch on
-        # the next turn. The hard block in _dispatch_tool catches plan
-        # mode violations even when the model misses this hint, but
-        # telling it upfront avoids wasted attempts.
+            self.allow_bash = True
+            self.permissions.allowed_forever.add("run_bash")
+            self.permissions.allowed_forever.update(FS_MUTATING_TOOLS)
+        # Append a system note so the model knows about the transition.
+        # _dispatch_tool still hard-blocks plan-mode violations, but
+        # telling the model upfront avoids wasted attempts.
         note = f"USER toggled mode → {new['label']}: {new['blurb']}."
         if new["name"] == "plan":
             note += (
@@ -7707,11 +7745,18 @@ class AgentState:
                 "git_commit, ship_it, or spawn_agent. Plan in prose; "
                 "the user will toggle out of plan mode when ready to act."
             )
-        elif new["name"] == "auto-accept":
+        elif new["name"] == "accept-edits":
             note += (
-                "\n\nAUTO-ACCEPT mode: permission prompts are off. "
-                "Be careful with destructive actions - the user is "
-                "trusting you to act without confirmation."
+                "\n\nACCEPT EDITS mode: write_file / edit_file / "
+                "multi_edit auto-approve without prompts. run_bash "
+                "still requires user permission. Move quickly on file "
+                "work; ask before running shell."
+            )
+        elif new["name"] == "bypass-permissions":
+            note += (
+                "\n\nBYPASS PERMISSIONS mode: no prompts on any tool, "
+                "bash enabled. The user is trusting you to act without "
+                "confirmation. Be careful with destructive operations."
             )
         self.transcript.append({"role": "system", "content": note})
         return new
@@ -9590,6 +9635,13 @@ def main():
         help="Enable the run_bash tool AND auto-approve every invocation "
              "for this session. Use /bash on (or LMSTUDIO_BASH=1) if you "
              "want the tool enabled but still prompted per call.")
+    parser.add_argument("--bypass-bash", "--bypass-permissions",
+        action="store_true", dest="bypass_bash",
+        default=os.environ.get("LMSTUDIO_BYPASS_BASH", "0") == "1",
+        help="Start in BYPASS PERMISSIONS mode: implies --yolo + "
+             "--allow-bash and skips every permission prompt. "
+             "Equivalent to pressing Shift+Tab three times after "
+             "launch. Use only when you trust the model end-to-end.")
     parser.add_argument("--yolo", action="store_true",
         default=os.environ.get("LMSTUDIO_YOLO", "0") == "1",
         help="Disable permission prompts for write_file / edit_file / run_bash.")
@@ -9800,6 +9852,14 @@ def main():
     # 8.0.9 — apply CLI overrides.
     if args.max_tokens and args.max_tokens > 0:
         state.max_tokens = args.max_tokens
+    # 8.0.11 — --bypass-bash launches directly into BYPASS PERMISSIONS
+    # mode. We do this BEFORE the transcript is built (reset_transcript
+    # happens below) so the synthetic mode note lands at the right
+    # position in the transcript and the system prompt's PLAN MODE
+    # check doesn't fire.
+    if args.bypass_bash:
+        state.allow_bash = True
+        state.set_mode("bypass-permissions")
     # 8.0.9 — auto-assign multi-model routing when the user has multiple
     # models loaded. The smallest loaded model becomes the planner
     # (cheap triage / plan generation); the user's --model stays the

@@ -651,19 +651,24 @@ General-purpose 3B–4B models will usually skip `update_tasks` or call it once 
 - Zero-progress orchestrator guard. The continuation loop tracks consecutive turns where no real tool work happened (only narration + bare `update_tasks` calls) and breaks out after 2 unproductive rounds, returning control to the user instead of running through the full 12 continuations.
 - Up/down arrow history fixed. Three causes were in play simultaneously: the Esc-to-CSI peek timeout (40 ms) was too tight for some terminals, VMIN/VTIME were never set in the manual termios setup so `read(1)` could return early with no bytes, and `\x1bOA`-style SS3 application-cursor-key sequences weren't handled. All three are addressed.
 
-## 8.0.10 — Shift+Tab mode cycle
+## 8.0.11 — Shift+Tab mode cycle (4 modes, Claude Code parity)
 
-Claude Code-style mode switcher in the input box. Press Shift+Tab to cycle through three modes:
+Updated to four modes matching Claude Code exactly. Press Shift+Tab to cycle:
 
-- **default** — permissions gate dangerous tools. Normal behavior.
-- **PLAN** — read-only. Blocks every write_file / edit_file / multi_edit / run_bash / background_bash / git_commit / ship_it / spawn_agent call at the dispatcher level. Allowed: read_file, list_dir, glob, grep, find_todos, git read-only tools, update_tasks, recall.
-- **AUTO-ACCEPT** — flips `permissions.yolo = True` so permission prompts are skipped. Equivalent to `--yolo` for the duration the mode is active.
+- **default** — permissions gate everything. Normal behavior.
+- **PLAN** — read-only. Hard-blocks write_file / edit_file / multi_edit / run_bash / background_bash / git_commit / ship_it / spawn_agent at the dispatcher level. Allowed: read tools, list/glob/grep, git read-only, update_tasks, recall.
+- **ACCEPT EDITS** — write_file, edit_file, multi_edit auto-approve without prompts. run_bash still gates. Useful when you trust file edits but want to review shell commands.
+- **BYPASS PERMISSIONS** — full yolo. All permission prompts off; bash auto-enabled; every tool runs without confirmation. Use when you trust the model end-to-end.
 
-The active mode renders as a colored pill in the input box's top border: `╭── [PLAN] ──────╮`. Default mode shows no pill (clean look for the common case).
+The active mode renders as a colored pill in the input box's top border: `╭── [ACCEPT EDITS] ──────╮`. Default mode shows no pill (clean look).
 
-On every mode change, a synthetic system note is appended to the transcript so the model knows about the switch on the next turn ("USER toggled mode → PLAN: read-only..."). The hard block in `_dispatch_tool` still catches violations regardless, so a model that ignores the system note can't accidentally write files in plan mode.
+CLI flag `--bypass-bash` (alias `--bypass-permissions`) launches directly into BYPASS PERMISSIONS mode. Equivalent to launching then pressing Shift+Tab three times. `LMSTUDIO_BYPASS_BASH=1` env var also works.
 
-For terminals without Shift+Tab (some `screen` / `tmux` configs), `/mode <name>` switches by name. `/mode` with no argument shows the cycle and current setting.
+Side effects per transition are computed from a clean baseline each time — switching back to default reliably restores `permissions.yolo` to its launch-time value and clears the `allowed_forever` set, so a session that briefly used BYPASS PERMISSIONS doesn't leak yolo state into a return to default mode.
+
+On every mode change, a synthetic system note is appended to the transcript so the model knows about the switch on the next turn. The dispatcher hard-block still catches plan-mode violations as the final safety net.
+
+`/mode <name>` switches by name for terminals that swallow Shift+Tab. Names: `default`, `plan`, `accept-edits`, `bypass-permissions`.
 
 ## 8.0.9 — multi-task performance
 
