@@ -270,7 +270,8 @@ TIPS = [
 
 
 def draw_banner(model, workspace, allow_bash, session_id, theme_name,
-                context_files, tree_count=0, grammar_supported=False):
+                context_files, tree_count=0, grammar_supported=False,
+                adapter=None):
     width = box_width()
     bar = "─" * (width - 2)
     side = style("│", "border")
@@ -298,6 +299,10 @@ def draw_banner(model, workspace, allow_bash, session_id, theme_name,
 
     print(row("workspace", str(workspace)))
     print(row("model", model, "value"))
+    if adapter is not None:
+        tools_mode = "native" if adapter.native_tools else "text-mode"
+        print(row("family", f"{adapter.family} ({tools_mode} tools)",
+                  "ok" if adapter.native_tools else "warning"))
     print(row("bash", "on" if allow_bash else "off",
               "ok" if allow_bash else "task_pending"))
     print(row("grammar", "on (json_schema)" if grammar_supported else "off",
@@ -5873,6 +5878,224 @@ def fetch_loaded_models(base_url):
 
 
 # =============================================================================
+# Model adapters  (8.0.5)
+# =============================================================================
+#
+# Different model families served by LM Studio have different conventions for
+# tool calling, reasoning content, and chat-template quirks. The adapter
+# detects the family from the model id (heuristic) and exposes a uniform
+# surface for the rest of the agent:
+#
+#   - native_tools: whether the model server emits `tool_calls` in the
+#     streamed message structure. When False (Gemma, base Llama, Phi-3),
+#     the agent falls through to TEXT EXTRACTION: it parses tool calls out
+#     of the assistant's free-text response in any of several common wire
+#     formats. Text fallback is always on (even for native-tool families)
+#     so a model that occasionally narrates a tool call as JSON-in-text
+#     instead of emitting the structured field still does useful work.
+#
+#   - uses_reasoning_content: Qwen3-thinking and DeepSeek-R1 route their
+#     output through `reasoning_content` instead of `content`. We already
+#     merge both in stream_completion; this flag is informational, used
+#     by `/model-info` for the user.
+#
+#   - system_addendum(): family-specific addition to the system prompt,
+#     describing how to emit tool calls for models without native support.
+#
+#   - default_essential_only(): True for small / less-reliable families
+#     so the runtime tool schema stays tight and the chat template fits
+#     the model's actual context window.
+
+TEXT_TOOL_INSTRUCTIONS = """
+Your runtime does not pipe tool calls through a structured field. To use
+a tool, emit a single fenced JSON block at the END of your response, like:
+
+```tool_call
+{"name": "write_file", "arguments": {"path": "app.py", "content": "..."}}
+```
+
+You may emit ONE tool call per response. The orchestrator parses the
+fenced block, runs the tool, and feeds the result back. Do not invent
+tool names - use ONLY the tools listed in the system prompt above.
+"""
+
+
+class ModelAdapter:
+    """Per-family quirks. Detected from the model id, refined by runtime
+    behavior. Centralizes "what does this model need" so the rest of the
+    agent doesn't sprinkle family checks everywhere."""
+
+    FAMILY_PATTERNS = [
+        (re.compile(r"qwen.?3", re.I),            "qwen3"),
+        (re.compile(r"qwen.?2\.?5.?coder", re.I), "qwen-coder"),
+        (re.compile(r"qwen", re.I),               "qwen"),
+        (re.compile(r"deepseek.?r1", re.I),       "deepseek-r1"),
+        (re.compile(r"deepseek.?coder", re.I),    "deepseek-coder"),
+        (re.compile(r"deepseek", re.I),           "deepseek"),
+        (re.compile(r"codestral", re.I),          "codestral"),
+        (re.compile(r"mistral", re.I),            "mistral"),
+        (re.compile(r"llama.?3\.[12]", re.I),     "llama3"),
+        (re.compile(r"llama.?3\.3", re.I),        "llama3"),
+        (re.compile(r"llama", re.I),              "llama"),
+        (re.compile(r"gemma.?3", re.I),           "gemma3"),
+        (re.compile(r"gemma", re.I),              "gemma"),
+        (re.compile(r"phi.?3\.5", re.I),          "phi35"),
+        (re.compile(r"phi.?4", re.I),             "phi4"),
+        (re.compile(r"phi", re.I),                "phi"),
+        (re.compile(r"granite", re.I),            "granite"),
+        (re.compile(r"hermes", re.I),             "hermes"),
+        (re.compile(r"yi.?coder", re.I),          "yi-coder"),
+    ]
+
+    # Each row: (native_tools, uses_reasoning, default_essential_only).
+    CAPABILITIES = {
+        "qwen3":          (True,  True,  False),
+        "qwen-coder":     (True,  False, False),
+        "qwen":           (True,  False, False),
+        "deepseek-r1":    (True,  True,  False),
+        "deepseek-coder": (True,  False, False),
+        "deepseek":       (True,  False, False),
+        "codestral":      (True,  False, False),
+        "mistral":        (True,  False, False),
+        "llama3":         (True,  False, False),
+        "llama":          (False, False, True),
+        "gemma3":         (False, False, True),
+        "gemma":          (False, False, True),
+        "phi35":          (True,  False, True),
+        "phi4":           (True,  False, True),
+        "phi":            (False, False, True),
+        "granite":        (True,  False, True),
+        "hermes":         (True,  False, False),
+        "yi-coder":       (True,  False, False),
+        "unknown":        (True,  False, False),
+    }
+
+    def __init__(self, model_id):
+        self.model_id = model_id or ""
+        self.family = self._detect_family(self.model_id)
+        native, reasoning, essential = self.CAPABILITIES[self.family]
+        self.native_tools = native
+        self.uses_reasoning = reasoning
+        self.default_essential_only = essential
+
+    @classmethod
+    def _detect_family(cls, model_id):
+        if not model_id:
+            return "unknown"
+        for rx, family in cls.FAMILY_PATTERNS:
+            if rx.search(model_id):
+                return family
+        return "unknown"
+
+    def system_addendum(self):
+        """Family-specific note appended to the system prompt. Only emitted
+        for families without reliable native tool calling, since those
+        models need explicit instructions to format their tool calls as
+        text that we can parse back out."""
+        if self.native_tools:
+            return ""
+        return TEXT_TOOL_INSTRUCTIONS
+
+    def parse_tool_calls_from_text(self, text, schema_names):
+        """Scan assistant free-text for JSON-shaped tool calls. Always-on
+        fallback - even native-tool families occasionally narrate a call
+        as JSON-in-text on tricky prompts. schema_names is the set of
+        valid tool names; anything outside the set is rejected so prose
+        containing `"name":` doesn't accidentally match.
+
+        Returns a list of {id, name, arguments} dicts shaped like
+        stream_completion's `tool_call` yield."""
+        if not text:
+            return []
+        calls = []
+        seen_payloads = set()
+
+        def push(parsed):
+            if not parsed:
+                return
+            key = (parsed["name"], parsed["arguments"])
+            if key in seen_payloads:
+                return
+            seen_payloads.add(key)
+            calls.append(parsed)
+
+        # Pattern 1: <tool_call>{...}</tool_call> or <function_call>{...}</function_call>.
+        for m in re.finditer(
+                r"<(?:tool_call|function_call|tool)>\s*(\{.*?\})\s*"
+                r"</(?:tool_call|function_call|tool)>",
+                text, re.DOTALL | re.IGNORECASE):
+            push(_try_parse_tool_call_json(m.group(1), schema_names))
+
+        # Pattern 2: fenced JSON / tool_call blocks (Gemma's preferred
+        # format under TEXT_TOOL_INSTRUCTIONS, plus generic ```json```).
+        for m in re.finditer(
+                r"```(?:tool_call|tool_calls|json|function|function_call)?\s*"
+                r"(\{.*?\}|\[.*?\])\s*```",
+                text, re.DOTALL | re.IGNORECASE):
+            body = m.group(1).strip()
+            # The body might be a wrapper {"tool_calls": [...]}, a single
+            # call object, or a bare list of calls.
+            try:
+                obj = json.loads(body)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict) and isinstance(obj.get("tool_calls"), list):
+                for entry in obj["tool_calls"]:
+                    push(_try_parse_tool_call_json(json.dumps(entry),
+                                                  schema_names))
+            elif isinstance(obj, dict):
+                push(_try_parse_tool_call_json(body, schema_names))
+            elif isinstance(obj, list):
+                for entry in obj:
+                    if isinstance(entry, dict):
+                        push(_try_parse_tool_call_json(json.dumps(entry),
+                                                      schema_names))
+
+        # Pattern 3: trailing bare JSON object. Last-resort - only fires
+        # when nothing else matched, to avoid double-counting calls that
+        # were already captured by patterns 1 or 2.
+        if not calls:
+            m = re.search(
+                r"(\{[^{}]*\"(?:name|tool|function)\"\s*:\s*\"\w+\"[^{}]*"
+                r"(?:\{[^{}]*\}[^{}]*)*\})\s*\Z",
+                text, re.DOTALL)
+            if m:
+                push(_try_parse_tool_call_json(m.group(1), schema_names))
+
+        return calls
+
+
+def _try_parse_tool_call_json(body, schema_names):
+    """Parse a JSON string into the canonical {id, name, arguments} shape.
+    Returns None when the body doesn't actually look like a tool call -
+    name missing, name unknown, or arguments un-JSON-able."""
+    try:
+        obj = json.loads(body)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    name = (obj.get("name") or obj.get("tool")
+            or obj.get("function") or obj.get("tool_name"))
+    if not isinstance(name, str) or name not in schema_names:
+        return None
+    args = (obj.get("arguments") or obj.get("parameters")
+            or obj.get("args") or obj.get("input") or {})
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(args, dict):
+        return None
+    return {
+        "id": f"text_call_{uuid.uuid4().hex[:10]}",
+        "name": name,
+        "arguments": json.dumps(args),
+    }
+
+
+# =============================================================================
 # Streaming word-wrap
 # =============================================================================
 
@@ -6981,10 +7204,29 @@ class AgentState:
         self.planner_model = ""
         self.coder_model = ""
         self.explainer_model = ""
+        # 8.0.5 — model adapter. Detects the loaded model's family
+        # (Qwen3, Gemma, Llama, DeepSeek, Phi, Mistral, etc.) and centralizes
+        # per-family quirks: native vs text-mode tool calling, reasoning
+        # content handling, system-prompt addenda, and whether to default
+        # to the essential-tools-only subset. Instantiated lazily on first
+        # use so AgentState can be built before we've talked to LM Studio.
+        self.adapter = ModelAdapter(self.model)
+        # 8.0.5 — essentials-only tool subset. Defaults from the adapter's
+        # per-family hint; the n_ctx auto-retry in run_turn flips this to
+        # True when the model's runtime context can't fit the full
+        # schema. /tools full overrides back to False.
+        self.essential_tools_only = self.adapter.default_essential_only
 
     def system_message(self):
         body = self.system_override or self.system_prompt
         extras = []
+        # 8.0.5: family-specific tool-call format guidance for non-native
+        # tool models (Gemma, base Llama, Phi-3). No-op when native tools
+        # work, so adding this is always safe.
+        if self.adapter:
+            addendum = self.adapter.system_addendum()
+            if addendum:
+                extras.append(addendum.strip())
         if self.constitution_text:
             extras.append("# Constitution (HARD RULES — must obey)\n\n"
                           + self.constitution_text)
@@ -7177,6 +7419,32 @@ def run_turn(state, user_message, *, json_emit=None):
             else:
                 print(style(f"  {GLYPH_ERR} {error_message}", "err"))
             return ""
+
+        # 8.0.5: text-mode tool extraction. Some model families (Gemma,
+        # base Llama-3, Phi-3) never populate the structured tool_calls
+        # field - they emit the call as JSON inside the assistant text.
+        # Even native-tool families occasionally fall back to text on
+        # tricky prompts. The ModelAdapter parses both forms; we always
+        # check when nothing native came through.
+        if (not finished_tool_calls and state.adapter
+                and assistant_text.strip()):
+            schema_names = set(BUILTIN_TOOL_FUNCS.keys())
+            for client in state.mcp_clients:
+                for tool in client.tools:
+                    schema_names.add(f"mcp__{tool['name']}")
+            extracted = state.adapter.parse_tool_calls_from_text(
+                assistant_text, schema_names)
+            if extracted:
+                finished_tool_calls = extracted
+                if json_emit:
+                    json_emit("tool_calls_extracted",
+                              count=len(extracted),
+                              family=state.adapter.family)
+                else:
+                    print(style(
+                        f"  ▸ extracted {len(extracted)} tool call(s) "
+                        f"from assistant text ({state.adapter.family} "
+                        f"text-mode)", "tip"))
 
         assistant_entry = {"role": "assistant", "content": assistant_text}
         if finished_tool_calls:
@@ -7843,6 +8111,8 @@ class SlashRouter:
             "/nb":      self.cmd_nb,
             "/skill":   self.cmd_skill,
             "/memory":  self.cmd_memory,
+            "/model-info": self.cmd_model_info,
+            "/tools":   self.cmd_tools,
         }
 
     def names(self):
@@ -7911,7 +8181,63 @@ class SlashRouter:
             print(style(f"  current: {self.state.model}", "dim"))
             return "continue"
         self.state.model = rest
+        # 8.0.5: rebuild the adapter for the new model so capabilities
+        # are correct after a /model switch.
+        self.state.adapter = ModelAdapter(rest)
+        self.state.essential_tools_only = self.state.adapter.default_essential_only
         print(style(f"  model set to {rest}", "ok"))
+        print(style(f"  family detected: {self.state.adapter.family} "
+                    f"(native_tools={self.state.adapter.native_tools})", "dim"))
+        return "continue"
+
+    def cmd_model_info(self, _):
+        """Show what the adapter detected about the currently loaded model
+        so the user can verify capabilities before debugging."""
+        a = self.state.adapter
+        print(style("  Model adapter", "key"))
+        print(f"   model:           {a.model_id}")
+        print(f"   family:          {a.family}")
+        print(f"   native tools:    {'yes' if a.native_tools else 'no'}")
+        print(f"   text fallback:   on (always)")
+        print(f"   reasoning field: "
+              f"{'yes' if a.uses_reasoning else 'no'}")
+        print(f"   essential-only:  "
+              f"{'on' if self.state.essential_tools_only else 'off'}")
+        print(f"   grammar:         "
+              f"{'on' if self.state.grammar_supported else 'off'}")
+        print(f"   context window:  "
+              f"{self.state.context_window or 'unknown'}")
+        if not a.native_tools:
+            print()
+            print(style(
+                "  This family does not emit native tool_calls. Tool "
+                "invocations are extracted from JSON in the assistant "
+                "response text. Performance is acceptable for write_file "
+                "/ edit_file workloads but multi-tool turns may be slower.",
+                "dim"))
+        return "continue"
+
+    def cmd_tools(self, rest):
+        """Switch between the essentials-only tool subset (15 tools) and
+        the full surface (70+). The adapter chooses the default at session
+        start; this is the manual override."""
+        opt = rest.strip().lower()
+        if opt in ("full", "off", "all"):
+            self.state.essential_tools_only = False
+            print(style("  full tool surface enabled "
+                        "(70+ tools)", "ok"))
+        elif opt in ("essential", "essentials", "on", "min"):
+            self.state.essential_tools_only = True
+            print(style("  essentials-only tool surface "
+                        "(15 tools)", "ok"))
+        else:
+            current = ("essentials" if self.state.essential_tools_only
+                       else "full")
+            print(style(f"  tool surface: {current}", "key"))
+            print(style(
+                "  /tools full  - all 70+ builtins (needs ~32k context)\n"
+                "  /tools essentials - 15-tool subset for tight contexts",
+                "dim"))
         return "continue"
 
     def cmd_bash(self, rest):
@@ -8903,7 +9229,8 @@ def main():
         draw_banner(state.model, workspace, state.allow_bash, session_id,
                     state.theme_name, state.context_files,
                     tree_count=state.workspace_tree_count,
-                    grammar_supported=state.grammar_supported)
+                    grammar_supported=state.grammar_supported,
+                    adapter=state.adapter)
         draw_banner_extra(state)
         draw_tips()
 

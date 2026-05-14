@@ -651,6 +651,45 @@ General-purpose 3B–4B models will usually skip `update_tasks` or call it once 
 - Zero-progress orchestrator guard. The continuation loop tracks consecutive turns where no real tool work happened (only narration + bare `update_tasks` calls) and breaks out after 2 unproductive rounds, returning control to the user instead of running through the full 12 continuations.
 - Up/down arrow history fixed. Three causes were in play simultaneously: the Esc-to-CSI peek timeout (40 ms) was too tight for some terminals, VMIN/VTIME were never set in the manual termios setup so `read(1)` could return early with no bytes, and `\x1bOA`-style SS3 application-cursor-key sequences weren't handled. All three are addressed.
 
+## 8.0.5 — model family adapters
+
+`bin/lmstudio` now ships a `ModelAdapter` layer that recognizes the family of the loaded model and adjusts behavior accordingly. The agent works on Qwen3, Qwen2.5-Coder, Gemma 2 / Gemma 3, Llama 3.x, Llama 2, DeepSeek-Coder, DeepSeek-R1, Codestral, Mistral, Phi-3 / 3.5 / 4, Granite, Hermes, and Yi-Coder out of the box. Unknown model ids default to "try native tools, fall through to text extraction" so an unfamiliar checkpoint still does useful work.
+
+Behavior changes per family:
+
+- **Native tool callers** (Qwen3, Qwen-Coder, Llama 3.x, DeepSeek, Codestral, Mistral, Phi-3.5/4, Hermes): the dispatcher trusts the structured `tool_calls` field and acts on it directly.
+- **Text-mode families** (Gemma, Llama 2, base Phi-3): a TEXT_TOOL_INSTRUCTIONS block is appended to the system prompt explaining the JSON-in-text wire format. After streaming, the agent scans the assistant text for any of these wire forms and re-dispatches them as tool calls.
+
+Wire formats accepted by the text extractor:
+
+```
+<tool_call>{"name": "...", "arguments": {...}}</tool_call>
+<function_call>{...}</function_call>
+
+```tool_call
+{"name": "...", "arguments": {...}}
+```
+
+```json
+{"tool_calls": [{"name": "...", "arguments": {...}}, ...]}
+```
+
+```json
+{"name": "...", "arguments": {...}}
+```
+
+Plus a trailing bare-JSON object at the end of the message as a last-resort fallback. Unknown tool names are rejected by the extractor so prose mentions of "name": don't accidentally fire calls.
+
+Per-family essentials default. Small / less-reliable families (Gemma, Phi-3, Llama 2, Granite) default to the 15-tool essentials subset so the runtime schema fits the native context window. Full 70+ surface is one `/tools full` away.
+
+New slash commands:
+
+- `/model-info` — print what the adapter detected, capabilities, and current essentials/full setting.
+- `/tools [full|essentials]` — toggle or set the tool surface manually.
+- `/model <id>` now rebuilds the adapter and re-applies the new family's defaults.
+
+The banner shows `family <name> (native tools | text-mode tools)` so you know what you're talking to before the first prompt.
+
 ## 8.0.4 fixes
 
 - Progress snapshot order. In 8.0.3 the new-completions snapshot was taken AFTER `verify_task_completions` mutated `raw_tasks` in place, so a legitimate completion that got false-flipped by the verifier was counted as zero progress. The snapshot now happens before the verify call, and progress is only credited when verify reports no failures.
