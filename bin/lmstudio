@@ -6121,6 +6121,136 @@ def auto_scale_context(base_url, model_id, target_minimum,
                    f"last error: {last_error}"), loaded
 
 
+def fetch_available_models(*, local_only=True, tool_use_only=True):
+    """8.0.13: enumerate LLMs on disk via `lms ls --json`. Returns a
+    list of normalized dicts with the fields we actually use:
+
+        {"key", "paramsB", "context", "arch", "local", "tool_use",
+         "size_bytes"}
+
+    `paramsB` is the parsed parameter count from `paramsString` ("31B"
+    -> 31, "26B-A4B" -> 4 (the active-experts count for MoE), "4B" -> 4).
+    For MoE models we prefer the active-params number because that's
+    what matters for inference cost.
+
+    local_only filters to deviceIdentifier=null (the host LM Studio
+    rather than LM Link remotes). tool_use_only drops checkpoints
+    without `trainedForToolUse: true`."""
+    lms_cmd = _locate_lms_cli()
+    if not lms_cmd:
+        return []
+    try:
+        proc = subprocess.run([lms_cmd, "ls", "--json"],
+                              capture_output=True, timeout=15)
+    except (subprocess.TimeoutExpired, OSError):
+        return []
+    if proc.returncode != 0:
+        return []
+    try:
+        data = json.loads(proc.stdout.decode("utf-8", "replace"))
+    except json.JSONDecodeError:
+        return []
+    out = []
+    for entry in data if isinstance(data, list) else []:
+        if entry.get("type") != "llm":
+            continue
+        if local_only and entry.get("deviceIdentifier") is not None:
+            continue
+        if tool_use_only and not entry.get("trainedForToolUse"):
+            continue
+        params = entry.get("paramsString") or ""
+        params_b = _parse_params_string(params)
+        out.append({
+            "key":        entry.get("modelKey") or entry.get("path", ""),
+            "paramsB":    params_b,
+            "context":    entry.get("maxContextLength") or 0,
+            "arch":       entry.get("architecture") or "",
+            "local":      entry.get("deviceIdentifier") is None,
+            "tool_use":   bool(entry.get("trainedForToolUse")),
+            "size_bytes": entry.get("sizeBytes") or 0,
+            "params_raw": params,
+        })
+    return out
+
+
+def _parse_params_string(s):
+    """Parse paramsString like "31B", "26B-A4B", "4B" into a small int
+    that represents inference cost. For MoE models in "<total>B-A<active>B"
+    format we prefer the active-experts number since that's what dictates
+    speed. Returns None when unparseable."""
+    if not s:
+        return None
+    s = s.strip().upper()
+    # MoE: "26B-A4B" => active 4
+    m = re.match(r"\d+\.?\d*B-A(\d+\.?\d*)B?$", s)
+    if m:
+        try:
+            return int(float(m.group(1)))
+        except ValueError:
+            pass
+    # Plain: "31B" or "7.5B"
+    m = re.match(r"(\d+\.?\d*)B$", s)
+    if m:
+        try:
+            return int(float(m.group(1)))
+        except ValueError:
+            pass
+    return None
+
+
+def pick_default_model(models, *, prefer_b=4, max_b=8):
+    """Choose the best auto-load default. Score (lower better):
+    closeness to prefer_b, then total file size on disk (avoids picking
+    a 26B-A4B MoE over a 4B dense model just because they share active
+    params), then alphabetical for determinism. Returns the model key
+    or None when nothing fits."""
+    candidates = []
+    for m in models:
+        b = m.get("paramsB")
+        if not isinstance(b, int) or b < 1 or b > max_b:
+            continue
+        score = (abs(b - prefer_b),
+                 m.get("size_bytes") or 0,
+                 m.get("key", ""))
+        candidates.append((score, m["key"]))
+    if not candidates:
+        return None
+    candidates.sort()
+    return candidates[0][1]
+
+
+def auto_load_default_model(base_url, *, prefer_b=4, max_b=8,
+                             ctx=16384, parallel=1, gpu="max"):
+    """When LM Studio has no model loaded, pick the smallest tool-use
+    model on disk and load it. Returns (key, message). On any failure
+    returns (None, reason) so the caller can decide whether to error
+    out or just keep going."""
+    available = fetch_available_models()
+    if not available:
+        return None, "no models on disk that are local + tool-use trained"
+    chosen = pick_default_model(available, prefer_b=prefer_b, max_b=max_b)
+    if not chosen:
+        sizes = sorted({m.get("paramsB") for m in available
+                        if m.get("paramsB")})
+        return None, (f"no model in 1-{max_b}B range available; sizes "
+                      f"on disk: {sizes}")
+    lms_cmd = _locate_lms_cli()
+    if not lms_cmd:
+        return None, "lms CLI not found"
+    cmd = [lms_cmd, "load", chosen, "-y",
+           "--parallel", str(parallel), "-c", str(ctx)]
+    if gpu:
+        cmd.extend(["--gpu", gpu])
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=180)
+    except subprocess.TimeoutExpired:
+        return None, f"lms load {chosen} timed out"
+    if proc.returncode != 0:
+        err = (proc.stderr or b"").decode("utf-8", "replace")[:200]
+        return None, f"lms load {chosen} failed: {err}"
+    return chosen, f"auto-loaded {chosen} ({ctx}-tok context, parallel=1)"
+
+
 def fetch_loaded_models(base_url):
     """List currently *loaded* model ids. Tries LM Studio's /api/v0/models
     first (state-aware), falls back to OpenAI-compatible /v1/models."""
@@ -8865,6 +8995,9 @@ class SlashRouter:
             "/tools":   self.cmd_tools,
             "/autoscale": self.cmd_autoscale,
             "/mode":    self.cmd_mode,
+            "/models":  self.cmd_models,
+            "/load":    self.cmd_load,
+            "/unload":  self.cmd_unload,
         }
 
     def names(self):
@@ -8967,6 +9100,118 @@ class SlashRouter:
                 "response text. Performance is acceptable for write_file "
                 "/ edit_file workloads but multi-tool turns may be slower.",
                 "dim"))
+        return "continue"
+
+    def cmd_models(self, _):
+        """List all local LLMs on disk. Marks loaded ones, shows params
+        size, context cap, and tool-use status. Useful before /load."""
+        try:
+            loaded = set(fetch_loaded_models(self.state.base_url))
+        except Exception:
+            loaded = set()
+        available = fetch_available_models(local_only=True,
+                                            tool_use_only=False)
+        if not available:
+            print(style("  no local models found on disk.", "warning"))
+            print(style("  download one via the LM Studio app.", "dim"))
+            return "continue"
+        print(style("  Local LLMs on disk:", "key"))
+        # Group by tool-use status; tool-use first.
+        tool_use = [m for m in available if m["tool_use"]]
+        no_tu = [m for m in available if not m["tool_use"]]
+        for header, group in (("  tool-use trained:", tool_use),
+                                ("  no tool-use (use sparingly):", no_tu)):
+            if not group:
+                continue
+            print(style(header, "dim"))
+            for m in sorted(group, key=lambda x: x.get("paramsB") or 999):
+                marker = "*" if m["key"] in loaded else " "
+                sz = (f"{m['paramsB']}B"
+                      if m.get("paramsB") else m.get("params_raw", "?"))
+                ctx = m.get("context") or 0
+                ctx_str = (f"{ctx//1024}k ctx" if ctx >= 1024
+                           else f"{ctx} ctx")
+                bytes_gb = (m.get("size_bytes") or 0) / 1e9
+                print(f"   {marker} {style(m['key'], 'value'):40s} "
+                      f"{style(sz, 'tip'):8s} "
+                      f"{style(ctx_str, 'dim'):12s} "
+                      f"{style(f'{bytes_gb:.1f} GB', 'dim')}")
+        print()
+        print(style("  /load <key>   load a model (auto unloads "
+                    "the current one)", "dim"))
+        print(style("  /unload <key> unload a specific model", "dim"))
+        return "continue"
+
+    def cmd_load(self, rest):
+        """Load a model via the lms CLI. Equivalent to running
+        `lms load <id> -y --parallel 1 -c <ctx>` from the shell."""
+        rest = rest.strip()
+        if not rest:
+            print(style("  usage: /load <model-key> [context]", "dim"))
+            print(style("  e.g.   /load jan-v1-4b 16384", "dim"))
+            return "continue"
+        parts = rest.split()
+        model_key = parts[0]
+        ctx = 16384
+        if len(parts) > 1:
+            try:
+                ctx = int(parts[1])
+            except ValueError:
+                print(style(f"  invalid context: {parts[1]}", "err"))
+                return "continue"
+        lms_cmd = _locate_lms_cli()
+        if not lms_cmd:
+            print(style("  lms CLI not found", "err"))
+            return "continue"
+        print(style(f"  loading {model_key} (ctx={ctx}, parallel=1)…",
+                    "tip"))
+        try:
+            proc = subprocess.run(
+                [lms_cmd, "load", model_key, "-y",
+                 "--parallel", "1", "-c", str(ctx), "--gpu", "max"],
+                capture_output=True, timeout=180,
+            )
+        except subprocess.TimeoutExpired:
+            print(style("  lms load timed out", "err"))
+            return "continue"
+        if proc.returncode != 0:
+            err = (proc.stderr or b"").decode("utf-8", "replace")[:200]
+            print(style(f"  lms load failed: {err}", "err"))
+            return "continue"
+        # Switch the active model + rebuild adapter for the new family.
+        self.state.model = model_key
+        self.state.adapter = ModelAdapter(model_key)
+        self.state.essential_tools_only = (
+            self.state.adapter.default_essential_only)
+        self.state.context_window = fetch_model_context_window(
+            self.state.base_url, model_key)
+        print(style(
+            f"  loaded {model_key} · family={self.state.adapter.family} "
+            f"· {self.state.context_window or '?'}-tok context", "ok"))
+        return "continue"
+
+    def cmd_unload(self, rest):
+        """Unload a specific model (or the current one if no arg)."""
+        rest = rest.strip()
+        target = rest or self.state.model
+        if not target:
+            print(style("  usage: /unload <model-key>", "dim"))
+            return "continue"
+        lms_cmd = _locate_lms_cli()
+        if not lms_cmd:
+            print(style("  lms CLI not found", "err"))
+            return "continue"
+        try:
+            proc = subprocess.run([lms_cmd, "unload", target],
+                                   capture_output=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            print(style("  unload timed out", "err"))
+            return "continue"
+        if proc.returncode != 0:
+            err = (proc.stderr or b"").decode("utf-8", "replace")[:200]
+            print(style(f"  unload failed: {err}", "err"))
+            return "continue"
+        print(style(f"  unloaded {target}", "ok"))
         return "continue"
 
     def cmd_mode(self, rest):
@@ -9866,6 +10111,20 @@ def main():
         help="Per-turn output token cap. Prevents Gemma-style runaway "
              "prose. Default 4096 - plenty for a single tool call + "
              "preface, hard cap on a 10k-token essay. 0 to disable.")
+    parser.add_argument("--no-autoload", action="store_true",
+        default=os.environ.get("LMSTUDIO_NO_AUTOLOAD", "0") == "1",
+        help="When no model is loaded, error out instead of auto-loading "
+             "the smallest tool-use model on disk.")
+    parser.add_argument("--default-size", type=int,
+        default=int(os.environ.get("LMSTUDIO_DEFAULT_SIZE", "4")),
+        help="Preferred parameter count (in billions) for the auto-load "
+             "pick. Default 4 - fast and fits everything. Auto-load "
+             "scores candidates by closeness to this size.")
+    parser.add_argument("--default-size-max", type=int,
+        default=int(os.environ.get("LMSTUDIO_DEFAULT_SIZE_MAX", "8")),
+        help="Hard upper bound on auto-load size in billions. Default 8. "
+             "Larger models are skipped during auto-pick to keep startup "
+             "fast.")
     parser.add_argument("--loop", action="store_true",
         help="Autonomous-loop mode. After each turn, re-enter the session "
              "until the model calls `loop_complete`.")
@@ -9915,9 +10174,34 @@ def main():
         if len(loaded) == 1:
             args.model = loaded[0]
         elif len(loaded) == 0:
-            print(style("error: no model is loaded in LM Studio.", "err"),
-                  file=sys.stderr)
-            sys.exit(2)
+            # 8.0.13: auto-load the smallest tool-use model on disk
+            # rather than erroring out. The Mac running this CLI almost
+            # always has at least one 3-7B GGUF cached; loading it lets
+            # the user start a session without first reaching for the
+            # LM Studio app.
+            if args.no_autoload:
+                print(style("error: no model loaded and --no-autoload set.",
+                            "err"), file=sys.stderr)
+                sys.exit(2)
+            if not args.no_banner and not args.json:
+                print(style("  ▸ no model loaded - picking a default…",
+                            "tip"))
+            chosen, msg = auto_load_default_model(
+                args.base_url,
+                prefer_b=args.default_size,
+                max_b=args.default_size_max,
+            )
+            if not chosen:
+                print(style(f"error: auto-load failed: {msg}", "err"),
+                      file=sys.stderr)
+                print(style(
+                    "  Try: `lms load <model> -y --parallel 1` manually, "
+                    "or download a small 3-7B GGUF via the LM Studio "
+                    "app and re-run.", "dim"), file=sys.stderr)
+                sys.exit(2)
+            args.model = chosen
+            if not args.no_banner and not args.json:
+                print(style(f"  ▸ {msg}", "ok"))
         else:
             print(style("error: multiple models loaded. Pass --model or set "
                   "LMSTUDIO_MODEL to one of:", "err"), file=sys.stderr)

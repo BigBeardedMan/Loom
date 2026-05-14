@@ -651,6 +651,31 @@ General-purpose 3B–4B models will usually skip `update_tasks` or call it once 
 - Zero-progress orchestrator guard. The continuation loop tracks consecutive turns where no real tool work happened (only narration + bare `update_tasks` calls) and breaks out after 2 unproductive rounds, returning control to the user instead of running through the full 12 continuations.
 - Up/down arrow history fixed. Three causes were in play simultaneously: the Esc-to-CSI peek timeout (40 ms) was too tight for some terminals, VMIN/VTIME were never set in the manual termios setup so `read(1)` could return early with no bytes, and `\x1bOA`-style SS3 application-cursor-key sequences weren't handled. All three are addressed.
 
+## 8.0.13 — zero-config model selection
+
+Until 8.0.13, launching the CLI with no model loaded in LM Studio errored out and demanded the user load one manually. Now the CLI inspects `lms ls --json`, picks the best small tool-use model on disk, and loads it automatically.
+
+How the default is chosen:
+
+1. Enumerate all LLMs on disk via `lms ls --json`. Filter to local (`deviceIdentifier=null`) + tool-use trained (`trainedForToolUse=true`).
+2. Score each candidate by `(distance from --default-size, file size on disk, name)`. Default `--default-size=4` so 3-4 B models win. Hard cap `--default-size-max=8` skips anything larger.
+3. Tie-break by actual disk size, so a 4B dense model beats a 26B-A4B MoE that just happens to share active-params count.
+4. Load via `lms load <key> -y --parallel 1 -c 16384 --gpu max`.
+
+Live-tested against a system with seven local tool-use LLMs (3B to 31B): picked `jan-v1-4b` (2.5 GB, qwen3 arch, tool-use). Loaded in under 10 seconds.
+
+Manual override flags:
+
+- `--no-autoload` keeps the old "error out" behavior.
+- `--default-size N` picks closer to N billion params.
+- `--default-size-max N` raises or lowers the hard cap.
+
+In-session model management:
+
+- `/models` lists every local LLM with size, context cap, tool-use status, loaded marker.
+- `/load <key> [ctx]` loads a model (auto-rebuilds the family adapter + essential-tools flag for the new model).
+- `/unload <key>` unloads.
+
 ## 8.0.12 — multi-task transcript economy
 
 Targets the "slow after 3-4 tasks" pattern by reducing per-turn token waste. The agent's API calls send the entire transcript on every turn; older messages keep paying tokens forever. This release adds four mechanisms that keep the working set small.
