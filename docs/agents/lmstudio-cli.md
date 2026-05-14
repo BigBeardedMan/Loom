@@ -77,7 +77,48 @@ Type these at the `❯` prompt (they don't go to the model):
 | `/lsp <command>`, `/lsp off` | Start/stop an LSP server (stdio JSON-RPC) |
 | `/quit`, `/exit` | Leave the REPL (writes `.loom/project.json` + persists permissions) |
 
-## Built-in tools
+## Built-in tools (7.0.0 — 57 tools)
+
+Internet:
+- `web_search(query, limit?)` — DuckDuckGo HTML scrape
+- `web_fetch(url, mode?)` — HTTP GET + readability strip
+- `http_request(method, url, headers?, body?, timeout?)` — arbitrary REST (permission-gated)
+- `rss_fetch(url, limit?)` — parse RSS/Atom
+- `websocket_subscribe(url, message?, until?, timeout?)` — RFC6455 minimal client (permission-gated)
+
+GitHub workflow:
+- `gh_create_pr(title, body?, base?, draft?)`, `gh_pr_view(number?)`, `gh_pr_comment(number, body)`
+- `gh_issue_list(state?, label?, limit?)`, `gh_issue_create(title, body?, label?)`, `gh_issue_view(number)`
+
+Communication (macOS):
+- `slack_post(webhook_url, text, channel?)` (permission-gated)
+- `imessage_send(recipient, body)` (permission-gated)
+- `mail_send(to, subject, body)` (permission-gated)
+
+Databases:
+- `sqlite_query(database, sql, params?, allow_mutation?)`, `sqlite_schema(database, table?)`
+- `postgres_query(sql, conn_string?, allow_mutation?)`, `mysql_query(sql, conn_string?, allow_mutation?)`
+- `redis_query(command, host?)`
+
+macOS-native:
+- `keychain_get(service, account?)`, `mdfind(query, path?)`
+- `notes_create(title, body)`, `notes_search(query)`
+- `calendar_today()`, `calendar_create(title, when, duration?)`
+- `screen_capture_region()`
+
+Symbol intelligence + dependencies:
+- `symbol_search(query, kind?)` — ctags or regex fallback
+- `package_list()`, `package_install(name, version?, manager?)`
+
+Sandboxed code execution:
+- `exec_python(code, timeout?)`, `exec_js(code, timeout?)`
+
+Meta:
+- `ship_it(spec, target?)` — plan → scaffold → test → commit → PR end-to-end
+
+(See earlier sections for the rest: read/write/edit/multi_edit, glob/grep, list_dir, find_todos, git_*, browser_*, lsp_*, run_bash, update_tasks, spawn_agent.)
+
+## Built-in tools (legacy table)
 
 | Tool | What it does |
 | --- | --- |
@@ -358,6 +399,117 @@ Minimal client (no resources/prompts/sampling, one server at a time, no diagnost
 ## find_todos
 
 `find_todos(pattern?, path?)` greps the workspace for the usual markers (`TODO|FIXME|XXX|HACK|NOTE` by default) with `WORKSPACE_TREE_IGNORE` excluded so `node_modules` etc. don't dominate the results. Cap 200 hits.
+
+## Internet access (7.0.0)
+
+Five tools let the agent reach the web without going through the browser subprocess:
+
+- `web_search(query)` — DuckDuckGo HTML scrape. No API key. Cap 20.
+- `web_fetch(url, mode?)` — `mode='text'` (default) strips HTML, `'raw'` and `'html'` return as-is. Cap 64 KB. Honors `state.web_blocklist` (suffix match on hostname; `/blocklist <host>` to add).
+- `http_request(method, url, headers?, body?)` — full REST. Permission-gated.
+- `rss_fetch(url, limit?)` — stdlib `xml.etree`-based RSS/Atom parsing.
+- `websocket_subscribe(url, message?, until?)` — RFC6455 client implemented over `socket`. Connects, optionally sends one frame, collects frames until `until` regex matches or 30s. Permission-gated.
+
+## GitHub workflow (7.0.0)
+
+Six tools wrap the `gh` CLI: `gh_create_pr`, `gh_pr_view`, `gh_pr_comment`, `gh_issue_list`, `gh_issue_create`, `gh_issue_view`. PR creation is permission-gated and drafts by default.
+
+## Databases (7.0.0)
+
+`sqlite_query` runs through stdlib `sqlite3` — fully local, no extra deps. `postgres_query`, `mysql_query`, and `redis_query` shell out to `psql`, `mysql`, and `redis-cli`. All queries that match the mutation regex (`INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|REPLACE`) are refused unless `allow_mutation=true` is passed explicitly.
+
+## macOS-native (7.0.0)
+
+- `keychain_get(service, account?)` — `security find-generic-password -w`. Returns the raw password so the agent can use it (e.g., as a Bearer token for `http_request`).
+- `mdfind(query, path?)` — Spotlight metadata search via `mdfind`.
+- `notes_create(title, body)`, `notes_search(query)` — Apple Notes via `osascript`.
+- `calendar_today()`, `calendar_create(title, when, duration?)` — Apple Calendar via `osascript`.
+- `screen_capture_region()` — `screencapture -i` with interactive selection; returns the saved PNG path.
+
+## Symbol intelligence (7.0.0)
+
+`symbol_search(query, kind?)` indexes the workspace's symbols. Uses `universal-ctags` when available; otherwise falls back to a regex scan covering `.py / .js / .ts / .tsx / .jsx / .swift / .go / .rs`. Index is cached on first use; subsequent calls are instant.
+
+`package_list()` reads the appropriate manifest (`package.json`, `requirements.txt`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `Brewfile`). `package_install(name, version?, manager?)` shells out to the obvious package manager. Auto-detect uses the same manifest hits. Permission-gated.
+
+## Sandboxed code execution (7.0.0)
+
+`exec_python(code, timeout?)` runs a snippet through `python3 -I -S -c` (no site-packages, isolated env) inside a fresh `/tmp` directory. `exec_js(code, timeout?)` does the equivalent with `node -e`. Both default to a 10s wall-clock cap, max 60s.
+
+Use for testing one-off snippets without mutating the workspace.
+
+## Continuous file watcher
+
+`--watch` (or `/watch on`) starts a 2-second polling watcher over the workspace tree. External file additions / changes / deletions are collected into a buffer; the buffer is flushed as a system message at the start of the next turn so the model knows to re-read files you've edited yourself. Stop with `/watch off` or session quit.
+
+## Cost meter (per-tool)
+
+`/cost` now shows a per-tool breakdown: calls, elapsed ms, estimated tokens. Plus a "top file paths read" list so you can see what the model fixated on. Prefetch hits/misses are also shown.
+
+## Plugin architecture
+
+Drop a Python file into `~/.loom/tools/` that defines `LMSTUDIO_TOOLS = [{"schema": ..., "func": ...}]` and lmstudio will auto-import it on session start. Each entry registers a new builtin tool. Errors during import surface as warnings but never abort the session. Use `/plugins` to list loaded plugins. Disable with `--no-plugins`.
+
+Example plugin:
+```python
+# ~/.loom/tools/weather.py
+def tool_weather(state, args):
+    return f"It's always sunny in {args['city']}"
+
+LMSTUDIO_TOOLS = [{
+    "schema": {"type": "function", "function": {"name": "weather",
+        "description": "Get the weather.",
+        "parameters": {"type": "object", "properties": {
+            "city": {"type": "string"}}, "required": ["city"]}}},
+    "func": tool_weather,
+}]
+```
+
+## Self-reflection + drift
+
+`--reflect` (or `/reflect on`) sends a small judge prompt at the end of each human turn that scores the turn and writes a one-line lesson into `.loom/project.json` under `lessons`. Future sessions read those lessons through the project knowledge load.
+
+Drift detector runs at session start: any `build_commands` recorded in project knowledge that reference files no longer in the workspace get flagged in the banner. Prevents stale knowledge from poisoning sessions.
+
+## Mermaid rendering
+
+When the assistant turn contains a ` ```mermaid` block, lmstudio pipes it through `mmdc` (Mermaid CLI, `npm i -g @mermaid-js/mermaid-cli`) and writes the PNG to `diagrams/mermaid-<ts>.png`. Silent skip when `mmdc` isn't on PATH.
+
+## Constitution mode
+
+Drop a `<workspace>/.loom/constitution.md` with hard rules — one per line — and lmstudio injects it into the system prompt AND validates every tool call against it before dispatch. If the model tries to violate a rule, the dispatcher refuses *before* the tool runs and tells the model exactly which rule it broke.
+
+Rules can be:
+- **Mechanical** (matched by built-in patterns): `rm -rf`, `git push --force`, `DROP DATABASE`, `DROP TABLE`, `TRUNCATE TABLE`.
+- **Phrase-based**: if a rule mentions a tool name plus a forbidden phrase in backticks/quotes, the dispatcher will refuse matching args.
+
+Example `.loom/constitution.md`:
+```markdown
+# Constitution
+
+- Never call `run_bash` with `rm -rf`.
+- Never call `run_bash` with `git push --force`.
+- Never call `sqlite_query` with `DROP TABLE`.
+- Refuse `http_request` to any host under `production.example.com`.
+```
+
+`/constitution reload` re-reads the file mid-session. `/constitution` (no args) lists the active rules.
+
+## ship_it
+
+`ship_it(spec, target?)` is the end-to-end capstone. One tool call:
+
+1. Runs an aggressive-batch turn against the spec (model emits tasks → orchestrator scaffolds files in one batch via grammar-forced writes).
+2. Runs the workspace's test runner (`detect_test_runner`).
+3. Auto-commits the journaled changes.
+4. Opens a draft PR via `gh_create_pr`.
+5. Notes a deploy target if one was provided (but does NOT execute it; manual step).
+
+Permission-gated. Use `/ship "<spec>"` to invoke from the REPL.
+
+## Slash commands added in 7.0.0
+
+`/watch [on|off]`, `/reflect [on|off]`, `/plugins`, `/constitution [reload]`, `/ship <spec>`, `/web <query>`, `/blocklist [host|-host]`.
 
 ## Model recommendations
 

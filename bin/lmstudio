@@ -338,6 +338,19 @@ def draw_banner_extra(state):
         if state.coder_model: parts.append(f"code={state.coder_model}")
         if state.explainer_model: parts.append(f"explain={state.explainer_model}")
         rows.append(("router", " ".join(parts), "value"))
+    if state.constitution_rules:
+        rows.append(("constitution",
+                     f"{len(state.constitution_rules)} rules active", "ok"))
+    if state.watcher_thread:
+        rows.append(("watcher",
+                     f"on ({len(state.watched_files)} files)", "ok"))
+    if state.self_reflect:
+        rows.append(("reflect", "on", "ok"))
+    if state.plugin_names:
+        rows.append(("plugins", f"{len(state.plugin_names)} loaded", "ok"))
+    if state.drift_warnings:
+        rows.append(("drift",
+                     f"{len(state.drift_warnings)} stale entries", "warning"))
     if not rows:
         return
     bar = "─" * (width - 2)
@@ -1010,7 +1023,7 @@ class Spinner:
 # Permission prompts
 # =============================================================================
 
-DANGEROUS_TOOLS = {"run_bash", "write_file", "edit_file"}
+DANGEROUS_TOOLS = {"run_bash", "write_file", "edit_file", "multi_edit"}
 
 
 class PermissionManager:
@@ -1766,6 +1779,852 @@ def tool_spawn_agent(state, args):
 
 
 # =============================================================================
+# Network & web (6.0.0)
+# =============================================================================
+
+_DDG_USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) "
+                   "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+                   "Version/17.4 Safari/605.1.15")
+
+
+def _http_open(url, *, method="GET", headers=None, body=None, timeout=30):
+    """Thin urllib wrapper. Returns (status, headers_dict, body_bytes)."""
+    hdrs = {"User-Agent": _DDG_USER_AGENT}
+    if headers:
+        hdrs.update(headers)
+    data = None
+    if body is not None:
+        if isinstance(body, (dict, list)):
+            data = json.dumps(body).encode("utf-8")
+            hdrs.setdefault("Content-Type", "application/json")
+        elif isinstance(body, str):
+            data = body.encode("utf-8")
+        else:
+            data = bytes(body)
+    req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return (resp.status, dict(resp.headers), resp.read())
+    except urllib.error.HTTPError as e:
+        return (e.code, dict(e.headers), e.read())
+
+
+_DDG_HTML_TITLE_RE = re.compile(
+    r'<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.S)
+_DDG_HTML_SNIPPET_RE = re.compile(
+    r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>', re.S)
+_HTML_TAG_RE = re.compile(r'<[^>]+>')
+
+
+def _strip_html(text):
+    text = _HTML_TAG_RE.sub(' ', text)
+    # Decode the small set of HTML entities we care about.
+    replacements = {
+        '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"',
+        '&#39;': "'", '&nbsp;': ' ', '&hellip;': '…', '&mdash;': '—',
+    }
+    for k, v in replacements.items():
+        text = text.replace(k, v)
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def tool_web_search(state, args):
+    """DuckDuckGo HTML scrape. Stdlib only, no API key. Cap at `limit` (default 10, max 20)."""
+    query = args["query"].strip()
+    if not query:
+        return "empty query"
+    limit = max(1, min(int(args.get("limit", 10)), 20))
+    url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}"
+    try:
+        _, _, body = _http_open(url, timeout=15)
+    except (urllib.error.URLError, OSError) as e:
+        return f"web_search failed: {e}"
+    html = body.decode("utf-8", errors="replace")
+    titles = _DDG_HTML_TITLE_RE.findall(html)
+    snippets = _DDG_HTML_SNIPPET_RE.findall(html)
+    rows = []
+    for i, (href, title_html) in enumerate(titles[:limit]):
+        snippet = _strip_html(snippets[i]) if i < len(snippets) else ""
+        title = _strip_html(title_html)
+        rows.append(f"{title}\n  {href}\n  {snippet[:200]}")
+    if not rows:
+        return f"no results for {query!r}"
+    return "\n\n".join(rows)
+
+
+def tool_web_fetch(state, args):
+    """GET the URL and return a readability-ish text extraction.
+    mode ∈ {text (default), raw, html}."""
+    url = args["url"]
+    if state.web_blocklist:
+        host = urllib.parse.urlparse(url).netloc.lower()
+        for blocked in state.web_blocklist:
+            if blocked in host:
+                return f"web_fetch refused: {host} is blocklisted"
+    mode = args.get("mode", "text")
+    try:
+        status, _, body = _http_open(url, timeout=30)
+    except (urllib.error.URLError, OSError) as e:
+        return f"web_fetch failed: {e}"
+    text = body.decode("utf-8", errors="replace")
+    if mode == "raw":
+        out = text
+    elif mode == "html":
+        out = text  # caller wants HTML; trim only
+    else:
+        # Naive readability: drop scripts/styles/nav, then strip tags.
+        cleaned = re.sub(r'<script[^>]*>.*?</script>', ' ', text,
+                         flags=re.S | re.I)
+        cleaned = re.sub(r'<style[^>]*>.*?</style>', ' ', cleaned,
+                         flags=re.S | re.I)
+        cleaned = re.sub(r'<(nav|header|footer|aside)[^>]*>.*?</\1>', ' ',
+                         cleaned, flags=re.S | re.I)
+        out = _strip_html(cleaned)
+    if len(out) > 65536:
+        out = out[:65536] + f"\n\n…(truncated; original {len(text)} bytes)"
+    return f"HTTP {status} {url}\n\n{out}"
+
+
+def tool_http_request(state, args):
+    """Arbitrary REST. Permission-gated by _dispatch_tool (in DANGEROUS_TOOLS)."""
+    method = args.get("method", "GET").upper()
+    url = args["url"]
+    headers = args.get("headers") or {}
+    body = args.get("body")
+    timeout = max(1, min(int(args.get("timeout", 30)), 120))
+    try:
+        status, resp_headers, resp_body = _http_open(
+            url, method=method, headers=headers, body=body, timeout=timeout)
+    except (urllib.error.URLError, OSError) as e:
+        return f"http_request failed: {e}"
+    text = resp_body.decode("utf-8", errors="replace")
+    if len(text) > 32000:
+        text = text[:32000] + f"\n…(truncated; {len(resp_body) - 32000} more bytes)"
+    head_pairs = "\n".join(f"  {k}: {v}" for k, v in
+                            list(resp_headers.items())[:20])
+    return (f"HTTP {status} {method} {url}\n\n"
+            f"--- response headers ---\n{head_pairs}\n\n"
+            f"--- response body ---\n{text}")
+
+
+def tool_rss_fetch(state, args):
+    """Parse an RSS or Atom feed. Returns recent items."""
+    url = args["url"]
+    limit = max(1, min(int(args.get("limit", 10)), 50))
+    try:
+        _, _, body = _http_open(url, timeout=15)
+    except (urllib.error.URLError, OSError) as e:
+        return f"rss_fetch failed: {e}"
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(body)
+    except ET.ParseError as e:
+        return f"rss_fetch parse error: {e}"
+    rows = []
+    # Handle both RSS 2.0 and Atom.
+    items = root.findall(".//item") or root.findall(
+        ".//{http://www.w3.org/2005/Atom}entry")
+    for entry in items[:limit]:
+        title = entry.findtext("title") or entry.findtext(
+            "{http://www.w3.org/2005/Atom}title") or ""
+        link = entry.findtext("link") or ""
+        if not link:
+            link_el = entry.find("{http://www.w3.org/2005/Atom}link")
+            link = link_el.get("href") if link_el is not None else ""
+        pub = (entry.findtext("pubDate") or
+               entry.findtext("{http://www.w3.org/2005/Atom}published") or
+               entry.findtext("{http://www.w3.org/2005/Atom}updated") or "")
+        summary = (entry.findtext("description") or
+                   entry.findtext("{http://www.w3.org/2005/Atom}summary") or
+                   "")
+        rows.append(f"{title.strip()}\n  {link.strip()}  "
+                    f"{pub.strip()}\n  {_strip_html(summary)[:240]}")
+    if not rows:
+        return "no items"
+    return "\n\n".join(rows)
+
+
+def tool_websocket_subscribe(state, args):
+    """Minimal RFC 6455 client. Connects, optionally sends one frame, reads
+    frames until `until` regex matches OR the 30s deadline. Permission-
+    gated."""
+    import socket as _socket
+    import struct
+    import base64 as _b64
+    import os as _os
+    url = args["url"]
+    parsed = urllib.parse.urlparse(url)
+    scheme = parsed.scheme
+    if scheme not in ("ws", "wss"):
+        return f"websocket_subscribe: bad scheme {scheme!r}"
+    host = parsed.hostname
+    port = parsed.port or (443 if scheme == "wss" else 80)
+    path = parsed.path or "/"
+    if parsed.query:
+        path += "?" + parsed.query
+    initial = args.get("message")
+    until = args.get("until")
+    deadline = time.time() + min(int(args.get("timeout", 30)), 60)
+    sock = _socket.create_connection((host, port), timeout=15)
+    if scheme == "wss":
+        import ssl
+        ctx = ssl.create_default_context()
+        sock = ctx.wrap_socket(sock, server_hostname=host)
+    key = _b64.b64encode(_os.urandom(16)).decode()
+    handshake = (
+        f"GET {path} HTTP/1.1\r\n"
+        f"Host: {host}:{port}\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {key}\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n"
+    )
+    sock.sendall(handshake.encode())
+    resp = b""
+    while b"\r\n\r\n" not in resp:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        resp += chunk
+    if b"101" not in resp[:15]:
+        sock.close()
+        return f"websocket handshake failed:\n{resp[:400].decode('utf-8', errors='replace')}"
+
+    def _send_text(s, payload):
+        data = payload.encode("utf-8")
+        header = bytearray([0x81])  # FIN + text frame
+        mask = _os.urandom(4)
+        length = len(data)
+        if length < 126:
+            header.append(0x80 | length)
+        elif length <= 0xFFFF:
+            header.append(0x80 | 126)
+            header += struct.pack("!H", length)
+        else:
+            header.append(0x80 | 127)
+            header += struct.pack("!Q", length)
+        header += mask
+        masked = bytes(b ^ mask[i % 4] for i, b in enumerate(data))
+        s.sendall(header + masked)
+
+    if initial:
+        _send_text(sock, initial)
+    frames = []
+    sock.settimeout(2)
+    while time.time() < deadline:
+        try:
+            head = sock.recv(2)
+            if len(head) < 2:
+                break
+            opcode = head[0] & 0x0F
+            length = head[1] & 0x7F
+            if length == 126:
+                length = struct.unpack("!H", sock.recv(2))[0]
+            elif length == 127:
+                length = struct.unpack("!Q", sock.recv(8))[0]
+            data = b""
+            while len(data) < length:
+                chunk = sock.recv(length - len(data))
+                if not chunk:
+                    break
+                data += chunk
+            text = data.decode("utf-8", errors="replace")
+            frames.append(text)
+            if until and re.search(until, text):
+                break
+        except _socket.timeout:
+            continue
+        except Exception as e:
+            frames.append(f"[error: {e}]")
+            break
+    sock.close()
+    if not frames:
+        return "(no frames received)"
+    return "\n---\n".join(frames[:30])[:32000]
+
+
+# =============================================================================
+# GitHub workflow (6.0.0)
+# =============================================================================
+
+def _gh(args_list, timeout=30):
+    try:
+        proc = subprocess.run(
+            ["/usr/bin/env", "gh", *args_list],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return f"gh error: {e}\n(install with `brew install gh` if missing)"
+    out = (proc.stdout or "") + (proc.stderr or "")
+    return out.strip() or f"(empty) exit {proc.returncode}"
+
+
+def tool_gh_create_pr(state, args):
+    cmd = ["pr", "create",
+           "--title", args["title"],
+           "--body", args.get("body", ""),
+           "--base", args.get("base", "main")]
+    if args.get("draft", True):
+        cmd.append("--draft")
+    return _gh(cmd, timeout=60)
+
+
+def tool_gh_pr_view(state, args):
+    cmd = ["pr", "view"]
+    if "number" in args:
+        cmd.append(str(args["number"]))
+    cmd += ["--json", "title,body,state,reviews,checks"]
+    return _gh(cmd)
+
+
+def tool_gh_pr_comment(state, args):
+    return _gh(["pr", "comment", str(args["number"]), "--body", args["body"]])
+
+
+def tool_gh_issue_list(state, args):
+    cmd = ["issue", "list"]
+    if "state" in args:
+        cmd += ["--state", args["state"]]
+    if "label" in args:
+        cmd += ["--label", args["label"]]
+    cmd += ["--limit", str(args.get("limit", 20))]
+    return _gh(cmd)
+
+
+def tool_gh_issue_create(state, args):
+    cmd = ["issue", "create",
+           "--title", args["title"],
+           "--body", args.get("body", "")]
+    if "label" in args:
+        cmd += ["--label", args["label"]]
+    return _gh(cmd)
+
+
+def tool_gh_issue_view(state, args):
+    return _gh(["issue", "view", str(args["number"]),
+                "--comments", "--json", "title,body,state,comments"])
+
+
+# =============================================================================
+# Communication (Slack, Messages, Mail) (6.0.0)
+# =============================================================================
+
+def _osascript(script, *args, timeout=15):
+    cmd = ["/usr/bin/osascript", "-e", script] + list(args)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=timeout)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return None, str(e)
+    return proc.stdout.strip(), proc.stderr.strip() if proc.returncode else None
+
+
+def tool_slack_post(state, args):
+    url = args["webhook_url"]
+    payload = {"text": args["text"]}
+    if "channel" in args:
+        payload["channel"] = args["channel"]
+    try:
+        status, _, body = _http_open(url, method="POST", body=payload,
+                                     timeout=10)
+    except (urllib.error.URLError, OSError) as e:
+        return f"slack_post failed: {e}"
+    return f"slack: HTTP {status} {body.decode('utf-8', errors='replace')[:200]}"
+
+
+def tool_imessage_send(state, args):
+    recipient = args["recipient"].replace('"', r'\"')
+    body = args["body"].replace('"', r'\"').replace("\n", " ")
+    script = (f'tell application "Messages" to send "{body}" '
+              f'to buddy "{recipient}" of '
+              f'(service 1 whose service type is iMessage)')
+    out, err = _osascript(script)
+    if err:
+        return f"imessage_send failed: {err}"
+    return f"imessage sent to {args['recipient']}"
+
+
+def tool_mail_send(state, args):
+    to_addr = args["to"].replace('"', r'\"')
+    subject = args["subject"].replace('"', r'\"')
+    body = args["body"].replace('"', r'\"').replace("\n", " ")
+    script = (
+        f'tell application "Mail"\n'
+        f'  set theMessage to make new outgoing message with properties '
+        f'{{subject:"{subject}", content:"{body}", visible:false}}\n'
+        f'  tell theMessage to make new to recipient at end of to recipients '
+        f'with properties {{address:"{to_addr}"}}\n'
+        f'  send theMessage\n'
+        f'end tell'
+    )
+    out, err = _osascript(script, timeout=30)
+    if err:
+        return f"mail_send failed: {err}"
+    return f"email sent to {args['to']}"
+
+
+# =============================================================================
+# Database tools (6.0.0)
+# =============================================================================
+
+_MUTATION_RE = re.compile(
+    r"^\s*(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|REPLACE)\b",
+    re.I)
+
+
+def _md_table(rows, headers=None):
+    if not rows:
+        return "(no rows)"
+    if headers is None:
+        headers = list(range(len(rows[0])))
+    widths = [max(len(str(h)), *(len(str(r[i])) for r in rows))
+              for i, h in enumerate(headers)]
+    sep = "| " + " | ".join("-" * w for w in widths) + " |"
+    head = "| " + " | ".join(str(h).ljust(widths[i])
+                              for i, h in enumerate(headers)) + " |"
+    body_rows = ["| " + " | ".join(str(r[i]).ljust(widths[i])
+                                    for i in range(len(headers))) + " |"
+                 for r in rows]
+    return "\n".join([head, sep, *body_rows])
+
+
+def tool_sqlite_query(state, args):
+    import sqlite3
+    db = args["database"]
+    db_path = (state.workspace / db).resolve() if not Path(db).is_absolute() else Path(db)
+    sql = args["sql"]
+    if _MUTATION_RE.match(sql) and not args.get("allow_mutation"):
+        return ("sqlite_query refused: mutation detected. Re-call with "
+                "allow_mutation=true to proceed.")
+    try:
+        conn = sqlite3.connect(str(db_path))
+        cur = conn.cursor()
+        cur.execute(sql, args.get("params") or [])
+        if cur.description:
+            headers = [d[0] for d in cur.description]
+            rows = cur.fetchmany(200)
+            conn.close()
+            return _md_table(rows, headers)
+        conn.commit()
+        rc = cur.rowcount
+        conn.close()
+        return f"OK (rows affected: {rc})"
+    except sqlite3.Error as e:
+        return f"sqlite error: {e}"
+
+
+def tool_sqlite_schema(state, args):
+    import sqlite3
+    db = args["database"]
+    db_path = (state.workspace / db).resolve() if not Path(db).is_absolute() else Path(db)
+    table = args.get("table")
+    try:
+        conn = sqlite3.connect(str(db_path))
+        cur = conn.cursor()
+        if table:
+            cur.execute(f"PRAGMA table_info({table})")
+            rows = cur.fetchall()
+            return _md_table(rows, ["cid", "name", "type", "notnull", "dflt", "pk"])
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        tables = [r[0] for r in cur.fetchall()]
+        sections = [f"# Tables: {', '.join(tables)}"]
+        for t in tables[:30]:
+            cur.execute(f"PRAGMA table_info({t})")
+            rows = cur.fetchall()
+            sections.append(f"\n## {t}\n" + _md_table(
+                rows, ["cid", "name", "type", "notnull", "dflt", "pk"]))
+        conn.close()
+        return "\n".join(sections)
+    except sqlite3.Error as e:
+        return f"sqlite error: {e}"
+
+
+def _shell_db(cmd_args, timeout=30):
+    try:
+        proc = subprocess.run(cmd_args, capture_output=True, text=True,
+                              timeout=timeout)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return f"db tool error: {e}"
+    out = (proc.stdout or "") + (proc.stderr or "")
+    if len(out) > 32000:
+        out = out[:32000] + "\n…(truncated)"
+    return out
+
+
+def tool_postgres_query(state, args):
+    sql = args["sql"]
+    if _MUTATION_RE.match(sql) and not args.get("allow_mutation"):
+        return "postgres_query refused: mutation. Re-call with allow_mutation=true."
+    cmd = ["/usr/bin/env", "psql"]
+    if "conn_string" in args:
+        cmd += [args["conn_string"]]
+    cmd += ["-A", "-F", "|", "-c", sql]
+    return _shell_db(cmd)
+
+
+def tool_mysql_query(state, args):
+    sql = args["sql"]
+    if _MUTATION_RE.match(sql) and not args.get("allow_mutation"):
+        return "mysql_query refused: mutation. Re-call with allow_mutation=true."
+    cmd = ["/usr/bin/env", "mysql"]
+    if "conn_string" in args:
+        cmd += [args["conn_string"]]
+    cmd += ["-e", sql]
+    return _shell_db(cmd)
+
+
+def tool_redis_query(state, args):
+    cmd = ["/usr/bin/env", "redis-cli"]
+    if "host" in args:
+        cmd += ["-h", args["host"]]
+    cmd += args["command"].split()
+    return _shell_db(cmd, timeout=15)
+
+
+# =============================================================================
+# macOS native (6.0.0)
+# =============================================================================
+
+def tool_keychain_get(state, args):
+    """security find-generic-password. Returns raw password (model may use
+    it as an API key); not printed to the terminal explicitly."""
+    service = args["service"]
+    cmd = ["/usr/bin/security", "find-generic-password",
+           "-s", service, "-w"]
+    if "account" in args:
+        cmd += ["-a", args["account"]]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return f"keychain error: {e}"
+    if proc.returncode != 0:
+        return f"keychain miss: {proc.stderr.strip()[:200]}"
+    # Return the value so the model can use it (e.g. as a Bearer token).
+    return proc.stdout.strip()
+
+
+def tool_mdfind(state, args):
+    query = args["query"]
+    cmd = ["/usr/bin/mdfind"]
+    if "path" in args:
+        cmd += ["-onlyin", args["path"]]
+    cmd += [query]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return f"mdfind error: {e}"
+    lines = (proc.stdout or "").splitlines()[:200]
+    return "\n".join(lines) or "no matches"
+
+
+def tool_notes_create(state, args):
+    title = args["title"].replace('"', r'\"')
+    body = args["body"].replace('"', r'\"').replace("\n", "<br>")
+    script = (f'tell application "Notes" to make new note with properties '
+              f'{{name:"{title}", body:"{body}"}}')
+    out, err = _osascript(script)
+    if err:
+        return f"notes_create failed: {err}"
+    return f"notes: created {args['title']!r}"
+
+
+def tool_notes_search(state, args):
+    query = args["query"].replace('"', r'\"')
+    script = (
+        'tell application "Notes"\n'
+        f'  set matches to notes where name contains "{query}" or body contains "{query}"\n'
+        '  set out to ""\n'
+        '  repeat with n in matches\n'
+        '    set out to out & (name of n) & linefeed\n'
+        '  end repeat\n'
+        '  return out\n'
+        'end tell'
+    )
+    out, err = _osascript(script)
+    if err:
+        return f"notes_search failed: {err}"
+    return out or "no matches"
+
+
+def tool_calendar_today(state, _args):
+    script = (
+        'set today_start to current date\n'
+        'set time of today_start to 0\n'
+        'set today_end to today_start + (1 * days)\n'
+        'tell application "Calendar"\n'
+        '  set out to ""\n'
+        '  repeat with cal in calendars\n'
+        '    set evs to (every event of cal whose start date ≥ today_start and start date < today_end)\n'
+        '    repeat with e in evs\n'
+        '      set out to out & ((start date of e) as string) & " · " & (summary of e) & linefeed\n'
+        '    end repeat\n'
+        '  end repeat\n'
+        '  return out\n'
+        'end tell'
+    )
+    out, err = _osascript(script, timeout=30)
+    if err:
+        return f"calendar_today failed: {err}"
+    return out or "no events today"
+
+
+def tool_calendar_create(state, args):
+    title = args["title"].replace('"', r'\"')
+    when = args["when"]  # ISO-ish string the model gives us
+    duration = int(args.get("duration", 60))
+    # Parse `when` very loosely.
+    script = (
+        f'set startDate to date "{when}"\n'
+        f'set endDate to startDate + ({duration} * minutes)\n'
+        'tell application "Calendar"\n'
+        '  tell calendar 1 to make new event with properties '
+        f'{{summary:"{title}", start date:startDate, end date:endDate}}\n'
+        'end tell'
+    )
+    out, err = _osascript(script, timeout=15)
+    if err:
+        return f"calendar_create failed: {err}"
+    return f"calendar: created {args['title']!r} at {when}"
+
+
+def tool_screen_capture_region(state, _args):
+    """Interactive region selection via screencapture -i; saves to
+    screenshots/region-<ts>.png and returns the path."""
+    target = state.workspace / "screenshots" / f"region-{int(time.time())}.png"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        proc = subprocess.run(
+            ["/usr/sbin/screencapture", "-i", str(target)],
+            capture_output=True, timeout=300,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return f"screen_capture failed: {e}"
+    if not target.is_file():
+        return "screen_capture cancelled (no file saved)"
+    try:
+        rel = target.relative_to(state.workspace)
+    except ValueError:
+        rel = target
+    return f"saved screen capture to {rel}"
+
+
+# =============================================================================
+# Symbol intelligence + dependency manager (6.0.0)
+# =============================================================================
+
+def _build_symbol_index_via_ctags(workspace):
+    tags_path = workspace / ".loom" / "tags"
+    tags_path.parent.mkdir(parents=True, exist_ok=True)
+    excludes = [f"--exclude={d}" for d in WORKSPACE_TREE_IGNORE]
+    for binary in ("/opt/homebrew/bin/ctags", "/usr/local/bin/ctags",
+                   "/usr/bin/ctags"):
+        if not Path(binary).is_file():
+            continue
+        try:
+            proc = subprocess.run(
+                [binary, "--fields=+l-n", "-R", *excludes,
+                 "-f", str(tags_path), str(workspace)],
+                capture_output=True, timeout=60,
+            )
+            if proc.returncode == 0:
+                return tags_path
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            continue
+    return None
+
+
+def _load_symbol_index(workspace):
+    """Return a {symbol: [(path, line, kind), ...]} dict. Build via ctags
+    if available, else fall back to a regex scan for python/js/ts."""
+    tags_path = _build_symbol_index_via_ctags(workspace)
+    index = {}
+    if tags_path and tags_path.is_file():
+        try:
+            for line in tags_path.read_text(encoding="utf-8",
+                                            errors="replace").splitlines():
+                if line.startswith("!"):
+                    continue
+                parts = line.split("\t")
+                if len(parts) < 3:
+                    continue
+                sym, path, _addr = parts[0], parts[1], parts[2]
+                kind = ""
+                lineno = 0
+                for extra in parts[3:]:
+                    if extra.startswith("line:"):
+                        try:
+                            lineno = int(extra.split(":", 1)[1])
+                        except ValueError:
+                            pass
+                    elif len(extra) <= 2:
+                        kind = extra
+                index.setdefault(sym, []).append((path, lineno, kind))
+            return index
+        except OSError:
+            pass
+    # Regex fallback for the most common languages.
+    py_def = re.compile(r"^\s*(?:def|class)\s+(\w+)")
+    js_def = re.compile(r"(?:function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\(?)")
+    swift_def = re.compile(r"^\s*(?:(?:public|private|fileprivate|internal|open|final|static|class|struct|@\w+)\s+)*(?:func|class|struct|enum|protocol|extension|actor|typealias)\s+(\w+)")
+    go_def = re.compile(r"^\s*func\s+(?:\([^)]+\)\s+)?(\w+)")
+    rs_def = re.compile(r"^\s*(?:pub\s+)?(?:fn|struct|enum|trait|impl)\s+(?:<[^>]*>\s+)?(\w+)")
+    for ext in (".py", ".js", ".ts", ".tsx", ".jsx", ".swift", ".go", ".rs"):
+        for path in workspace.rglob(f"*{ext}"):
+            if any(part in WORKSPACE_TREE_IGNORE for part in path.parts):
+                continue
+            try:
+                ext_pat = {
+                    ".py": py_def, ".js": js_def, ".ts": js_def,
+                    ".tsx": js_def, ".jsx": js_def,
+                    ".swift": swift_def, ".go": go_def, ".rs": rs_def,
+                }.get(ext, py_def)
+                for lineno, line in enumerate(
+                        path.read_text(encoding="utf-8",
+                                        errors="replace").splitlines(),
+                        start=1):
+                    m = ext_pat.search(line)
+                    if m:
+                        # Pick the first non-empty capture group.
+                        sym = next((g for g in m.groups() if g), None)
+                        if sym:
+                            try:
+                                rel = str(path.relative_to(workspace))
+                            except ValueError:
+                                rel = str(path)
+                            index.setdefault(sym, []).append(
+                                (rel, lineno, "function"))
+            except OSError:
+                continue
+    return index
+
+
+def tool_symbol_search(state, args):
+    if not state.symbol_index:
+        state.symbol_index = _load_symbol_index(state.workspace)
+    query = args["query"]
+    kind = args.get("kind")
+    hits = []
+    for sym, locs in state.symbol_index.items():
+        if query.lower() in sym.lower():
+            for path, line, k in locs:
+                if kind and k != kind:
+                    continue
+                hits.append(f"{path}:{line}:{k or '?'}:{sym}")
+                if len(hits) >= 200:
+                    break
+        if len(hits) >= 200:
+            break
+    return "\n".join(hits) if hits else f"no symbols matching {query!r}"
+
+
+def _detect_pkg_manager(workspace):
+    if (workspace / "package.json").is_file():
+        return "npm"
+    if (workspace / "requirements.txt").is_file() or (workspace / "pyproject.toml").is_file():
+        return "pip"
+    if (workspace / "Cargo.toml").is_file():
+        return "cargo"
+    if (workspace / "go.mod").is_file():
+        return "go"
+    if (workspace / "Brewfile").is_file():
+        return "brew"
+    return None
+
+
+def tool_package_list(state, _args):
+    mgr = _detect_pkg_manager(state.workspace)
+    if not mgr:
+        return "no package manager detected"
+    if mgr == "npm":
+        try:
+            data = json.loads((state.workspace / "package.json").read_text(encoding="utf-8"))
+            deps = {**data.get("dependencies", {}),
+                    **data.get("devDependencies", {})}
+            return f"# npm ({len(deps)} deps)\n" + "\n".join(
+                f"  {n}: {v}" for n, v in sorted(deps.items()))
+        except (OSError, json.JSONDecodeError) as e:
+            return f"package_list npm error: {e}"
+    if mgr == "pip":
+        req = state.workspace / "requirements.txt"
+        if req.is_file():
+            return f"# requirements.txt\n{req.read_text(encoding='utf-8')[:8000]}"
+        py = state.workspace / "pyproject.toml"
+        return f"# pyproject.toml\n{py.read_text(encoding='utf-8')[:8000]}"
+    if mgr == "cargo":
+        return f"# Cargo.toml\n{(state.workspace / 'Cargo.toml').read_text(encoding='utf-8')[:8000]}"
+    if mgr == "go":
+        return f"# go.mod\n{(state.workspace / 'go.mod').read_text(encoding='utf-8')[:4000]}"
+    return f"manager {mgr}: no list implementation"
+
+
+def tool_package_install(state, args):
+    name = args["name"]
+    version = args.get("version")
+    mgr = args.get("manager") or _detect_pkg_manager(state.workspace)
+    if not mgr:
+        return "package_install: no manager detected; pass `manager` explicitly"
+    if mgr == "npm":
+        cmd = ["npm", "install", f"{name}@{version}" if version else name]
+    elif mgr == "pip":
+        cmd = ["pip", "install", f"{name}=={version}" if version else name]
+    elif mgr == "cargo":
+        cmd = ["cargo", "add", name] + (["--version", version] if version else [])
+    elif mgr == "brew":
+        cmd = ["brew", "install", name]
+    else:
+        return f"package_install: manager {mgr!r} not supported"
+    try:
+        proc = subprocess.run(
+            ["/usr/bin/env", *cmd],
+            cwd=str(state.workspace),
+            capture_output=True, text=True, timeout=300,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return f"package_install error: {e}"
+    out = (proc.stdout or "") + (proc.stderr or "")
+    return f"$ {' '.join(cmd)}\n[exit {proc.returncode}]\n{out[:8000]}"
+
+
+# =============================================================================
+# Sandboxed code execution (6.0.0)
+# =============================================================================
+
+def tool_exec_python(state, args):
+    code = args["code"]
+    timeout = max(1, min(int(args.get("timeout", 10)), 60))
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            proc = subprocess.run(
+                ["/usr/bin/env", "python3", "-I", "-S", "-c", code],
+                cwd=tmp, capture_output=True, text=True, timeout=timeout,
+                env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
+            )
+        except subprocess.TimeoutExpired:
+            return f"exec_python timed out after {timeout}s"
+        out = (proc.stdout or "") + (proc.stderr or "")
+        return f"[exit {proc.returncode}]\n{out[:16000]}"
+
+
+def tool_exec_js(state, args):
+    code = args["code"]
+    timeout = max(1, min(int(args.get("timeout", 10)), 60))
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            proc = subprocess.run(
+                ["/usr/bin/env", "node", "-e", code],
+                cwd=tmp, capture_output=True, text=True, timeout=timeout,
+                env={"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+                     "LANG": "C.UTF-8"},
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            return f"exec_js error: {e}"
+        out = (proc.stdout or "") + (proc.stderr or "")
+        return f"[exit {proc.returncode}]\n{out[:16000]}"
+
+
+# =============================================================================
 # Tool registry
 # =============================================================================
 
@@ -1896,6 +2755,181 @@ BUILTIN_TOOL_SCHEMAS = [
             "line": {"type": "integer"},
             "character": {"type": "integer"}},
             "required": ["path", "line", "character"]}}},
+    # ---- Network & web ------------------------------------------------------
+    {"type": "function", "function": {"name": "web_search",
+        "description": "DuckDuckGo HTML search. Returns title/URL/snippet for each result. Cap 20.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string"}, "limit": {"type": "integer"}},
+            "required": ["query"]}}},
+    {"type": "function", "function": {"name": "web_fetch",
+        "description": "GET a URL. mode='text' strips HTML; 'raw'/'html' return as-is. Cap 64KB.",
+        "parameters": {"type": "object", "properties": {
+            "url": {"type": "string"}, "mode": {"type": "string"}},
+            "required": ["url"]}}},
+    {"type": "function", "function": {"name": "http_request",
+        "description": "Arbitrary HTTP request (GET/POST/PUT/PATCH/DELETE). Permission-gated.",
+        "parameters": {"type": "object", "properties": {
+            "method": {"type": "string"}, "url": {"type": "string"},
+            "headers": {"type": "object"}, "body": {},
+            "timeout": {"type": "integer"}},
+            "required": ["method", "url"]}}},
+    {"type": "function", "function": {"name": "rss_fetch",
+        "description": "Parse an RSS or Atom feed and return recent items.",
+        "parameters": {"type": "object", "properties": {
+            "url": {"type": "string"}, "limit": {"type": "integer"}},
+            "required": ["url"]}}},
+    {"type": "function", "function": {"name": "websocket_subscribe",
+        "description": "Connect to a WebSocket, optionally send a message, collect frames until `until` regex matches or timeout. Permission-gated.",
+        "parameters": {"type": "object", "properties": {
+            "url": {"type": "string"}, "message": {"type": "string"},
+            "until": {"type": "string"}, "timeout": {"type": "integer"}},
+            "required": ["url"]}}},
+    # ---- GitHub ------------------------------------------------------------
+    {"type": "function", "function": {"name": "gh_create_pr",
+        "description": "Create a GitHub PR (drafts by default). Returns the URL.",
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string"}, "body": {"type": "string"},
+            "base": {"type": "string"}, "draft": {"type": "boolean"}},
+            "required": ["title"]}}},
+    {"type": "function", "function": {"name": "gh_pr_view",
+        "description": "Read a PR's title/body/state/reviews via gh.",
+        "parameters": {"type": "object", "properties": {
+            "number": {"type": "integer"}},
+            "required": []}}},
+    {"type": "function", "function": {"name": "gh_pr_comment",
+        "description": "Post a comment on a PR.",
+        "parameters": {"type": "object", "properties": {
+            "number": {"type": "integer"}, "body": {"type": "string"}},
+            "required": ["number", "body"]}}},
+    {"type": "function", "function": {"name": "gh_issue_list",
+        "description": "List GitHub issues; filter by state and/or label.",
+        "parameters": {"type": "object", "properties": {
+            "state": {"type": "string"}, "label": {"type": "string"},
+            "limit": {"type": "integer"}},
+            "required": []}}},
+    {"type": "function", "function": {"name": "gh_issue_create",
+        "description": "Open a new GitHub issue.",
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string"}, "body": {"type": "string"},
+            "label": {"type": "string"}},
+            "required": ["title"]}}},
+    {"type": "function", "function": {"name": "gh_issue_view",
+        "description": "Read an issue + its comments.",
+        "parameters": {"type": "object", "properties": {
+            "number": {"type": "integer"}},
+            "required": ["number"]}}},
+    # ---- Communication -----------------------------------------------------
+    {"type": "function", "function": {"name": "slack_post",
+        "description": "Post a message to a Slack webhook URL. Permission-gated.",
+        "parameters": {"type": "object", "properties": {
+            "webhook_url": {"type": "string"}, "text": {"type": "string"},
+            "channel": {"type": "string"}},
+            "required": ["webhook_url", "text"]}}},
+    {"type": "function", "function": {"name": "imessage_send",
+        "description": "Send an iMessage via Messages.app (macOS only).",
+        "parameters": {"type": "object", "properties": {
+            "recipient": {"type": "string"}, "body": {"type": "string"}},
+            "required": ["recipient", "body"]}}},
+    {"type": "function", "function": {"name": "mail_send",
+        "description": "Send an email via Mail.app (macOS only).",
+        "parameters": {"type": "object", "properties": {
+            "to": {"type": "string"}, "subject": {"type": "string"},
+            "body": {"type": "string"}},
+            "required": ["to", "subject", "body"]}}},
+    # ---- Databases ---------------------------------------------------------
+    {"type": "function", "function": {"name": "sqlite_query",
+        "description": "Run SQL against a SQLite file. Mutations require allow_mutation=true.",
+        "parameters": {"type": "object", "properties": {
+            "database": {"type": "string"}, "sql": {"type": "string"},
+            "params": {"type": "array"}, "allow_mutation": {"type": "boolean"}},
+            "required": ["database", "sql"]}}},
+    {"type": "function", "function": {"name": "sqlite_schema",
+        "description": "Get the schema of one table or every table in a SQLite database.",
+        "parameters": {"type": "object", "properties": {
+            "database": {"type": "string"}, "table": {"type": "string"}},
+            "required": ["database"]}}},
+    {"type": "function", "function": {"name": "postgres_query",
+        "description": "Run SQL via the local `psql` CLI. Mutations require allow_mutation=true.",
+        "parameters": {"type": "object", "properties": {
+            "conn_string": {"type": "string"}, "sql": {"type": "string"},
+            "allow_mutation": {"type": "boolean"}},
+            "required": ["sql"]}}},
+    {"type": "function", "function": {"name": "mysql_query",
+        "description": "Run SQL via the local `mysql` CLI. Mutations require allow_mutation=true.",
+        "parameters": {"type": "object", "properties": {
+            "conn_string": {"type": "string"}, "sql": {"type": "string"},
+            "allow_mutation": {"type": "boolean"}},
+            "required": ["sql"]}}},
+    {"type": "function", "function": {"name": "redis_query",
+        "description": "Run a Redis command via redis-cli.",
+        "parameters": {"type": "object", "properties": {
+            "host": {"type": "string"}, "command": {"type": "string"}},
+            "required": ["command"]}}},
+    # ---- macOS native -------------------------------------------------------
+    {"type": "function", "function": {"name": "keychain_get",
+        "description": "Read a generic password from the macOS Keychain. Returns the raw value.",
+        "parameters": {"type": "object", "properties": {
+            "service": {"type": "string"}, "account": {"type": "string"}},
+            "required": ["service"]}}},
+    {"type": "function", "function": {"name": "mdfind",
+        "description": "Spotlight metadata search via mdfind.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string"}, "path": {"type": "string"}},
+            "required": ["query"]}}},
+    {"type": "function", "function": {"name": "notes_create",
+        "description": "Create an Apple Notes note.",
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string"}, "body": {"type": "string"}},
+            "required": ["title", "body"]}}},
+    {"type": "function", "function": {"name": "notes_search",
+        "description": "Search Apple Notes for a query string.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string"}},
+            "required": ["query"]}}},
+    {"type": "function", "function": {"name": "calendar_today",
+        "description": "List Apple Calendar events for today.",
+        "parameters": {"type": "object", "properties": {}, "required": []}}},
+    {"type": "function", "function": {"name": "calendar_create",
+        "description": "Create an Apple Calendar event. `when` is a date string parseable by AppleScript.",
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string"}, "when": {"type": "string"},
+            "duration": {"type": "integer"}},
+            "required": ["title", "when"]}}},
+    {"type": "function", "function": {"name": "screen_capture_region",
+        "description": "Interactively select a screen region and save a PNG. Returns the path.",
+        "parameters": {"type": "object", "properties": {}, "required": []}}},
+    # ---- Symbol intelligence -----------------------------------------------
+    {"type": "function", "function": {"name": "symbol_search",
+        "description": "Search a workspace symbol index (ctags or regex fallback). Returns path:line:kind:name.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string"}, "kind": {"type": "string"}},
+            "required": ["query"]}}},
+    {"type": "function", "function": {"name": "package_list",
+        "description": "List dependencies from package.json / requirements.txt / Cargo.toml / etc.",
+        "parameters": {"type": "object", "properties": {}, "required": []}}},
+    {"type": "function", "function": {"name": "package_install",
+        "description": "Install a package via npm/pip/cargo/brew. Permission-gated.",
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string"}, "version": {"type": "string"},
+            "manager": {"type": "string"}},
+            "required": ["name"]}}},
+    # ---- Sandboxed exec ----------------------------------------------------
+    {"type": "function", "function": {"name": "exec_python",
+        "description": "Run a Python snippet in an isolated subprocess (no env inheritance, /tmp cwd, 10s default).",
+        "parameters": {"type": "object", "properties": {
+            "code": {"type": "string"}, "timeout": {"type": "integer"}},
+            "required": ["code"]}}},
+    {"type": "function", "function": {"name": "exec_js",
+        "description": "Run a JS snippet via node in an isolated subprocess.",
+        "parameters": {"type": "object", "properties": {
+            "code": {"type": "string"}, "timeout": {"type": "integer"}},
+            "required": ["code"]}}},
+    # ---- ship_it (7.0.0 capstone) ------------------------------------------
+    {"type": "function", "function": {"name": "ship_it",
+        "description": "End-to-end: plan -> scaffold (aggressive batch) -> test (auto_test) -> commit (auto_commit) -> PR (gh_create_pr). Use with care.",
+        "parameters": {"type": "object", "properties": {
+            "spec": {"type": "string"}, "target": {"type": "string"}},
+            "required": ["spec"]}}},
     {"type": "function", "function": {"name": "run_bash",
         "description": "Execute a shell command in the workspace.",
         "parameters": {"type": "object", "properties": {
@@ -2551,6 +3585,59 @@ BUILTIN_TOOL_FUNCS["lsp_diagnostics"] = tool_lsp_diagnostics
 BUILTIN_TOOL_FUNCS["lsp_definition"] = tool_lsp_definition
 BUILTIN_TOOL_FUNCS["lsp_references"] = tool_lsp_references
 
+# 6.0.0 / 7.0.0 — internet/workflow/database/macOS/symbol/exec/ship.
+BUILTIN_TOOL_FUNCS.update({
+    "web_search": tool_web_search,
+    "web_fetch": tool_web_fetch,
+    "http_request": tool_http_request,
+    "rss_fetch": tool_rss_fetch,
+    "websocket_subscribe": tool_websocket_subscribe,
+    "gh_create_pr": tool_gh_create_pr,
+    "gh_pr_view": tool_gh_pr_view,
+    "gh_pr_comment": tool_gh_pr_comment,
+    "gh_issue_list": tool_gh_issue_list,
+    "gh_issue_create": tool_gh_issue_create,
+    "gh_issue_view": tool_gh_issue_view,
+    "slack_post": tool_slack_post,
+    "imessage_send": tool_imessage_send,
+    "mail_send": tool_mail_send,
+    "sqlite_query": tool_sqlite_query,
+    "sqlite_schema": tool_sqlite_schema,
+    "postgres_query": tool_postgres_query,
+    "mysql_query": tool_mysql_query,
+    "redis_query": tool_redis_query,
+    "keychain_get": tool_keychain_get,
+    "mdfind": tool_mdfind,
+    "notes_create": tool_notes_create,
+    "notes_search": tool_notes_search,
+    "calendar_today": tool_calendar_today,
+    "calendar_create": tool_calendar_create,
+    "screen_capture_region": tool_screen_capture_region,
+    "symbol_search": tool_symbol_search,
+    "package_list": tool_package_list,
+    "package_install": tool_package_install,
+    "exec_python": tool_exec_python,
+    "exec_js": tool_exec_js,
+    # ship_it registered below after orchestrator helpers exist.
+})
+
+# Read-only tools that the parallel dispatcher can fan out.
+SAFE_PARALLEL_TOOLS.update({
+    "web_search", "web_fetch", "rss_fetch",
+    "gh_pr_view", "gh_issue_list", "gh_issue_view",
+    "sqlite_query", "sqlite_schema",
+    "mdfind", "notes_search", "calendar_today", "package_list",
+    "symbol_search",
+})
+
+# Tools that need a permission prompt (in addition to FS mutators + run_bash).
+DANGEROUS_TOOLS_EXTRA = {
+    "http_request", "websocket_subscribe",
+    "gh_create_pr", "gh_pr_comment", "gh_issue_create",
+    "slack_post", "imessage_send", "mail_send",
+    "package_install", "ship_it",
+}
+
 
 def _kick_speculative_prefetch(state, narration, already_prefetched):
     """Look at the streamed narration so far and prefetch likely tool
@@ -2933,6 +4020,372 @@ def save_project_knowledge(state):
         target.write_text(json.dumps(data, indent=2), encoding="utf-8")
     except OSError:
         pass
+
+
+# =============================================================================
+# 6.0.0 / 7.0.0 — file watcher, cost meter, plugins, self-reflect, drift,
+# mermaid, constitution, ship_it
+# =============================================================================
+
+def start_file_watcher(state):
+    """Background thread that polls the workspace tree for external edits
+    every 2s. When a file's (mtime, size) changes vs the last snapshot,
+    record a note in state.external_change_notes. The next run_turn flushes
+    these as a system message so the model knows to re-read."""
+    if state.watcher_thread is not None:
+        return
+    state.watcher_stop.clear()
+
+    def _snapshot():
+        snap = {}
+        for path in state.workspace.rglob("*"):
+            if any(part in WORKSPACE_TREE_IGNORE or part.startswith(".")
+                   for part in path.parts):
+                continue
+            try:
+                if path.is_file():
+                    st = path.stat()
+                    try:
+                        rel = str(path.relative_to(state.workspace))
+                    except ValueError:
+                        continue
+                    snap[rel] = (st.st_mtime, st.st_size)
+            except OSError:
+                continue
+            if len(snap) > 4000:
+                break
+        return snap
+
+    state.watched_files = _snapshot()
+
+    def _loop():
+        while not state.watcher_stop.wait(2.0):
+            try:
+                current = _snapshot()
+            except Exception:
+                continue
+            for rel, (mtime, size) in current.items():
+                prev = state.watched_files.get(rel)
+                if prev is None:
+                    state.external_change_notes.append(
+                        f"ADDED externally: {rel} ({size} bytes)")
+                elif prev != (mtime, size):
+                    state.external_change_notes.append(
+                        f"CHANGED externally: {rel} "
+                        f"({prev[1]} -> {size} bytes)")
+            for rel in list(state.watched_files):
+                if rel not in current:
+                    state.external_change_notes.append(
+                        f"DELETED externally: {rel}")
+            state.watched_files = current
+            # Keep the buffer bounded.
+            if len(state.external_change_notes) > 50:
+                state.external_change_notes = state.external_change_notes[-50:]
+
+    state.watcher_thread = threading.Thread(target=_loop, daemon=True)
+    state.watcher_thread.start()
+
+
+def stop_file_watcher(state):
+    if state.watcher_thread is None:
+        return
+    state.watcher_stop.set()
+    state.watcher_thread = None
+
+
+def flush_external_change_notes(state):
+    """Pull any pending external-change notes out of the watcher buffer
+    and return them as a system message body (or empty string)."""
+    if not state.external_change_notes:
+        return ""
+    notes = list(state.external_change_notes)
+    state.external_change_notes.clear()
+    return ("ORCHESTRATOR file_watcher: files were modified outside this "
+            "session since the last turn. Re-read them before editing.\n  - "
+            + "\n  - ".join(notes[:30]))
+
+
+def cost_meter_record(state, name, elapsed_ms, args, result):
+    bucket = state.cost_breakdown.setdefault(name, {
+        "calls": 0, "elapsed_ms": 0, "est_tokens": 0,
+        "paths_read": {},
+    })
+    bucket["calls"] += 1
+    bucket["elapsed_ms"] += int(elapsed_ms)
+    bucket["est_tokens"] += max(1, len(str(result)) // 4)
+    if name in ("read_file", "glob", "grep", "list_dir"):
+        path = (args or {}).get("path") or (args or {}).get("pattern") or ""
+        if path:
+            bucket["paths_read"][path] = bucket["paths_read"].get(path, 0) + 1
+
+
+def render_cost_breakdown(state):
+    """Markdown summary of state.cost_breakdown ordered by elapsed."""
+    if not state.cost_breakdown:
+        return "(no tool calls yet)"
+    rows = sorted(state.cost_breakdown.items(),
+                  key=lambda kv: -kv[1]["elapsed_ms"])[:8]
+    lines = ["| tool | calls | elapsed_ms | ~tokens |",
+             "| --- | --- | --- | --- |"]
+    for name, b in rows:
+        lines.append(f"| {name} | {b['calls']} | {b['elapsed_ms']} | "
+                     f"{b['est_tokens']} |")
+    # Top paths read.
+    all_paths = {}
+    for b in state.cost_breakdown.values():
+        for p, c in b["paths_read"].items():
+            all_paths[p] = all_paths.get(p, 0) + c
+    if all_paths:
+        top = sorted(all_paths.items(), key=lambda kv: -kv[1])[:5]
+        lines.append("\nTop file paths read:")
+        for p, c in top:
+            lines.append(f"  {c}x {p}")
+    return "\n".join(lines)
+
+
+def load_plugins(state):
+    """Auto-import every *.py file under ~/.loom/tools/ and merge its
+    `LMSTUDIO_TOOLS` list into BUILTIN_TOOL_SCHEMAS + BUILTIN_TOOL_FUNCS.
+
+    Each entry should be {"schema": <function schema dict>, "func": <fn>}.
+    Errors during import are recorded but never fatal."""
+    plugin_root = Path.home() / ".loom" / "tools"
+    if not plugin_root.is_dir():
+        return
+    import importlib.util
+    for path in sorted(plugin_root.glob("*.py")):
+        try:
+            spec = importlib.util.spec_from_file_location(
+                f"lmstudio_plugin_{path.stem}", path)
+            if spec is None or spec.loader is None:
+                continue
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        except Exception as e:
+            print(style(f"warning: plugin {path.name} failed to load: {e}",
+                        "warning"), file=sys.stderr)
+            continue
+        tools = getattr(module, "LMSTUDIO_TOOLS", None) or []
+        for entry in tools:
+            schema = entry.get("schema")
+            func = entry.get("func")
+            if not schema or not callable(func):
+                continue
+            name = schema.get("function", {}).get("name")
+            if not name:
+                continue
+            BUILTIN_TOOL_SCHEMAS.append(schema)
+            BUILTIN_TOOL_FUNCS[name] = func
+            state.plugin_names.append(name)
+
+
+def detect_drift(state):
+    """Compare project_knowledge's recorded build_commands to current state.
+    Anything that references a file/script no longer in the workspace is
+    flagged as stale. Surfaced in the banner."""
+    if not state.project_knowledge:
+        return
+    warnings = []
+    for cmd in (state.project_knowledge.get("build_commands") or [])[-20:]:
+        # Look for `./script`, `python file.py`, `node file.js` style refs.
+        m = re.search(r"(?:^|\s)([\w./-]+\.(?:py|js|ts|sh|rb))\b", cmd)
+        if not m:
+            continue
+        ref = m.group(1)
+        if ref.startswith("./"):
+            ref = ref[2:]
+        candidate = state.workspace / ref
+        if not candidate.is_file():
+            warnings.append(f"build cmd references missing file: {ref}  ({cmd[:80]})")
+    state.drift_warnings = warnings[:8]
+
+
+def reflect_on_turn(state):
+    """Send the last turn to the model as a small judge prompt; capture
+    the score + one-line lesson, append to project_knowledge['lessons']."""
+    if not state.self_reflect:
+        return
+    # Grab the most recent user / assistant pair.
+    last_user = next(
+        (e for e in reversed(state.transcript) if e.get("role") == "user"),
+        None,
+    )
+    last_asst = next(
+        (e for e in reversed(state.transcript) if e.get("role") == "assistant"),
+        None,
+    )
+    if not (last_user and last_asst):
+        return
+    messages = [
+        {"role": "system", "content":
+            "You are an evaluator. Score the assistant's turn on a 1-10 "
+            "scale: did it address the user's request, use the right "
+            "tools, avoid wasted turns? Then on a second line write a "
+            "ONE-sentence lesson for future turns. Just the score and the "
+            "lesson, nothing else."},
+        {"role": "user", "content":
+            "USER:\n" + (last_user.get("content") or "")[:1500]
+            + "\n\nASSISTANT:\n" + (last_asst.get("content") or "")[:2000]},
+    ]
+    reply = request_plain_completion(
+        state.base_url, state.model, messages, timeout=60)
+    if not reply:
+        return
+    if not state.project_knowledge:
+        state.project_knowledge = {}
+    lessons = state.project_knowledge.setdefault("lessons", [])
+    lessons.append({"ts": _now_iso(), "judgement": reply.strip()[:400]})
+    state.project_knowledge["lessons"] = lessons[-40:]
+
+
+def render_mermaid_blocks(state, text):
+    """Find ```mermaid fenced blocks in the model's text and pipe each
+    through mmdc (if installed) to render a PNG into diagrams/. Returns
+    the list of rendered paths."""
+    if "```mermaid" not in text:
+        return []
+    rendered = []
+    fence_re = re.compile(r"```mermaid\n(.*?)```", re.S)
+    diagrams_dir = state.workspace / "diagrams"
+    for binary in ("/opt/homebrew/bin/mmdc", "/usr/local/bin/mmdc",
+                   "/usr/bin/mmdc"):
+        if Path(binary).is_file():
+            mmdc = binary
+            break
+    else:
+        return []
+    diagrams_dir.mkdir(parents=True, exist_ok=True)
+    for i, m in enumerate(fence_re.finditer(text)):
+        source = m.group(1)
+        ts = int(time.time())
+        out_path = diagrams_dir / f"mermaid-{ts}-{i}.png"
+        with tempfile.NamedTemporaryFile("w", suffix=".mmd", delete=False,
+                                          encoding="utf-8") as f:
+            f.write(source)
+            src_path = Path(f.name)
+        try:
+            proc = subprocess.run(
+                [mmdc, "-i", str(src_path), "-o", str(out_path),
+                 "-b", "transparent"],
+                capture_output=True, timeout=30,
+            )
+            if proc.returncode == 0:
+                rendered.append(str(out_path.relative_to(state.workspace)))
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            continue
+        finally:
+            src_path.unlink(missing_ok=True)
+    return rendered
+
+
+# tempfile already imported at module top? Check.
+# We rely on the top-of-file imports; tempfile is brought in lazily where
+# needed elsewhere. Import it here for render_mermaid_blocks.
+import tempfile
+
+
+def load_constitution(workspace):
+    """Read .loom/constitution.md from the workspace. Parse into a list of
+    rules (one per non-blank, non-comment line). Returns (text, rules)."""
+    path = Path(workspace) / ".loom" / "constitution.md"
+    if not path.is_file():
+        return "", []
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return "", []
+    rules = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        # Strip leading list markers.
+        s = re.sub(r"^[-*]\s+", "", s)
+        rules.append(s)
+    return text, rules
+
+
+_CONSTITUTION_MECHANICAL = [
+    (re.compile(r"(rm\s+-rf|rm\s+-fr)", re.I), "rm -rf"),
+    (re.compile(r"git\s+push\s+--force|git\s+push\s+-f\b"), "git push --force"),
+    (re.compile(r"DROP\s+DATABASE", re.I), "DROP DATABASE"),
+    (re.compile(r"DROP\s+TABLE", re.I), "DROP TABLE"),
+    (re.compile(r"TRUNCATE\s+TABLE", re.I), "TRUNCATE TABLE"),
+]
+
+
+def constitution_violation(state, name, args):
+    """Return a human-readable reason string if the proposed tool call
+    violates a constitution rule; None when ok."""
+    if not state.constitution_rules:
+        return None
+    payload = json.dumps(args, indent=2) if args else "{}"
+    haystack = f"{name} {payload}".lower()
+    # Cheap mechanical scan first.
+    for pat, label in _CONSTITUTION_MECHANICAL:
+        for rule in state.constitution_rules:
+            if label.lower() in rule.lower() and pat.search(payload + " " + haystack):
+                return (f"rule violated: {rule!r} (matched pattern "
+                        f"{label!r})")
+    # Heuristic phrase match: rule mentions a tool name -> compare.
+    for rule in state.constitution_rules:
+        rl = rule.lower()
+        if name in rl and ("never" in rl or "do not" in rl or "don't" in rl
+                            or "refuse" in rl):
+            # Look for an argument mentioned in the rule.
+            for word in re.findall(r"`([^`]+)`|\"([^\"]+)\"|'([^']+)'", rule):
+                token = next((g for g in word if g), "")
+                if token and token.lower() in payload.lower():
+                    return f"rule violated: {rule!r}"
+    return None
+
+
+def tool_ship_it(state, args):
+    """End-to-end pipeline. Returns a multi-line summary of what each
+    step produced. The tool is permission-gated and itself does NOT
+    silently push to remotes — it only stages + commits + opens a PR
+    when the workspace is a git repo + gh is available."""
+    spec = args["spec"]
+    target = args.get("target", "")
+    summary = ["# ship_it pipeline", f"spec: {spec[:200]}"]
+    # 1. Aggressive batch: produce a task list via the model + scaffold.
+    prev_batch = state.aggressive_batching
+    state.aggressive_batching = True
+    try:
+        # Synthesize an internal user message describing the spec.
+        run_turn(state, f"Plan and scaffold this spec via update_tasks + "
+                        f"file-create steps:\n\n{spec}")
+        summary.append("scaffold: see assistant turn above")
+    finally:
+        state.aggressive_batching = prev_batch
+    # 2. Auto-test (if available).
+    runner = detect_test_runner(state.workspace)
+    if runner:
+        test_note = run_auto_test(state)
+        summary.append(f"tests: {(test_note or 'no output')[:240]}")
+    # 3. Auto-commit.
+    completed = [t for t in state.sink.current
+                 if t.get("status") == "completed"]
+    commit_note = maybe_auto_commit(state, completed)
+    if commit_note:
+        summary.append(f"commit: {commit_note}")
+    # 4. Open PR.
+    if (state.workspace / ".git").exists():
+        try:
+            pr = _gh(["pr", "create", "--draft",
+                      "--title", spec[:60],
+                      "--body", spec + "\n\nGenerated via ship_it."],
+                     timeout=60)
+            summary.append(f"pr: {pr[:200]}")
+        except Exception as e:
+            summary.append(f"pr: failed ({e})")
+    # 5. Deploy (only if a deploy target is given AND looks safe).
+    if target:
+        summary.append(f"deploy target: {target} (manual step; not invoked)")
+    return "\n".join(summary)
+
+
+BUILTIN_TOOL_FUNCS["ship_it"] = tool_ship_it
 
 
 def install_completer(workspace, slash_commands):
@@ -4315,6 +5768,32 @@ class AgentState:
         # alongside project context / workspace tree / project knowledge.
         self.persona_text = ""
         self.persona_source = ""
+        # Constitution (hard guardrails). Same load semantics as persona but
+        # also validated against every tool call before dispatch.
+        self.constitution_text = ""
+        self.constitution_rules = []
+        # Per-session domain blocklist for web_fetch / web_search (suffix
+        # match on hostname).
+        self.web_blocklist = set()
+        # Continuous file watching state. Keys are workspace-relative paths;
+        # values are last-seen mtime + size. Updated by a background thread.
+        self.watched_files = {}
+        self.watcher_thread = None
+        self.watcher_stop = threading.Event()
+        self.external_change_notes = []
+        # Workspace symbol index. {symbol: [(path, line, kind), ...]}.
+        # Built lazily on the first symbol_search call.
+        self.symbol_index = None
+        # Cost meter: per-tool breakdown of elapsed_ms + estimated tokens.
+        # Each entry: {calls, elapsed_ms, est_tokens, paths_read: Counter}.
+        self.cost_breakdown = {}
+        # Self-reflection state (end-of-turn judge prompt).
+        self.self_reflect = False
+        self.reflection_lessons = []
+        # Plugin tools loaded from ~/.loom/tools/*.py.
+        self.plugin_names = []
+        # Drift warnings from project knowledge load.
+        self.drift_warnings = []
         # Multi-model routing (planner/coder/explainer override the
         # default `model`). Empty string = use default.
         self.planner_model = ""
@@ -4324,6 +5803,9 @@ class AgentState:
     def system_message(self):
         body = self.system_override or self.system_prompt
         extras = []
+        if self.constitution_text:
+            extras.append("# Constitution (HARD RULES — must obey)\n\n"
+                          + self.constitution_text)
         if self.persona_text:
             extras.append(self.persona_text)
         if self.context_text:
@@ -4367,6 +5849,12 @@ def run_turn(state, user_message, *, json_emit=None):
             f"transcript trimmed.", "tip"))
     elif json_emit and state.compact_count and len(state.transcript) <= 8:
         json_emit("compacted", count=state.compact_count)
+    # Flush any external file-change notifications collected by the watcher.
+    ext_note = flush_external_change_notes(state)
+    if ext_note:
+        state.transcript.append({"role": "system", "content": ext_note})
+        if not json_emit:
+            print(style("  ▸ file_watcher: external changes flagged", "tip"))
     user_payload = expand_mentions(user_message, state.workspace)
     state.transcript.append({"role": "user", "content": user_payload})
     state.absorb_text(user_payload)
@@ -4469,6 +5957,14 @@ def run_turn(state, user_message, *, json_emit=None):
                 for tc in finished_tool_calls
             ]
         state.transcript.append(assistant_entry)
+
+        # Mermaid: if the assistant turn contained ```mermaid blocks, try
+        # to render each one to a PNG (silent skip when mmdc not installed).
+        rendered = render_mermaid_blocks(state, assistant_text)
+        if rendered and not json_emit:
+            head = style(GLYPH_TOOL, "tool")
+            print(f"  {head} {style('mermaid', 'key')} "
+                  f"{style(', '.join(rendered), 'dim')}")
 
         if not finished_tool_calls:
             # Don't auto-mark-complete here - the continuation policy may
@@ -4697,6 +6193,14 @@ def drive_user_message(state, user_message, *, json_emit=None):
     # Once the orchestrator gives up, anything still pending/in_progress
     # gets flipped to completed so the visible task list isn't stuck.
     state.sink.mark_remaining_complete()
+    # Self-reflection at the very end of the human-issued turn (after all
+    # continuations have run). Saves the lesson into project_knowledge so
+    # future sessions benefit.
+    if state.self_reflect:
+        try:
+            reflect_on_turn(state)
+        except Exception:
+            pass
     return final_text
 
 
@@ -4730,6 +6234,21 @@ def _dispatch_tool(state, name, args, *, narration=""):
 
     args_in = args if isinstance(args, dict) else {}
     canonical_in = _canonical(args_in)
+
+    # Constitution hard guardrail. Refuse BEFORE any other logic so the
+    # model can't talk itself out of the rule via continuation/repair.
+    if state.constitution_rules:
+        violation = constitution_violation(state, name, args_in)
+        if violation:
+            _render_tool_result_summary(name, f"constitution: {violation}",
+                                        False)
+            state.tool_history.append({
+                "name": name, "args": canonical_in, "error": True,
+            })
+            return ("ORCHESTRATOR constitution: refused. " + violation
+                    + "\n\nThe workspace constitution forbids this. "
+                    "Re-think your approach within the rules; do not retry "
+                    "this exact call.")
 
     if name in BUILTIN_TOOL_FUNCS and detect_repeat_failure(
             state.tool_history, name, canonical_in):
@@ -4826,7 +6345,8 @@ def _dispatch_tool(state, name, args, *, narration=""):
                 "name": name, "args": canonical_in, "error": True,
             })
             return "Error: run_bash disabled. Use --allow-bash or /bash on."
-        if name in DANGEROUS_TOOLS and not state.permissions.gate(name, args_in):
+        gate_set = DANGEROUS_TOOLS | DANGEROUS_TOOLS_EXTRA
+        if name in gate_set and not state.permissions.gate(name, args_in):
             state.tool_history.append({
                 "name": name, "args": _canonical(args_in), "error": True,
             })
@@ -4837,10 +6357,14 @@ def _dispatch_tool(state, name, args, *, narration=""):
                 "name": name, "args": canonical_in, "error": True,
             })
             return f"Error: unknown tool {name}"
+        _start = time.time()
         result = func(state, args_in)
+        elapsed_ms = int((time.time() - _start) * 1000)
+        cost_meter_record(state, name, elapsed_ms, args_in, result)
         _render_tool_result_summary(name, result, True)
         state.tool_history.append({
             "name": name, "args": _canonical(args_in), "error": False,
+            "elapsed_ms": elapsed_ms,
         })
         memory_record(state, name, args_in, str(result))
         if name in SAFE_PARALLEL_TOOLS and state.prefetch_enabled:
@@ -4924,6 +6448,13 @@ class SlashRouter:
             "/autocommit": self.cmd_autocommit,
             "/persona": self.cmd_persona,
             "/lsp":     self.cmd_lsp,
+            "/watch":   self.cmd_watch,
+            "/reflect": self.cmd_reflect,
+            "/plugins": self.cmd_plugins,
+            "/constitution": self.cmd_constitution,
+            "/ship":    self.cmd_ship,
+            "/web":     self.cmd_web,
+            "/blocklist": self.cmd_blocklist,
         }
 
     def names(self):
@@ -5016,8 +6547,21 @@ class SlashRouter:
         elapsed = int(time.time() - self.state.started_at)
         rate = self.state.approx_tokens / elapsed if elapsed > 0 else 0
         print(f"  {style('tokens (approx)', 'key')}  {self.state.approx_tokens:,}")
+        if self.state.context_window:
+            pct = self.state.approx_tokens * 100 / self.state.context_window
+            print(f"  {style('window', 'key')}          "
+                  f"{self.state.approx_tokens:,}/"
+                  f"{self.state.context_window:,} ({pct:.0f}%)")
         print(f"  {style('elapsed', 'key')}         {elapsed}s")
         print(f"  {style('rate', 'key')}            {rate:.1f} tok/s (rough)")
+        if self.state.prefetch_hits or self.state.prefetch_misses:
+            print(f"  {style('prefetch', 'key')}        "
+                  f"hits={self.state.prefetch_hits} "
+                  f"misses={self.state.prefetch_misses}")
+        if self.state.cost_breakdown:
+            print()
+            print(style("  Per-tool breakdown:", "key"))
+            print(render_cost_breakdown(self.state))
         return "continue"
 
     def cmd_tasks(self, _):
@@ -5381,6 +6925,90 @@ class SlashRouter:
         print(style(f"  persona -> {source}", "ok"))
         return "continue"
 
+    def cmd_watch(self, rest):
+        if rest in ("on", "yes", "true"):
+            start_file_watcher(self.state)
+        elif rest in ("off", "no", "false"):
+            stop_file_watcher(self.state)
+        else:
+            if self.state.watcher_thread:
+                stop_file_watcher(self.state)
+            else:
+                start_file_watcher(self.state)
+        msg = "on" if self.state.watcher_thread else "off"
+        print(style(f"  file watcher {msg}  "
+                    f"(tracking {len(self.state.watched_files)} files)",
+                    "ok"))
+        return "continue"
+
+    def cmd_reflect(self, rest):
+        if rest in ("on", "yes", "true"):
+            self.state.self_reflect = True
+        elif rest in ("off", "no", "false"):
+            self.state.self_reflect = False
+        else:
+            self.state.self_reflect = not self.state.self_reflect
+        msg = "on" if self.state.self_reflect else "off"
+        print(style(f"  self-reflect {msg}", "ok"))
+        return "continue"
+
+    def cmd_plugins(self, _):
+        if not self.state.plugin_names:
+            print(style("  no plugins loaded.", "dim"))
+            return "continue"
+        for name in self.state.plugin_names:
+            print(f"   {style(name, 'key')}")
+        return "continue"
+
+    def cmd_constitution(self, rest):
+        if rest == "reload":
+            self.state.constitution_text, self.state.constitution_rules = (
+                load_constitution(self.state.workspace))
+            self.state.reset_transcript()
+            print(style(
+                f"  constitution reloaded "
+                f"({len(self.state.constitution_rules)} rules)", "ok"))
+            return "continue"
+        if not self.state.constitution_rules:
+            print(style("  no constitution loaded. Create "
+                        ".loom/constitution.md and `/constitution reload`.",
+                        "dim"))
+            return "continue"
+        print(style(f"  {len(self.state.constitution_rules)} rules:", "key"))
+        for r in self.state.constitution_rules:
+            print(f"   - {r}")
+        return "continue"
+
+    def cmd_ship(self, rest):
+        if not rest:
+            print(style("  usage: /ship <spec>", "dim"))
+            return "continue"
+        result = tool_ship_it(self.state, {"spec": rest})
+        print(result)
+        return "continue"
+
+    def cmd_web(self, rest):
+        if not rest:
+            print(style("  usage: /web <query>", "dim"))
+            return "continue"
+        print(tool_web_search(self.state, {"query": rest, "limit": 5}))
+        return "continue"
+
+    def cmd_blocklist(self, rest):
+        if not rest:
+            print(style(f"  web_blocklist: "
+                        f"{sorted(self.state.web_blocklist) or '(empty)'}",
+                        "key"))
+            return "continue"
+        if rest.startswith("-"):
+            host = rest[1:].strip()
+            self.state.web_blocklist.discard(host)
+            print(style(f"  removed {host}", "ok"))
+        else:
+            self.state.web_blocklist.add(rest.strip())
+            print(style(f"  added {rest.strip()}", "ok"))
+        return "continue"
+
     def cmd_lsp(self, rest):
         if rest in ("off", "stop"):
             if self.state.lsp:
@@ -5520,6 +7148,16 @@ def main():
     parser.add_argument("--lsp", default=os.environ.get("LMSTUDIO_LSP", ""),
         help="Shell command line for a stdio LSP server (typescript-"
              "language-server, sourcekit-lsp, pyright, etc.).")
+    parser.add_argument("--watch", action="store_true",
+        default=os.environ.get("LMSTUDIO_WATCH", "0") == "1",
+        help="Run a background workspace watcher; external file changes "
+             "are surfaced to the model on the next turn.")
+    parser.add_argument("--reflect", action="store_true",
+        default=os.environ.get("LMSTUDIO_REFLECT", "0") == "1",
+        help="At the end of each human-issued turn, send a judge prompt to "
+             "score the turn and save a lesson to project knowledge.")
+    parser.add_argument("--no-plugins", action="store_true",
+        help="Skip auto-loading ~/.loom/tools/*.py plugins.")
     args = parser.parse_args()
 
     set_theme(args.theme)
@@ -5590,8 +7228,22 @@ def main():
         # Persona load (workspace persona wins over --persona name).
         state.persona_text, state.persona_source = load_persona(
             workspace, args.persona or None)
+        # Constitution load (workspace hard-rule file).
+        state.constitution_text, state.constitution_rules = load_constitution(
+            workspace)
+        # Drift detection against the loaded project knowledge.
+        detect_drift(state)
     # Cross-session permission learning.
     load_permission_grants(state)
+    # Plugin auto-import.
+    if not args.no_plugins:
+        load_plugins(state)
+    # File watcher.
+    if args.watch:
+        start_file_watcher(state)
+    # Self-reflection.
+    if args.reflect:
+        state.self_reflect = True
     # Multi-model routing config from CLI flags.
     state.planner_model = args.planner_model or ""
     state.coder_model = args.coder_model or ""
@@ -5756,6 +7408,10 @@ def _shutdown(state, json_emit):
         state.lsp = None
     try:
         save_permission_grants(state)
+    except Exception:
+        pass
+    try:
+        stop_file_watcher(state)
     except Exception:
         pass
     if json_emit:
