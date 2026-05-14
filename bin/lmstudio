@@ -5906,17 +5906,64 @@ def fetch_loaded_models(base_url):
 #     so the runtime tool schema stays tight and the chat template fits
 #     the model's actual context window.
 
-TEXT_TOOL_INSTRUCTIONS = """
-Your runtime does not pipe tool calls through a structured field. To use
-a tool, emit a single fenced JSON block at the END of your response, like:
+TEXT_TOOL_INSTRUCTIONS = """\
+# CRITICAL: TOOL CALL FORMAT (read this FIRST)
+
+Your runtime does NOT support native tool calling. To take any action -
+creating a file, reading a file, running a command, marking a task done,
+anything - you MUST emit your tool invocation as a fenced JSON block in
+the assistant response. The orchestrator parses these and runs them.
+
+## How to invoke a tool
+
+End your response with EXACTLY one fenced block in this format:
 
 ```tool_call
-{"name": "write_file", "arguments": {"path": "app.py", "content": "..."}}
+{"name": "<tool_name>", "arguments": {<args_object>}}
 ```
 
-You may emit ONE tool call per response. The orchestrator parses the
-fenced block, runs the tool, and feeds the result back. Do not invent
-tool names - use ONLY the tools listed in the system prompt above.
+Then STOP. Do not narrate further. The orchestrator will run the call,
+feed the result back to you, and you'll continue on the next turn.
+
+## Complete worked example
+
+If the user asks "create a Python hello world", your ENTIRE response
+should be:
+
+I'll create hello.py now.
+
+```tool_call
+{"name": "write_file", "arguments": {"path": "hello.py", "content": "print('hello, world')\\n"}}
+```
+
+That is it. One sentence of preface (optional). One tool_call block.
+Stop.
+
+## Anti-patterns - DO NOT do any of these
+
+- Writing a multi-step plan as prose ("Step 1: Create folder. Step 2:
+  Initialize project. Step 3: ..."). Plans are for `update_tasks` only.
+- Listing "Commands to Execute" in markdown. These get ignored - they
+  are not tool calls, just text the orchestrator throws away.
+- Describing what the tool will do. Just emit the call.
+- Ending the response without a ```tool_call block when the user wants
+  you to actually do something. A response with no tool call is a wasted
+  turn - the orchestrator will nudge you to retry immediately.
+- More than one tool_call block per response. The orchestrator runs
+  the FIRST one and ignores the rest.
+
+## The tool catalogue is in the system prompt below
+
+Use ONLY the tool names listed there. Common ones:
+
+- `write_file({"path": "...", "content": "..."})` - create/overwrite a file
+- `edit_file({"path": "...", "old_string": "...", "new_string": "..."})` - surgical edit
+- `read_file({"path": "..."})` - read a file
+- `list_dir({"path": "..."})` - list a directory
+- `run_bash({"command": "..."})` - shell command (when --allow-bash is on)
+- `update_tasks({"tasks": [{"subject": "...", "activeForm": "...", "status": "pending"}, ...]})` - plan tracker
+
+Make ONE call per response. Wait for the result. Then the next call.
 """
 
 
@@ -6925,7 +6972,145 @@ def should_auto_continue(state, last_text):
                 "actually finish what you said before ending the turn. "
                 "Use the tools - do not just narrate."
             )
+    # 8.0.6: text-mode bail-out detection. Non-native-tool families
+    # (Gemma, base Llama, Phi-3) sometimes burn a turn writing a long
+    # prose plan and never emit a tool call. The plan-without-action
+    # case isn't caught by the two checks above because there are no
+    # tasks AND no first-person promises. Detect the pattern from
+    # length + path/command mentions and nudge the model into emitting
+    # exactly one tool call in the proper format.
+    if (state.adapter
+            and not state.adapter.native_tools
+            and not state.last_turn_had_tool_calls
+            and last_text
+            and _looks_like_plan_without_action(last_text)):
+        return (
+            "ORCHESTRATOR: you wrote a plan but did not emit any tool "
+            "call. Text-mode tool calls REQUIRE a fenced ```tool_call "
+            "JSON block. Pick ONE concrete next step from your plan and "
+            "emit it now, in this exact format:\n\n"
+            "```tool_call\n"
+            "{\"name\": \"<tool>\", \"arguments\": {<args>}}\n"
+            "```\n\n"
+            "No prose. No bullet lists. No 'Commands to Execute'. Just "
+            "ONE fenced tool_call block. Stop after the closing ```. "
+            "Workspace root: " + str(state.workspace)
+        )
     return None
+
+
+_PATH_HINT_RE = re.compile(
+    r"(?:\.[A-Za-z0-9]{1,5}\b)|(?:/[A-Za-z0-9_.-]+){2,}|(?:`[^`\n]{2,}`)|"
+    r"(?:\bnpm\b|\bcurl\b|\bgit\b|\bmkdir\b|\btouch\b|\bcd\b|\bnpx\b)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_plan_without_action(text):
+    """Heuristic: is this assistant text a multi-line plan that should
+    have produced a tool call? True when the text is long (>200 chars)
+    and contains either file path-like fragments or shell-command tokens
+    in two or more places. Triggers the text-mode rescue continuation."""
+    if not text or len(text) < 200:
+        return False
+    return len(_PATH_HINT_RE.findall(text)) >= 2
+
+
+def _infer_tool_from_text(text, workspace):
+    """8.0.6: heuristic - pick the most likely tool the model meant to
+    call from its narration. Used by the grammar-forced rescue when a
+    text-mode model has burned its turns on prose. Returns
+    (tool_name, partial_args_dict). (None, {}) when nothing matches
+    cleanly; the rescue gives up."""
+    if not text:
+        return None, {}
+    lower = text.lower()
+    path = _scan_for_path(text, workspace)
+    write_hints = ("create file", "write file", "new file", "make a file",
+                   "let me create", "let me write", "i'll create",
+                   "i will create", "create the file", "creating ",
+                   "scaffold", "generate code", "write the file")
+    run_hints = ("run command", "execute the", "let me run", "i'll run",
+                 "i will run", "execute this", "shell ", "npm install",
+                 "npm run", "git init", "mkdir ", "touch ", "npx ")
+    read_hints = ("read file", "let me read", "look at the file",
+                  "check the contents", "read the file", "i'll read",
+                  "i will read")
+    list_hints = ("list directory", "list files", "list the contents",
+                  "ls -", "what's in")
+    if any(h in lower for h in write_hints):
+        return "write_file", ({"path": path} if path else {})
+    if any(h in lower for h in run_hints):
+        m = re.search(r"`([^`\n]{2,400})`", text)
+        cmd = m.group(1).strip() if m else ""
+        return "run_bash", ({"command": cmd} if cmd else {})
+    if any(h in lower for h in read_hints):
+        return "read_file", ({"path": path} if path else {})
+    if any(h in lower for h in list_hints):
+        return "list_dir", {"path": "."}
+    # Fallback: if we found ANY path candidate, default to write_file -
+    # by far the most common rescue action when the model has narrated
+    # a file plan.
+    if path:
+        return "write_file", {"path": path}
+    return None, {}
+
+
+def rescue_force_tool_call(state):
+    """8.0.6: last-ditch tool emission for text-mode families. When the
+    zero-progress streak hits the limit AND the family is non-native,
+    we infer the most-likely tool from the model's last narration,
+    force its arguments via grammar-constrained generation, dispatch
+    the result, and append a synthetic system note so the model can
+    pick up from there. Returns a short status string on success, None
+    when no rescue was possible."""
+    if not state.grammar_supported:
+        return None
+    last_assistant = ""
+    for msg in reversed(state.transcript):
+        if msg.get("role") == "assistant":
+            last_assistant = msg.get("content", "") or ""
+            break
+    if not last_assistant.strip():
+        return None
+    tool_name, partial = _infer_tool_from_text(last_assistant, state.workspace)
+    if not tool_name:
+        return None
+    schema = schema_params_for(tool_name)
+    if not schema:
+        return None
+    try:
+        forced = force_grammar_args(
+            state.base_url, state.model, state.transcript,
+            tool_name, schema, partial, last_assistant, state.workspace,
+        )
+    except Exception:
+        forced = None
+    if not forced or missing_required(tool_name, forced):
+        return None
+    # Dispatch through the normal path so permission gates, hooks, and
+    # journaling all fire. We don't re-render the call line; this is an
+    # orchestrator-internal action.
+    try:
+        result = _dispatch_tool(state, tool_name, forced, narration="")
+    except Exception as e:
+        return None
+    # Plain-text system note - no tool_calls in the transcript so any
+    # chat template (including Gemma's, which can't render OpenAI
+    # tool_calls structures) shows it as a normal message.
+    state.transcript.append({
+        "role": "system",
+        "content": (
+            f"ORCHESTRATOR rescue: you narrated a plan but did not emit "
+            f"a tool call. I ran `{tool_name}` on your behalf using "
+            f"your narration as the source.\n\n"
+            f"Arguments:\n{json.dumps(forced, indent=2)}\n\n"
+            f"Result:\n{str(result)[:1200]}\n\n"
+            f"Continue from here. Emit your NEXT step as a fenced "
+            f"```tool_call block, NOT as prose."
+        ),
+    })
+    return f"forced {tool_name} via grammar"
 
 
 def schema_summary_for(name):
@@ -7091,6 +7276,12 @@ class AgentState:
         self.progress_this_turn = False
         self.zero_progress_streak = 0
         self.max_zero_progress_streak = 2
+        # 8.0.6 — text-mode rescue budget. Each human-issued turn allows
+        # at most N grammar-forced tool rescues so a model that won't
+        # cooperate doesn't loop the rescue mechanism. Reset in
+        # drive_user_message alongside the streak counter.
+        self.rescues_this_turn = 0
+        self.max_rescues_per_turn = 2
         # Auto-compaction. Triggered when approx_tokens / context_window
         # exceeds COMPACT_TRIGGER_RATIO. Counter visible in the footer.
         self.auto_compact = True
@@ -7219,14 +7410,17 @@ class AgentState:
 
     def system_message(self):
         body = self.system_override or self.system_prompt
-        extras = []
-        # 8.0.5: family-specific tool-call format guidance for non-native
-        # tool models (Gemma, base Llama, Phi-3). No-op when native tools
-        # work, so adding this is always safe.
+        # 8.0.6: for non-native-tool families (Gemma, Phi-3, Llama 2),
+        # PREPEND the text-mode instructions so they're the first thing
+        # the model sees - small / instruction-tuned models otherwise
+        # drift into long prose plans before they ever reach the tool
+        # list further down. Native-tool families get no addendum so
+        # this is a no-op for Qwen3 / DeepSeek / Llama 3.x / etc.
         if self.adapter:
             addendum = self.adapter.system_addendum()
             if addendum:
-                extras.append(addendum.strip())
+                body = addendum.strip() + "\n\n" + body
+        extras = []
         if self.constitution_text:
             extras.append("# Constitution (HARD RULES — must obey)\n\n"
                           + self.constitution_text)
@@ -7650,6 +7844,7 @@ def drive_user_message(state, user_message, *, json_emit=None):
     force another round. Returns the final assistant text."""
     state.continuation_count = 0
     state.zero_progress_streak = 0
+    state.rescues_this_turn = 0
     final_text = run_turn(state, user_message, json_emit=json_emit)
 
     if not state.auto_continue:
@@ -7673,19 +7868,42 @@ def drive_user_message(state, user_message, *, json_emit=None):
         else:
             state.zero_progress_streak += 1
         if state.zero_progress_streak >= state.max_zero_progress_streak:
-            stopped_for_zero_progress = True
-            if json_emit:
-                json_emit("orchestrator_stopped",
-                          attempts=state.continuation_count,
-                          reason="zero_progress")
-            else:
-                print()
-                print(style(
-                    f"  orchestrator stopped after "
-                    f"{state.zero_progress_streak} unproductive "
-                    f"continuation(s) - the model kept narrating without "
-                    f"using tools. Control returned to you.", "warning"))
-            break
+            # 8.0.6: before giving up, try one last grammar-forced rescue
+            # for text-mode families. If we can infer a tool from the
+            # model's last narration, run it via grammar-constrained
+            # generation and let the loop continue from the new state.
+            rescued = False
+            if (state.adapter and not state.adapter.native_tools
+                    and state.grammar_supported
+                    and state.rescues_this_turn < state.max_rescues_per_turn):
+                rescue_note = rescue_force_tool_call(state)
+                if rescue_note:
+                    state.rescues_this_turn += 1
+                    if json_emit:
+                        json_emit("orchestrator_rescue", action=rescue_note)
+                    else:
+                        print()
+                        print(style(
+                            f"  ▸ orchestrator rescue: {rescue_note}",
+                            "tip"))
+                    state.zero_progress_streak = 0
+                    state.progress_this_turn = True
+                    rescued = True
+            if not rescued:
+                stopped_for_zero_progress = True
+                if json_emit:
+                    json_emit("orchestrator_stopped",
+                              attempts=state.continuation_count,
+                              reason="zero_progress")
+                else:
+                    print()
+                    print(style(
+                        f"  orchestrator stopped after "
+                        f"{state.zero_progress_streak} unproductive "
+                        f"continuation(s) - the model kept narrating "
+                        f"without using tools. Control returned to you.",
+                        "warning"))
+                break
         state.continuation_count += 1
         if json_emit:
             json_emit("auto_continue",

@@ -651,6 +651,23 @@ General-purpose 3B–4B models will usually skip `update_tasks` or call it once 
 - Zero-progress orchestrator guard. The continuation loop tracks consecutive turns where no real tool work happened (only narration + bare `update_tasks` calls) and breaks out after 2 unproductive rounds, returning control to the user instead of running through the full 12 continuations.
 - Up/down arrow history fixed. Three causes were in play simultaneously: the Esc-to-CSI peek timeout (40 ms) was too tight for some terminals, VMIN/VTIME were never set in the manual termios setup so `read(1)` could return early with no bytes, and `\x1bOA`-style SS3 application-cursor-key sequences weren't handled. All three are addressed.
 
+## 8.0.6 — text-mode tool calling actually works on Gemma
+
+The 8.0.5 framework was correct in shape but the model still wouldn't tool-call from a prose-heavy plan. 8.0.6 adds three reinforcements so Gemma (and other text-mode families) reliably emit JSON tool calls instead of writing essays:
+
+1. **TEXT_TOOL_INSTRUCTIONS rewritten and prepended.** The format guidance is now the FIRST thing the model sees, not the last. Includes a complete worked example and an explicit anti-pattern list: no multi-step prose plans, no "Commands to Execute" markdown headings, no descriptions of what the tool will do. Just the fenced `\`\`\`tool_call` block.
+
+2. **Plan-without-action detection in `should_auto_continue`.** When a non-native family emits a long response (>200 chars) containing file paths or shell-command tokens but no tool calls, the orchestrator injects a strict "emit ONE tool call NOW" nudge instead of giving up.
+
+3. **Grammar-forced rescue.** Last resort: when the zero-progress streak hits the limit on a text-mode family, the orchestrator picks the most likely intended tool from the model's narration (`write_file` if paths are present, `run_bash` if backticked commands are mentioned, etc.), forces valid arguments via `response_format` JSON schema, dispatches the result, and appends a synthetic system note. The loop continues from the rescued state. Capped at 2 rescues per human-issued turn to prevent runaway.
+
+The fix flow for a typical "build me a website" prompt under Gemma:
+
+- Turn 1: model writes a plan as prose. Extractor finds nothing. Plan-without-action detector fires.
+- Turn 2: model retries; emits a proper `\`\`\`tool_call` block this time. Extractor parses it. Dispatch runs.
+- If turn 2 still fails: zero-progress streak fires. Grammar-rescue infers `write_file`, forces args, dispatches.
+- Turn 3+: model sees the rescued state and continues normally.
+
 ## 8.0.5 — model family adapters
 
 `bin/lmstudio` now ships a `ModelAdapter` layer that recognizes the family of the loaded model and adjusts behavior accordingly. The agent works on Qwen3, Qwen2.5-Coder, Gemma 2 / Gemma 3, Llama 3.x, Llama 2, DeepSeek-Coder, DeepSeek-R1, Codestral, Mistral, Phi-3 / 3.5 / 4, Granite, Hermes, and Yi-Coder out of the box. Unknown model ids default to "try native tools, fall through to text extraction" so an unfamiliar checkpoint still does useful work.
