@@ -651,6 +651,22 @@ General-purpose 3B–4B models will usually skip `update_tasks` or call it once 
 - Zero-progress orchestrator guard. The continuation loop tracks consecutive turns where no real tool work happened (only narration + bare `update_tasks` calls) and breaks out after 2 unproductive rounds, returning control to the user instead of running through the full 12 continuations.
 - Up/down arrow history fixed. Three causes were in play simultaneously: the Esc-to-CSI peek timeout (40 ms) was too tight for some terminals, VMIN/VTIME were never set in the manual termios setup so `read(1)` could return early with no bytes, and `\x1bOA`-style SS3 application-cursor-key sequences weren't handled. All three are addressed.
 
+## 8.0.16 — coder-aware default + faster update pill
+
+Two real fixes from the field.
+
+**Default model now biases toward coder-strong families.** 8.0.13's auto-load picked the smallest 4B-class model regardless of whether it was meant for code. On a user system with both `jan-v1-4b` (generalist 4B) and `qwen/qwen3.5-9b` available, the picker would auto-load the 4B and then struggle on coding tasks like "scaffold a website."
+
+New scoring in `pick_default_model`:
+1. **Coder family score** (primary). Regex over key + architecture: `qwen`, `deepseek`, `codestral`, `coder`, `stable-code`, `yi-coder`, `magicoder`, `wizardcoder`, `starcoder`, `granite-code`, `codellama`, `codegemma`. Matches score 0; everything else scores 1.
+2. **Distance from `--default-size`** (now 7, was 4).
+3. **File size on disk** (smaller wins ties between same-family same-size).
+4. **Alphabetical key** for determinism.
+
+Hard cap raised from `--default-size-max=8` to `12` so 9B qwen variants are eligible. On the test system this flips the auto-pick from `jan-v1-4b` → `qwen/qwen3.5-9b` — exactly what a coding session wants.
+
+**Update pill checks on app activation.** Previously only every 60 seconds via the background poll. 8.0.16 adds an `onReceive(NSApplication.didBecomeActiveNotification)` hook in `LoomApp` so coming back to Loom from another app triggers an immediate `checkRemote()`. The 60-second background poll still runs as a safety net.
+
 ## 8.0.15 — fix mouse-click random-char injection
 
 Clicking inside the input box was inserting characters like `0;42;15` into the in-flight line. Cause: when a terminal has SGR mouse tracking enabled (vim or tmux often leave it on for the parent shell), a click emits `\x1b[<0;42;15M`. The editor's CSI handler only recognized digit-prefixed multi-byte sequences, so the `<` parameter prefix fell through to `_handle_csi("<")` (a no-op) and the trailing `0;42;15M` bytes were read as individual printable characters and inserted into the line.

@@ -6329,20 +6329,46 @@ def _parse_params_string(s):
     return None
 
 
-def pick_default_model(models, *, prefer_b=4, max_b=8):
-    """Choose the best auto-load default. Score (lower better):
-    closeness to prefer_b, then total file size on disk (avoids picking
-    a 26B-A4B MoE over a 4B dense model just because they share active
-    params), then alphabetical for determinism. Returns the model key
-    or None when nothing fits."""
+_CODER_FAMILY_HINTS = re.compile(
+    r"(?:^|\W)(qwen|deepseek|codestral|coder|stable.?code|yi.?coder|"
+    r"magicoder|wizardcoder|starcoder|granite.?code|code(?:llama|gemma))",
+    re.I,
+)
+
+
+def _coder_score(model):
+    """Return 0 when the model's key or architecture suggests strong
+    coding ability, 1 otherwise. Used as the primary tie-break in
+    pick_default_model so the user gets a coder-class default when
+    available (Qwen, DeepSeek, Codestral, etc.) over a generalist
+    same-size model (Gemma, Mistral, Phi)."""
+    key = model.get("key") or ""
+    arch = model.get("arch") or ""
+    return 0 if (_CODER_FAMILY_HINTS.search(key)
+                  or _CODER_FAMILY_HINTS.search(arch)) else 1
+
+
+def pick_default_model(models, *, prefer_b=7, max_b=12):
+    """Choose the best auto-load default. Scoring (lower better):
+      1. coder-family bias (qwen/deepseek/codestral etc. score 0,
+         others 1). Primary factor - a 9B qwen beats a 7B gemma.
+      2. closeness to prefer_b (distance from preferred size).
+      3. total file size on disk (4B dense model beats a 26B-A4B
+         MoE that shares active-params count).
+      4. alphabetical key for determinism.
+
+    Returns the model key or None when nothing fits."""
     candidates = []
     for m in models:
         b = m.get("paramsB")
         if not isinstance(b, int) or b < 1 or b > max_b:
             continue
-        score = (abs(b - prefer_b),
-                 m.get("size_bytes") or 0,
-                 m.get("key", ""))
+        score = (
+            _coder_score(m),
+            abs(b - prefer_b),
+            m.get("size_bytes") or 0,
+            m.get("key", ""),
+        )
         candidates.append((score, m["key"]))
     if not candidates:
         return None
@@ -6350,7 +6376,7 @@ def pick_default_model(models, *, prefer_b=4, max_b=8):
     return candidates[0][1]
 
 
-def auto_load_default_model(base_url, *, prefer_b=4, max_b=8,
+def auto_load_default_model(base_url, *, prefer_b=7, max_b=12,
                              ctx=16384, parallel=1, gpu="max"):
     """When LM Studio has no model loaded, pick the smallest tool-use
     model on disk and load it. Returns (key, message). On any failure
@@ -10247,15 +10273,17 @@ def main():
         help="When no model is loaded, error out instead of auto-loading "
              "the smallest tool-use model on disk.")
     parser.add_argument("--default-size", type=int,
-        default=int(os.environ.get("LMSTUDIO_DEFAULT_SIZE", "4")),
+        default=int(os.environ.get("LMSTUDIO_DEFAULT_SIZE", "7")),
         help="Preferred parameter count (in billions) for the auto-load "
-             "pick. Default 4 - fast and fits everything. Auto-load "
-             "scores candidates by closeness to this size.")
+             "pick. Default 7 - capable enough for non-trivial coding "
+             "work while staying fast. Picker also biases toward "
+             "coder-strong families (qwen, deepseek, codestral) at "
+             "any size.")
     parser.add_argument("--default-size-max", type=int,
-        default=int(os.environ.get("LMSTUDIO_DEFAULT_SIZE_MAX", "8")),
-        help="Hard upper bound on auto-load size in billions. Default 8. "
-             "Larger models are skipped during auto-pick to keep startup "
-             "fast.")
+        default=int(os.environ.get("LMSTUDIO_DEFAULT_SIZE_MAX", "12")),
+        help="Hard upper bound on auto-load size in billions. Default 12 "
+             "lets a 9B qwen-coder beat a 7B gemma when both are on disk. "
+             "Larger models skipped to keep startup fast.")
     parser.add_argument("--loop", action="store_true",
         help="Autonomous-loop mode. After each turn, re-enter the session "
              "until the model calls `loop_complete`.")

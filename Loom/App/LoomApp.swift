@@ -56,6 +56,17 @@ struct LoomApp: App {
                     layout.startLiveAgentPolling()
                     await agentRegistry.refresh(localEndpoints: localEndpoints.endpoints)
                 }
+                // 8.0.16: trigger an extra remote-update check when Loom
+                // comes back to the foreground. The 60s background poll
+                // still runs, but this hook means a user who just shipped
+                // a new release (or switched back from a browser after
+                // reading a release note) sees the pill within seconds
+                // instead of within a minute.
+                .onReceive(NotificationCenter.default.publisher(
+                    for: NSApplication.didBecomeActiveNotification
+                )) { _ in
+                    Task { await updateService.checkRemote() }
+                }
                 .onOpenURL { url in
                     URLSchemeHandler.handle(url)
                 }
