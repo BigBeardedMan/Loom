@@ -6218,6 +6218,17 @@ def stream_completion(base_url, model, messages, tools):
                     event = json.loads(data_str)
                 except json.JSONDecodeError:
                     continue
+                # LM Studio reports mid-stream errors as `event: error\n
+                # data: {"error": {...}}` SSE frames. The `event:` line
+                # gets skipped (doesn't start with `data:`), but the
+                # payload still arrives here without a `choices` key.
+                # Without this check the loop silently drops the error,
+                # the streamer never gets fed, and the agent looks dead.
+                if "error" in event and "choices" not in event:
+                    err = event["error"]
+                    msg = err.get("message") if isinstance(err, dict) else str(err)
+                    yield ("error", f"LM Studio: {msg}")
+                    return
                 choices = event.get("choices") or []
                 if not choices:
                     continue
@@ -7015,8 +7026,10 @@ def run_turn(state, user_message, *, json_emit=None):
         prefetched_keys = set()
 
         with EscWatcher() as esc:
+            essential_only = getattr(state, "essential_tools_only", False)
             stream = stream_completion(state.base_url, active_model,
-                                       state.transcript, _all_tool_schemas(state))
+                                       state.transcript,
+                                       _all_tool_schemas(state, essential_only=essential_only))
             try:
                 for kind, data in stream:
                     if esc.check():
@@ -7068,6 +7081,23 @@ def run_turn(state, user_message, *, json_emit=None):
         if had_content and not assistant_text.endswith("\n") and not json_emit:
             print()
         if error_message:
+            # Auto-recover from "n_keep > n_ctx" by retrying once with the
+            # essentials-only tool set. The full 70-tool schema set is
+            # ~5-7k tokens and a model loaded with a 4k context can't fit
+            # it. Without this retry the user sees an error and gives up.
+            if ("n_keep" in error_message and "n_ctx" in error_message
+                    and not getattr(state, "essential_tools_only", False)):
+                state.essential_tools_only = True
+                if not json_emit:
+                    print(style(
+                        "  ⚠ context too small for full tool surface; "
+                        "retrying with essentials only. Reload LM Studio "
+                        "with a larger context (32k+) for the full toolkit.",
+                        "warning"))
+                else:
+                    json_emit("tool_surface_reduced",
+                              message="essentials-only due to small context")
+                continue
             if json_emit:
                 json_emit("error", message=error_message)
             else:
@@ -7336,8 +7366,23 @@ def drive_user_message(state, user_message, *, json_emit=None):
     return final_text
 
 
-def _all_tool_schemas(state):
-    schemas = list(BUILTIN_TOOL_SCHEMAS)
+# Smallest viable tool set when the model's actual runtime context is too
+# tight to fit the full 70+ schemas. Surface-level "essentials" only.
+ESSENTIAL_TOOL_NAMES = {
+    "read_file", "write_file", "edit_file", "multi_edit",
+    "list_dir", "glob", "grep", "find_todos",
+    "update_tasks", "run_bash", "spawn_agent",
+    "git_status", "git_diff",
+    "ask_user", "save_memory",
+}
+
+
+def _all_tool_schemas(state, *, essential_only=False):
+    if essential_only:
+        schemas = [s for s in BUILTIN_TOOL_SCHEMAS
+                   if (s.get("function") or {}).get("name") in ESSENTIAL_TOOL_NAMES]
+    else:
+        schemas = list(BUILTIN_TOOL_SCHEMAS)
     schemas.extend(build_mcp_tool_schemas(state.mcp_clients))
     return schemas
 
@@ -8566,6 +8611,42 @@ def main():
     )
     state.context_window = fetch_model_context_window(args.base_url, args.model)
     state.grammar_supported = probe_grammar_support(args.base_url, state.model)
+    # Tool-surface fits: when the model's reported context is tight (under
+    # ~16k tokens), the full 70-tool schema set alone is bigger than the
+    # prompt budget. LM Studio rejects with "n_keep > n_ctx" and we'd just
+    # silently hang. Trim the optional/specialty tools down to keep the
+    # base agent loop usable. The user can re-enable everything by
+    # loading the model with a larger context.
+    if state.context_window and state.context_window < 16000:
+        # Keep the essentials; drop the long-tail tools.
+        keep = {
+            # Core file ops
+            "read_file", "write_file", "edit_file", "multi_edit",
+            "list_dir", "glob", "grep", "find_todos",
+            # Tasks + bash + delegation
+            "update_tasks", "run_bash", "spawn_agent",
+            # Git read-only (commonly useful even on small contexts)
+            "git_status", "git_diff",
+            # Browser screenshot path (one tool, gracefully skipped if no playwright)
+            "browser_screenshot",
+        }
+        trimmed_schemas = []
+        trimmed_funcs = {}
+        for spec in BUILTIN_TOOL_SCHEMAS:
+            name = spec.get("function", {}).get("name")
+            if name in keep:
+                trimmed_schemas.append(spec)
+        for name, fn in BUILTIN_TOOL_FUNCS.items():
+            if name in keep or name.startswith("mcp__"):
+                trimmed_funcs[name] = fn
+        BUILTIN_TOOL_SCHEMAS[:] = trimmed_schemas
+        BUILTIN_TOOL_FUNCS.clear()
+        BUILTIN_TOOL_FUNCS.update(trimmed_funcs)
+        print(style(
+            f"  ⚠ model context is small ({state.context_window} tok); "
+            f"trimmed tool surface to {len(trimmed_schemas)} essentials. "
+            "Reload LM Studio with a larger context (32k+) to enable the "
+            "full toolkit.", "warning"), file=sys.stderr)
     # --allow-bash from the CLI is meant as "I trust the agent to run bash
     # for this session" - enable the tool AND skip the per-call prompt.
     # /bash on inside the REPL keeps the prompt because that's a softer,
