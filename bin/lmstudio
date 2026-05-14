@@ -351,6 +351,22 @@ def draw_banner_extra(state):
     if state.drift_warnings:
         rows.append(("drift",
                      f"{len(state.drift_warnings)} stale entries", "warning"))
+    if state.hooks:
+        hook_count = sum(len(v) for v in state.hooks.values())
+        rows.append(("hooks", f"{hook_count} script(s) loaded", "ok"))
+    if state.settings:
+        rows.append(("settings", "loaded", "ok"))
+    if state.active_skills:
+        names = ", ".join(s["name"] for s in state.active_skills)
+        rows.append(("skills", names, "ok"))
+    if state.user_memory_text:
+        rows.append(("memory", "user MEMORY.md loaded", "ok"))
+    if state.slash_command_files:
+        rows.append(("commands",
+                     f"{len(state.slash_command_files)} slash command files",
+                     "ok"))
+    if state.bg_shells:
+        rows.append(("shells", f"{len(state.bg_shells)} background", "ok"))
     if not rows:
         return
     bar = "─" * (width - 2)
@@ -1399,7 +1415,12 @@ def tool_run_bash(state, args):
 
     Streams the command's combined output line-by-line to the terminal so
     long-running tasks aren't silent. Captures the full output to return
-    as the tool result."""
+    as the tool result.
+
+    Uses `select.select` so the read wakes every 1s to check the deadline.
+    Without it, a child that writes a prompt without a trailing newline
+    would block readline forever and the deadline check would never fire."""
+    import select as _select
     command = args["command"]
     timeout = max(1, min(int(args.get("timeout_seconds", 30)), 600))
     proc = subprocess.Popen(
@@ -1417,12 +1438,28 @@ def tool_run_bash(state, args):
     total_bytes = 0
     cap = 32000
     quiet = not sys.stdout.isatty()
+    killed_for_timeout = False
     try:
         while True:
-            if time.time() > deadline:
+            remaining = deadline - time.time()
+            if remaining <= 0:
                 proc.kill()
+                killed_for_timeout = True
                 chunks.append("\n[orchestrator killed: timeout exceeded]\n")
                 break
+            ready, _, _ = _select.select([proc.stdout], [], [],
+                                          min(1.0, remaining))
+            if not ready:
+                if proc.poll() is not None:
+                    # Drain any final buffered output.
+                    rest = proc.stdout.read()
+                    if rest:
+                        if not quiet:
+                            sys.stdout.write(rest)
+                            sys.stdout.flush()
+                        chunks.append(rest)
+                    break
+                continue
             line = proc.stdout.readline()
             if not line:
                 if proc.poll() is not None:
@@ -1447,7 +1484,8 @@ def tool_run_bash(state, args):
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
-    header = f"$ {command}\n[exit {proc.returncode}]\n"
+    rc = proc.returncode if not killed_for_timeout else -1
+    header = f"$ {command}\n[exit {rc}]\n"
     return header + "".join(chunks)
 
 
@@ -1747,17 +1785,33 @@ def tool_find_todos(state, args):
 
 
 def tool_spawn_agent(state, args):
-    """Dispatches a focused subprompt to a fresh `lmstudio` subprocess with
-    its own transcript and a custom system message. Returns the child's
-    final assistant message. Useful for delegating expensive subtasks
-    (research, test-writing) without polluting the parent context."""
+    """Dispatch a focused subprompt to a fresh `lmstudio` subprocess.
+
+    With `isolation="worktree"` (8.0.0), creates a temporary git worktree
+    under ~/.loom/worktrees/<id> from the current HEAD; the subagent runs
+    there. On clean exit, the diff against the parent is included in the
+    return value. Files modified in the worktree are NOT auto-merged back
+    — caller decides what to do with them."""
     role = args.get("role", "subagent")
     prompt = args["prompt"]
+    isolation = args.get("isolation", "")
     system = args.get("system", f"You are a focused {role} subagent. "
                                 "Answer briefly with the final result.")
+
+    workspace_arg = str(state.workspace)
+    worktree = None
+    if isolation == "worktree":
+        try:
+            wt_path, _branch = make_worktree(state.workspace,
+                                              branch_hint=f"sub-{role}")
+            worktree = wt_path
+            workspace_arg = str(wt_path)
+        except RuntimeError as e:
+            return f"spawn_agent worktree setup failed: {e}"
+
     cmd = [
         sys.argv[0], "--no-banner", "--json",
-        "--workspace", str(state.workspace),
+        "--workspace", workspace_arg,
         "--base-url", state.base_url, "--model", state.model,
         "--system", system,
     ]
@@ -1766,7 +1820,13 @@ def tool_spawn_agent(state, args):
     if state.yolo:
         cmd.append("--yolo")
     cmd.append(prompt)
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=600)
+    except subprocess.TimeoutExpired:
+        if worktree:
+            tear_down_worktree(worktree, state.workspace)
+        return "spawn_agent timed out after 10 minutes"
     final = ""
     for line in proc.stdout.splitlines():
         try:
@@ -1775,7 +1835,26 @@ def tool_spawn_agent(state, args):
             continue
         if event.get("type") == "completed":
             final = event.get("text") or final
-    return final or proc.stdout or "(subagent returned no output)"
+
+    out_parts = [final or proc.stdout or "(subagent returned no output)"]
+    if worktree:
+        try:
+            diff = subprocess.run(
+                ["/usr/bin/env", "git", "diff", "--stat", "HEAD"],
+                cwd=str(worktree), capture_output=True, text=True,
+                timeout=15,
+            )
+            if diff.stdout.strip():
+                out_parts.append(f"\n\n--- worktree diff vs HEAD ---\n"
+                                  + diff.stdout.strip())
+            # The worktree itself is preserved so the user can inspect it;
+            # branch + path are reported.
+            out_parts.append(
+                f"\n\nworktree retained at: {worktree}\n"
+                "(use `git -C <workspace> worktree remove <path>` to clean up)")
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            tear_down_worktree(worktree, state.workspace)
+    return "\n".join(out_parts)
 
 
 # =============================================================================
@@ -2007,21 +2086,40 @@ def tool_websocket_subscribe(state, args):
         masked = bytes(b ^ mask[i % 4] for i, b in enumerate(data))
         s.sendall(header + masked)
 
+    def _recv_exact(s, n):
+        """Read exactly `n` bytes from a socket, looping over partial
+        recv()s. Returns b'' on close. recv() doesn't promise to return
+        the full requested size; without this, websocket frames silently
+        truncate when the kernel fragments a payload across packets."""
+        buf = b""
+        while len(buf) < n:
+            chunk = s.recv(n - len(buf))
+            if not chunk:
+                return b""
+            buf += chunk
+        return buf
+
     if initial:
         _send_text(sock, initial)
     frames = []
     sock.settimeout(2)
     while time.time() < deadline:
         try:
-            head = sock.recv(2)
+            head = _recv_exact(sock, 2)
             if len(head) < 2:
                 break
             opcode = head[0] & 0x0F
             length = head[1] & 0x7F
             if length == 126:
-                length = struct.unpack("!H", sock.recv(2))[0]
+                ext = _recv_exact(sock, 2)
+                if len(ext) < 2:
+                    break
+                length = struct.unpack("!H", ext)[0]
             elif length == 127:
-                length = struct.unpack("!Q", sock.recv(8))[0]
+                ext = _recv_exact(sock, 8)
+                if len(ext) < 8:
+                    break
+                length = struct.unpack("!Q", ext)[0]
             data = b""
             while len(data) < length:
                 chunk = sock.recv(length - len(data))
@@ -2946,11 +3044,12 @@ BUILTIN_TOOL_SCHEMAS = [
                 "required": ["subject", "status"]}}},
             "required": ["tasks"]}}},
     {"type": "function", "function": {"name": "spawn_agent",
-        "description": "Dispatch a subagent to handle a focused subtask. Returns its final answer.",
+        "description": "Dispatch a subagent to handle a focused subtask. Returns its final answer. Pass isolation='worktree' to run in a temporary git worktree (subagent writes don't touch the parent workspace).",
         "parameters": {"type": "object", "properties": {
             "prompt": {"type": "string"},
             "role": {"type": "string"},
-            "system": {"type": "string"}},
+            "system": {"type": "string"},
+            "isolation": {"type": "string", "description": "Pass 'worktree' to isolate in a git worktree."}},
             "required": ["prompt"]}}},
 ]
 
@@ -3248,7 +3347,10 @@ def _workspace_permission_hash(workspace):
 
 def load_permission_grants(state):
     """Restore the allowed_forever set from a per-workspace JSON file so
-    "always allow" decisions survive across sessions."""
+    "always allow" decisions survive across sessions. Filters out grants
+    for tools no longer registered (e.g., a plugin that was uninstalled,
+    a renamed tool) so a stale persistence file can't auto-approve a name
+    that doesn't mean what it used to mean."""
     h = _workspace_permission_hash(state.workspace)
     path = PERMISSION_ROOT / f"{h}.json"
     if not path.is_file():
@@ -3256,11 +3358,22 @@ def load_permission_grants(state):
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         tools = data.get("allowed_forever") or []
-        if isinstance(tools, list):
-            for name in tools:
-                state.permissions.allowed_forever.add(name)
+        if not isinstance(tools, list):
+            return
     except (OSError, json.JSONDecodeError):
         return
+    known = set(BUILTIN_TOOL_FUNCS.keys())
+    stale = []
+    for name in tools:
+        if name in known or name.startswith("mcp__"):
+            state.permissions.allowed_forever.add(name)
+        else:
+            stale.append(name)
+    if stale:
+        print(style(
+            f"warning: dropped {len(stale)} stale permission grant(s) "
+            f"({', '.join(stale[:5])}{'…' if len(stale) > 5 else ''})",
+            "warning"), file=sys.stderr)
 
 
 def save_permission_grants(state):
@@ -3639,6 +3752,15 @@ DANGEROUS_TOOLS_EXTRA = {
 }
 
 
+# Module-level bounded thread pool for prefetch tasks. Each streaming
+# narration burst can match the path regex many times; without a pool, we
+# spawned an unbounded number of raw daemon threads. The executor caps
+# concurrency at 4, recycles workers, and lets the OS scheduler do less.
+import concurrent.futures as _futures
+_PREFETCH_POOL = _futures.ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="lmstudio-prefetch")
+
+
 def _kick_speculative_prefetch(state, narration, already_prefetched):
     """Look at the streamed narration so far and prefetch likely tool
     results into state.prefetch_cache. Only safe, read-only operations are
@@ -3661,7 +3783,7 @@ def _kick_speculative_prefetch(state, narration, already_prefetched):
     if not target.is_file():
         state.prefetch_misses += 1
         return
-    import threading
+
     def _do():
         try:
             text = target.read_text(encoding="utf-8", errors="replace")
@@ -3670,7 +3792,11 @@ def _kick_speculative_prefetch(state, narration, already_prefetched):
         if len(text) > 32000:
             text = text[:32000] + "\n\n...(truncated at 32000 chars)"
         state.prefetch_cache[key] = {"ts": time.time(), "result": text}
-    threading.Thread(target=_do, daemon=True).start()
+    try:
+        _PREFETCH_POOL.submit(_do)
+    except RuntimeError:
+        # Pool was shut down (interpreter teardown); skip silently.
+        pass
 
 
 def restore_last_journal(state):
@@ -4028,15 +4154,23 @@ def save_project_knowledge(state):
 # =============================================================================
 
 def start_file_watcher(state):
-    """Background thread that polls the workspace tree for external edits
-    every 2s. When a file's (mtime, size) changes vs the last snapshot,
-    record a note in state.external_change_notes. The next run_turn flushes
-    these as a system message so the model knows to re-read."""
+    """Background thread that polls the workspace for external edits.
+
+    Two-phase polling so large workspaces stay cheap:
+      - Every 2s: stat() only files already in `state.watched_files`. Fast
+        regardless of total file count; catches mtime/size changes on the
+        hot working set immediately.
+      - Every 30s: full rglob to discover newly added files. Slower, but
+        infrequent enough to be tolerable on 50k+ file repos.
+
+    Detected changes append a one-line note to `state.external_change_notes`.
+    `flush_external_change_notes` drains them into a system message at the
+    start of the next turn."""
     if state.watcher_thread is not None:
         return
     state.watcher_stop.clear()
 
-    def _snapshot():
+    def _full_snapshot():
         snap = {}
         for path in state.workspace.rglob("*"):
             if any(part in WORKSPACE_TREE_IGNORE or part.startswith(".")
@@ -4056,31 +4190,76 @@ def start_file_watcher(state):
                 break
         return snap
 
-    state.watched_files = _snapshot()
-
-    def _loop():
-        while not state.watcher_stop.wait(2.0):
+    def _fast_snapshot(known):
+        """Stat the known set only. Returns the same shape as the full
+        snapshot. Files that vanished are NOT present in the result."""
+        snap = {}
+        for rel in known:
+            path = state.workspace / rel
             try:
-                current = _snapshot()
-            except Exception:
+                st = path.stat()
+            except (OSError, ValueError):
                 continue
-            for rel, (mtime, size) in current.items():
-                prev = state.watched_files.get(rel)
-                if prev is None:
+            snap[rel] = (st.st_mtime, st.st_size)
+        return snap
+
+    state.watched_files = _full_snapshot()
+
+    def _record_changes(current, allow_added=True):
+        for rel, (mtime, size) in current.items():
+            prev = state.watched_files.get(rel)
+            if prev is None:
+                if allow_added:
                     state.external_change_notes.append(
                         f"ADDED externally: {rel} ({size} bytes)")
-                elif prev != (mtime, size):
-                    state.external_change_notes.append(
-                        f"CHANGED externally: {rel} "
-                        f"({prev[1]} -> {size} bytes)")
-            for rel in list(state.watched_files):
-                if rel not in current:
-                    state.external_change_notes.append(
-                        f"DELETED externally: {rel}")
-            state.watched_files = current
-            # Keep the buffer bounded.
-            if len(state.external_change_notes) > 50:
-                state.external_change_notes = state.external_change_notes[-50:]
+            elif prev != (mtime, size):
+                state.external_change_notes.append(
+                    f"CHANGED externally: {rel} "
+                    f"({prev[1]} -> {size} bytes)")
+        for rel in list(state.watched_files):
+            if rel not in current:
+                state.external_change_notes.append(
+                    f"DELETED externally: {rel}")
+        if len(state.external_change_notes) > 50:
+            state.external_change_notes = state.external_change_notes[-50:]
+
+    def _loop():
+        last_full = time.time()
+        full_interval = 30.0
+        while not state.watcher_stop.wait(2.0):
+            try:
+                if time.time() - last_full >= full_interval:
+                    current = _full_snapshot()
+                    last_full = time.time()
+                    _record_changes(current, allow_added=True)
+                    state.watched_files = current
+                else:
+                    current = _fast_snapshot(state.watched_files.keys())
+                    # Detect deletions explicitly in fast mode (a key in
+                    # watched_files that no longer stat()'s lands here).
+                    seen_deletes = [
+                        rel for rel in state.watched_files
+                        if rel not in current
+                    ]
+                    for rel in seen_deletes:
+                        state.external_change_notes.append(
+                            f"DELETED externally: {rel}")
+                    # Detect mtime/size changes.
+                    for rel, val in current.items():
+                        prev = state.watched_files.get(rel)
+                        if prev and prev != val:
+                            state.external_change_notes.append(
+                                f"CHANGED externally: {rel} "
+                                f"({prev[1]} -> {val[1]} bytes)")
+                    # Merge into the canonical snapshot.
+                    for rel in seen_deletes:
+                        state.watched_files.pop(rel, None)
+                    state.watched_files.update(current)
+                    if len(state.external_change_notes) > 50:
+                        state.external_change_notes = (
+                            state.external_change_notes[-50:])
+            except Exception:
+                continue
 
     state.watcher_thread = threading.Thread(target=_loop, daemon=True)
     state.watcher_thread.start()
@@ -4341,51 +4520,932 @@ def constitution_violation(state, name, args):
 
 
 def tool_ship_it(state, args):
-    """End-to-end pipeline. Returns a multi-line summary of what each
-    step produced. The tool is permission-gated and itself does NOT
-    silently push to remotes — it only stages + commits + opens a PR
-    when the workspace is a git repo + gh is available."""
+    """End-to-end pipeline, refactored to avoid recursive run_turn calls.
+
+    Instead of invoking another `run_turn` from inside a tool handler
+    (which nested transcripts and confused the continuation policy), this
+    queues a synthetic user message into `state.queued_followups`. The
+    outer `drive_user_message` drains the queue when the current human-
+    issued turn finishes, so the follow-up arrives as a fresh top-level
+    turn with all the usual orchestrator hooks intact.
+
+    The follow-up message instructs the model to scaffold under
+    aggressive_batching (which we flip on for one round), then run
+    auto-test + auto-commit + gh_create_pr."""
     spec = args["spec"]
     target = args.get("target", "")
-    summary = ["# ship_it pipeline", f"spec: {spec[:200]}"]
-    # 1. Aggressive batch: produce a task list via the model + scaffold.
-    prev_batch = state.aggressive_batching
-    state.aggressive_batching = True
-    try:
-        # Synthesize an internal user message describing the spec.
-        run_turn(state, f"Plan and scaffold this spec via update_tasks + "
-                        f"file-create steps:\n\n{spec}")
-        summary.append("scaffold: see assistant turn above")
-    finally:
-        state.aggressive_batching = prev_batch
-    # 2. Auto-test (if available).
-    runner = detect_test_runner(state.workspace)
-    if runner:
-        test_note = run_auto_test(state)
-        summary.append(f"tests: {(test_note or 'no output')[:240]}")
-    # 3. Auto-commit.
-    completed = [t for t in state.sink.current
-                 if t.get("status") == "completed"]
-    commit_note = maybe_auto_commit(state, completed)
-    if commit_note:
-        summary.append(f"commit: {commit_note}")
-    # 4. Open PR.
-    if (state.workspace / ".git").exists():
-        try:
-            pr = _gh(["pr", "create", "--draft",
-                      "--title", spec[:60],
-                      "--body", spec + "\n\nGenerated via ship_it."],
-                     timeout=60)
-            summary.append(f"pr: {pr[:200]}")
-        except Exception as e:
-            summary.append(f"pr: failed ({e})")
-    # 5. Deploy (only if a deploy target is given AND looks safe).
+    state.queued_followups.append({
+        "kind": "ship_it",
+        "spec": spec,
+        "target": target,
+        "enable_batch": True,
+        "auto_commit": True,
+        "open_pr": True,
+    })
+    rows = [
+        "# ship_it queued",
+        f"spec: {spec[:200]}",
+        "The orchestrator will scaffold, test, commit, and open a draft "
+        "PR in a follow-up turn (no recursion).",
+    ]
     if target:
-        summary.append(f"deploy target: {target} (manual step; not invoked)")
-    return "\n".join(summary)
+        rows.append(f"deploy target: {target} (manual step; not invoked)")
+    return "\n".join(rows)
+
+
+def drain_queued_followups(state, json_emit=None):
+    """Pulled by drive_user_message after the human turn completes. Each
+    queued followup turns into a synthetic user message + side effects."""
+    while state.queued_followups:
+        followup = state.queued_followups.pop(0)
+        if followup.get("kind") == "ship_it":
+            prev_batch = state.aggressive_batching
+            if followup.get("enable_batch"):
+                state.aggressive_batching = True
+            try:
+                run_turn(state,
+                         "Plan and scaffold this spec via update_tasks + "
+                         "file-create steps, then run any auto-test the "
+                         f"orchestrator detects:\n\n{followup['spec']}",
+                         json_emit=json_emit)
+            finally:
+                state.aggressive_batching = prev_batch
+            if followup.get("auto_commit"):
+                completed = [t for t in state.sink.current
+                             if t.get("status") == "completed"]
+                maybe_auto_commit(state, completed)
+            if (followup.get("open_pr")
+                    and (state.workspace / ".git").exists()):
+                try:
+                    pr = _gh(["pr", "create", "--draft",
+                              "--title", followup["spec"][:60],
+                              "--body", followup["spec"]
+                              + "\n\nGenerated via ship_it."], timeout=60)
+                    state.transcript.append({
+                        "role": "system",
+                        "content": f"ORCHESTRATOR ship_it: PR -> {pr[:240]}",
+                    })
+                except Exception:
+                    pass
 
 
 BUILTIN_TOOL_FUNCS["ship_it"] = tool_ship_it
+
+
+# =============================================================================
+# 8.0.0 — Hooks (event scripts)
+# =============================================================================
+#
+# Drop a shell script (or any executable) into ~/.loom/hooks/<event> or
+# <workspace>/.loom/hooks/<event> and it runs at the named event. Stdin
+# gets a JSON payload; stdout becomes a synthetic system note; a non-zero
+# exit code blocks the action (where applicable).
+
+HOOK_EVENTS = {
+    "user-prompt-submit", "pre-tool-use", "post-tool-use",
+    "session-start", "session-end", "on-error",
+}
+
+
+def discover_hooks(workspace):
+    """Build {event: [script_path, ...]} from ~/.loom/hooks/ and
+    <workspace>/.loom/hooks/. Workspace scripts run BEFORE user-level
+    scripts so a project can override a global hook by setting a higher-
+    priority effect."""
+    found = {}
+    for root in ((Path(workspace) / ".loom" / "hooks"),
+                 (Path.home() / ".loom" / "hooks")):
+        if not root.is_dir():
+            continue
+        for event in HOOK_EVENTS:
+            script = root / event
+            if script.is_file() and os.access(script, os.X_OK):
+                found.setdefault(event, []).append(str(script))
+    return found
+
+
+def run_hooks(state, event, payload, *, blocking=False):
+    """Run every script registered for `event`. Stdin is the JSON payload.
+    Returns (blocked, notes) where `blocked` is True iff `blocking` and a
+    script exited non-zero, and `notes` is the concatenated stdout text
+    (suitable for use as a system note)."""
+    scripts = state.hooks.get(event) or []
+    notes = []
+    for path in scripts:
+        try:
+            proc = subprocess.run(
+                [path], input=json.dumps(payload),
+                capture_output=True, text=True, timeout=15,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            notes.append(f"[hook {event}: {path} error: {e}]")
+            continue
+        if proc.stdout.strip():
+            notes.append(proc.stdout.strip())
+        if blocking and proc.returncode != 0:
+            return True, "\n".join(notes + [
+                f"[hook {event}: {path} returned exit {proc.returncode}]"])
+    return False, "\n".join(notes)
+
+
+# =============================================================================
+# 8.0.0 — ask_user (interactive multiple-choice picker)
+# =============================================================================
+
+def _render_picker(question, options, header=None):
+    """Raw-mode arrow-key multiple-choice picker. Returns the selected
+    option dict (with an extra "label_index" key) or None on cancel.
+
+    Falls back to a numbered prompt when stdin isn't a TTY."""
+    if not sys.stdin.isatty():
+        # Headless fallback: print the question + numbered options, read
+        # a single line from stdin, return the matching option (or None).
+        if header:
+            print(style(header, "key"))
+        print(question)
+        for i, opt in enumerate(options, 1):
+            label = opt.get("label", "?")
+            desc = opt.get("description", "")
+            print(f"  {i}. {label}" + (f"  — {desc}" if desc else ""))
+        try:
+            line = input("> ").strip()
+        except EOFError:
+            return None
+        if line.isdigit():
+            idx = int(line) - 1
+            if 0 <= idx < len(options):
+                return {**options[idx], "label_index": idx}
+        return None
+
+    import termios, tty
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    selected = 0
+    try:
+        tty.setcbreak(fd)
+        while True:
+            sys.stdout.write("\x1b[?25l")  # hide cursor
+            if header:
+                print(style(header, "key"))
+            print(style(question, "headline"))
+            for i, opt in enumerate(options):
+                marker = style(" ➤ ", "tool") if i == selected else "   "
+                label = opt.get("label", "?")
+                desc = opt.get("description", "")
+                row = marker + style(label, "value" if i == selected else "dim")
+                if desc:
+                    row += style(f"  — {desc}", "dim")
+                print(row)
+            sys.stdout.write("  (↑/↓ to move, Enter to select, Esc to cancel)\n")
+            sys.stdout.flush()
+            ch = sys.stdin.read(1)
+            if ch == "\x1b":
+                nxt = sys.stdin.read(1)
+                if nxt == "[":
+                    nxt2 = sys.stdin.read(1)
+                    if nxt2 == "A":  # up
+                        selected = (selected - 1) % len(options)
+                    elif nxt2 == "B":  # down
+                        selected = (selected + 1) % len(options)
+                    sys.stdout.write("\x1b[?25h")
+                    # Redraw: clear screen above us. Rough approach: just
+                    # reprint after clearing prior lines.
+                    sys.stdout.write("\x1b[K\x1b[" + str(len(options) + 3) + "A")
+                    sys.stdout.flush()
+                    continue
+                else:
+                    sys.stdout.write("\x1b[?25h\n")
+                    return None
+            elif ch in ("\r", "\n"):
+                sys.stdout.write("\x1b[?25h\n")
+                return {**options[selected], "label_index": selected}
+            elif ch == "\x03":  # Ctrl-C
+                sys.stdout.write("\x1b[?25h\n")
+                raise KeyboardInterrupt
+            # Other keys ignored; just redraw to the same selected option.
+            sys.stdout.write("\x1b[?25h")
+            sys.stdout.write("\x1b[K\x1b[" + str(len(options) + 3) + "A")
+            sys.stdout.flush()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        sys.stdout.write("\x1b[?25h")
+        sys.stdout.flush()
+
+
+def tool_ask_user(state, args):
+    """Prompt the human with a multi-choice picker and return their pick.
+    The tool result is JSON the model can read directly."""
+    question = args["question"]
+    options = args.get("options") or []
+    if not isinstance(options, list) or not options:
+        return "ask_user: `options` must be a non-empty array"
+    # Always offer an "Other" escape hatch.
+    enriched = list(options)
+    if not any(o.get("label") == "Other" for o in enriched):
+        enriched.append({"label": "Other",
+                          "description": "Provide a custom answer"})
+    header = args.get("header") or "lmstudio asks"
+    try:
+        chosen = _render_picker(question, enriched, header=header)
+    except KeyboardInterrupt:
+        return json.dumps({"cancelled": True})
+    if not chosen:
+        return json.dumps({"cancelled": True})
+    notes = ""
+    if chosen.get("label") == "Other":
+        try:
+            notes = input("Your answer: ").strip()
+        except EOFError:
+            notes = ""
+    return json.dumps({"selected": chosen.get("label"),
+                       "index": chosen.get("label_index"),
+                       "notes": notes})
+
+
+# =============================================================================
+# 8.0.0 — schedule_wakeup + loop_complete + --check-wakeups
+# =============================================================================
+
+WAKEUP_ROOT = Path.home() / ".loom" / "wakeups"
+
+
+def tool_schedule_wakeup(state, args):
+    """Persist a wakeup record. The CLI does NOT block waiting; an
+    external scheduler (cron / launchd / `lmstudio --check-wakeups`)
+    fires re-entry at the appointed time. Returns the path of the
+    persisted record so the user can inspect it."""
+    delay = max(60, min(int(args.get("delay_seconds", 600)), 86400))
+    prompt = args["prompt"]
+    reason = args.get("reason", "")
+    wake_at = time.time() + delay
+    WAKEUP_ROOT.mkdir(parents=True, exist_ok=True)
+    wid = uuid.uuid4().hex[:10]
+    record = {
+        "id": wid,
+        "wake_at": wake_at,
+        "wake_at_iso": _now_iso(),
+        "delay_seconds": delay,
+        "prompt": prompt,
+        "reason": reason,
+        "workspace": str(state.workspace),
+        "base_url": state.base_url,
+        "model": state.model,
+    }
+    path = WAKEUP_ROOT / f"{wid}.json"
+    path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    return (f"scheduled wakeup id={wid} at +{delay}s ({reason or 'no reason'})\n"
+            f"path: {path}")
+
+
+def tool_loop_complete(state, args):
+    """Signal that the autonomous loop should stop. Sets a flag the
+    --loop top-level reads when deciding whether to re-enter. Effectively
+    a 'we're done; don't wake me again' switch the model can pull."""
+    summary = args.get("summary", "loop done")
+    state.loop_should_exit = True
+    return f"loop_complete: {summary}"
+
+
+def check_and_run_wakeups(base_workspace=None):
+    """CLI entry point for `lmstudio --check-wakeups`. Scans WAKEUP_ROOT
+    and runs any whose `wake_at` is in the past. Each fires a subprocess
+    `lmstudio --resume-wakeup <path>` so they're isolated from each
+    other. Returns the count fired."""
+    if not WAKEUP_ROOT.is_dir():
+        return 0
+    fired = 0
+    now = time.time()
+    for path in sorted(WAKEUP_ROOT.glob("*.json")):
+        try:
+            rec = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if rec.get("wake_at", 0) > now:
+            continue
+        try:
+            subprocess.Popen([
+                sys.argv[0], "--resume-wakeup", str(path), "--no-banner",
+            ], start_new_session=True)
+            fired += 1
+        except Exception:
+            continue
+    return fired
+
+
+# =============================================================================
+# 8.0.0 — Settings file (.loom/settings.json)
+# =============================================================================
+
+def load_workspace_settings(workspace):
+    """Load and lightly validate <workspace>/.loom/settings.json. Returns
+    a dict (possibly empty). `${ENV:NAME}` and `${KEYCHAIN:service}`
+    placeholders in any string value are expanded in-place."""
+    path = Path(workspace) / ".loom" / "settings.json"
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return _expand_setting_values(data)
+
+
+_ENV_RE = re.compile(r"\$\{ENV:([A-Z_][A-Z0-9_]*)\}")
+_KEYCHAIN_RE = re.compile(r"\$\{KEYCHAIN:([^\}]+)\}")
+
+
+def _expand_setting_values(obj):
+    if isinstance(obj, dict):
+        return {k: _expand_setting_values(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_expand_setting_values(v) for v in obj]
+    if isinstance(obj, str):
+        def env_repl(m):
+            return os.environ.get(m.group(1), "")
+        def kc_repl(m):
+            service = m.group(1)
+            try:
+                proc = subprocess.run(
+                    ["/usr/bin/security", "find-generic-password",
+                     "-s", service, "-w"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                return proc.stdout.strip() if proc.returncode == 0 else ""
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                return ""
+        return _KEYCHAIN_RE.sub(kc_repl, _ENV_RE.sub(env_repl, obj))
+    return obj
+
+
+def apply_settings_to_state(state, settings):
+    """Merge a loaded settings dict into state. CLI args have ALREADY been
+    applied at this point, so settings should NOT override explicit user
+    flags — call this BEFORE the explicit-flag block in main()."""
+    if "model" in settings and not os.environ.get("LMSTUDIO_MODEL"):
+        state.model = settings["model"]
+    if "theme" in settings:
+        state.theme_name = settings["theme"]
+    if settings.get("allow_bash") is True:
+        state.allow_bash = True
+        state.permissions.allowed_forever.add("run_bash")
+    for key in ("auto_test", "auto_compact", "auto_screenshot",
+                "auto_commit", "aggressive_batching", "self_reflect"):
+        if key in settings:
+            setattr(state, key, bool(settings[key]))
+    if "max_continuations" in settings:
+        try:
+            state.max_continuations = int(settings["max_continuations"])
+        except (TypeError, ValueError):
+            pass
+    router = settings.get("router") or {}
+    if isinstance(router, dict):
+        state.planner_model = router.get("planner", state.planner_model)
+        state.coder_model = router.get("coder", state.coder_model)
+        state.explainer_model = router.get("explainer",
+                                            state.explainer_model)
+    disabled = settings.get("tools_disabled") or []
+    if isinstance(disabled, list):
+        for name in disabled:
+            BUILTIN_TOOL_FUNCS.pop(name, None)
+            # Schema removal: leave schemas listed (the model sees them)
+            # so the dispatcher can fail-fast with "tool disabled" rather
+            # than the model hallucinating a different name.
+    for k, v in (settings.get("env") or {}).items():
+        if isinstance(v, str):
+            os.environ[k] = v
+
+
+# =============================================================================
+# 8.0.0 — Background bash trio
+# =============================================================================
+
+BG_SHELL_ROOT = Path.home() / ".loom" / "shells"
+
+
+def tool_background_bash(state, args):
+    """Spawn a detached shell. Output streams to ~/.loom/shells/<id>.log.
+    Returns a shell_id the model can later pass to monitor / kill_shell /
+    bash_output."""
+    command = args["command"]
+    label = args.get("label", "")
+    BG_SHELL_ROOT.mkdir(parents=True, exist_ok=True)
+    shell_id = uuid.uuid4().hex[:8]
+    log_path = BG_SHELL_ROOT / f"{shell_id}.log"
+    log_fd = open(log_path, "wb")
+    proc = subprocess.Popen(
+        ["/bin/zsh", "-lc", command],
+        cwd=str(state.workspace),
+        stdout=log_fd, stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    state.bg_shells[shell_id] = {
+        "proc": proc,
+        "log": log_path,
+        "log_fd": log_fd,
+        "command": command,
+        "label": label,
+        "started_at": time.time(),
+    }
+    return (f"background shell started\nid: {shell_id}\n"
+            f"label: {label or '(none)'}\nlog: {log_path}\n"
+            f"pid: {proc.pid}")
+
+
+def tool_monitor(state, args):
+    """Read or follow a background shell's log."""
+    shell_id = args["shell_id"]
+    entry = state.bg_shells.get(shell_id)
+    if not entry:
+        return f"monitor: no such shell_id {shell_id!r}"
+    log = entry["log"]
+    follow = bool(args.get("follow", False))
+    until = args.get("until")
+    max_lines = max(1, min(int(args.get("lines", 200)), 2000))
+    timeout = max(1, min(int(args.get("timeout", 30)), 300))
+    deadline = time.time() + timeout
+    try:
+        lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        lines = []
+    if not follow:
+        recent = lines[-max_lines:]
+        return f"shell {shell_id} (last {len(recent)} lines):\n" + \
+               "\n".join(recent)
+    # Follow mode: re-read until new lines arrive or until/timeout.
+    start_count = len(lines)
+    while time.time() < deadline:
+        try:
+            current = log.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            current = []
+        new = current[start_count:]
+        if new:
+            joined = "\n".join(new[-max_lines:])
+            if until and re.search(until, joined):
+                return f"shell {shell_id} matched {until!r}:\n{joined}"
+            return f"shell {shell_id} (+{len(new)} new lines):\n{joined}"
+        # Has the process exited?
+        if entry["proc"].poll() is not None:
+            tail = "\n".join(current[-max_lines:])
+            return (f"shell {shell_id} exited rc={entry['proc'].returncode}\n"
+                    f"last {min(len(current), max_lines)} lines:\n{tail}")
+        time.sleep(0.5)
+    return f"monitor: no new output in {timeout}s for shell {shell_id}"
+
+
+def tool_bash_output(state, args):
+    """Incremental read of a shell's log. `since_line` is a 0-indexed
+    line number; returns everything from there onward, capped."""
+    shell_id = args["shell_id"]
+    entry = state.bg_shells.get(shell_id)
+    if not entry:
+        return f"bash_output: no such shell_id {shell_id!r}"
+    since = max(0, int(args.get("since_line", 0)))
+    try:
+        lines = entry["log"].read_text(encoding="utf-8",
+                                       errors="replace").splitlines()
+    except OSError:
+        return "bash_output: log unavailable"
+    cap = max(1, min(int(args.get("max_lines", 500)), 5000))
+    return f"shell {shell_id} lines [{since}:{since+cap}]\n" + \
+           "\n".join(lines[since:since + cap])
+
+
+def tool_kill_shell(state, args):
+    """Terminate a background shell. SIGTERM first, then SIGKILL after a
+    short grace period."""
+    shell_id = args["shell_id"]
+    entry = state.bg_shells.get(shell_id)
+    if not entry:
+        return f"kill_shell: no such shell_id {shell_id!r}"
+    proc = entry["proc"]
+    if proc.poll() is not None:
+        return f"shell {shell_id} already exited rc={proc.returncode}"
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            return f"kill_shell: SIGKILL didn't take (shell {shell_id})"
+    try:
+        entry["log_fd"].close()
+    except OSError:
+        pass
+    return f"shell {shell_id} terminated"
+
+
+# =============================================================================
+# 8.0.0 — Notebook tools (Jupyter .ipynb)
+# =============================================================================
+
+def _load_notebook(workspace, rel_path):
+    path = resolve_in_workspace(workspace, rel_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"notebook not found: {rel_path}")
+    return path, json.loads(path.read_text(encoding="utf-8"))
+
+
+def tool_notebook_read(state, args):
+    path, nb = _load_notebook(state.workspace, args["path"])
+    cells = nb.get("cells") or []
+    if "cell_index" in args:
+        idx = int(args["cell_index"])
+        if not 0 <= idx < len(cells):
+            return f"notebook_read: cell {idx} out of range (have {len(cells)})"
+        cell = cells[idx]
+        src = "".join(cell.get("source", [])) if isinstance(cell.get("source"), list) else (cell.get("source") or "")
+        return f"# cell {idx} ({cell.get('cell_type', '?')})\n{src}"
+    rows = [f"# notebook: {args['path']}  ({len(cells)} cells)"]
+    for i, cell in enumerate(cells):
+        src = "".join(cell.get("source", [])) if isinstance(cell.get("source"), list) else (cell.get("source") or "")
+        src = src.strip()
+        preview = src[:120] + ("…" if len(src) > 120 else "")
+        rows.append(f"  {i}. [{cell.get('cell_type', '?')}] {preview}")
+    return "\n".join(rows)
+
+
+def tool_notebook_edit(state, args):
+    path, nb = _load_notebook(state.workspace, args["path"])
+    cells = nb.get("cells") or []
+    idx = int(args["cell_index"])
+    if not 0 <= idx < len(cells):
+        return f"notebook_edit: cell {idx} out of range"
+    new_src = args["new_source"]
+    cells[idx]["source"] = new_src.splitlines(keepends=True)
+    nb["cells"] = cells
+    original = path.read_text(encoding="utf-8")
+    path.write_text(json.dumps(nb, indent=1), encoding="utf-8")
+    record_journal(state, "notebook_edit", args["path"], original,
+                   path.read_text(encoding="utf-8"))
+    msg = f"replaced cell {idx} in {args['path']}"
+    if args.get("run"):
+        for binary in ("/opt/homebrew/bin/jupyter", "/usr/local/bin/jupyter"):
+            if Path(binary).is_file():
+                try:
+                    proc = subprocess.run(
+                        [binary, "nbconvert", "--to", "notebook",
+                         "--execute", "--inplace", str(path)],
+                        capture_output=True, text=True, timeout=300,
+                    )
+                    tail = (proc.stdout + proc.stderr)[-2000:]
+                    msg += f"\n\nexecute: rc={proc.returncode}\n{tail}"
+                except subprocess.TimeoutExpired:
+                    msg += "\n\nexecute: timed out"
+                break
+        else:
+            msg += "\n\nexecute: jupyter CLI not found"
+    return msg
+
+
+def tool_notebook_append(state, args):
+    path, nb = _load_notebook(state.workspace, args["path"])
+    kind = args.get("kind", "code")
+    new_cell = {"cell_type": kind, "metadata": {},
+                "source": args["source"].splitlines(keepends=True)}
+    if kind == "code":
+        new_cell["outputs"] = []
+        new_cell["execution_count"] = None
+    nb.setdefault("cells", []).append(new_cell)
+    original = path.read_text(encoding="utf-8")
+    path.write_text(json.dumps(nb, indent=1), encoding="utf-8")
+    record_journal(state, "notebook_append", args["path"], original,
+                   path.read_text(encoding="utf-8"))
+    return f"appended {kind} cell to {args['path']} (total {len(nb['cells'])} cells)"
+
+
+# =============================================================================
+# 8.0.0 — Worktree isolation for spawn_agent
+# =============================================================================
+
+WORKTREE_ROOT = Path.home() / ".loom" / "worktrees"
+
+
+def make_worktree(parent_workspace, branch_hint="lmstudio-subagent"):
+    """Create a temporary git worktree from the parent workspace's HEAD.
+    Returns (worktree_path, branch_name) or raises RuntimeError on
+    failure (e.g. parent isn't a git repo)."""
+    parent = Path(parent_workspace).resolve()
+    if not (parent / ".git").exists():
+        raise RuntimeError("parent workspace is not a git repo")
+    WORKTREE_ROOT.mkdir(parents=True, exist_ok=True)
+    wid = uuid.uuid4().hex[:8]
+    wt_path = WORKTREE_ROOT / wid
+    branch = f"{branch_hint}-{wid}"
+    proc = subprocess.run(
+        ["/usr/bin/env", "git", "worktree", "add", "-b", branch,
+         str(wt_path), "HEAD"],
+        cwd=str(parent), capture_output=True, text=True, timeout=30,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"git worktree add failed: {proc.stderr.strip()}")
+    return wt_path, branch
+
+
+def tear_down_worktree(wt_path, parent_workspace, keep=False):
+    """Remove a worktree (and its branch when `keep` is False). Silent on
+    error — callers may want to keep the wt around for inspection."""
+    try:
+        subprocess.run(
+            ["/usr/bin/env", "git", "worktree", "remove", "--force",
+             str(wt_path)],
+            cwd=str(parent_workspace), capture_output=True, timeout=15,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    if keep:
+        return
+    # Branch cleanup is best-effort.
+    try:
+        proc = subprocess.run(
+            ["/usr/bin/env", "git", "branch", "--list",
+             f"lmstudio-subagent-{wt_path.name}"],
+            cwd=str(parent_workspace), capture_output=True, text=True,
+            timeout=10,
+        )
+        for line in proc.stdout.splitlines():
+            name = line.strip().lstrip("* ")
+            if name:
+                subprocess.run(
+                    ["/usr/bin/env", "git", "branch", "-D", name],
+                    cwd=str(parent_workspace), capture_output=True,
+                    timeout=10,
+                )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+
+# =============================================================================
+# 8.0.0 — Slash command files (.md becomes /command)
+# =============================================================================
+
+def discover_slash_command_files(workspace):
+    """Return a dict {command_name: {"path", "description", "model",
+    "body"}} pulled from ~/.loom/commands/*.md and
+    <workspace>/.loom/commands/*.md (workspace overrides user)."""
+    found = {}
+    for root in ((Path.home() / ".loom" / "commands"),
+                 (Path(workspace) / ".loom" / "commands")):
+        if not root.is_dir():
+            continue
+        for path in root.glob("*.md"):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            meta = {"description": "", "model": "", "body": text}
+            # Strip frontmatter.
+            if text.startswith("---"):
+                end = text.find("\n---", 3)
+                if end > 0:
+                    fm_block = text[3:end].strip()
+                    body = text[end + 4:].lstrip()
+                    for line in fm_block.splitlines():
+                        if ":" in line:
+                            k, _, v = line.partition(":")
+                            meta[k.strip()] = v.strip()
+                    meta["body"] = body
+            found[path.stem] = meta
+    return found
+
+
+# =============================================================================
+# 8.0.0 — Skills (~/.loom/skills/<name>/)
+# =============================================================================
+
+SKILL_ROOT = Path.home() / ".loom" / "skills"
+
+
+def discover_skills():
+    """Return {name: skill_dir Path} for every directory under
+    SKILL_ROOT that has a skill.md."""
+    if not SKILL_ROOT.is_dir():
+        return {}
+    out = {}
+    for sub in SKILL_ROOT.iterdir():
+        if not sub.is_dir():
+            continue
+        if (sub / "skill.md").is_file():
+            out[sub.name] = sub
+    return out
+
+
+def activate_skill(state, name):
+    """Load the named skill: prepend its markdown to system_message and
+    import its tools.py (if any). Idempotent."""
+    skills = discover_skills()
+    if name not in skills:
+        return f"skill not found: {name}"
+    if any(s["name"] == name for s in state.active_skills):
+        return f"skill {name} already active"
+    sk_dir = skills[name]
+    skill_md = (sk_dir / "skill.md").read_text(encoding="utf-8",
+                                                errors="replace")
+    tools_added = []
+    tools_py = sk_dir / "tools.py"
+    if tools_py.is_file():
+        import importlib.util
+        try:
+            spec = importlib.util.spec_from_file_location(
+                f"lmstudio_skill_{name}", tools_py)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            for entry in getattr(module, "LMSTUDIO_TOOLS", []) or []:
+                schema = entry.get("schema")
+                func = entry.get("func")
+                if not schema or not callable(func):
+                    continue
+                tn = schema.get("function", {}).get("name")
+                if not tn:
+                    continue
+                BUILTIN_TOOL_SCHEMAS.append(schema)
+                BUILTIN_TOOL_FUNCS[tn] = func
+                tools_added.append(tn)
+        except Exception as e:
+            print(style(f"warning: skill {name} tools failed to load: {e}",
+                        "warning"), file=sys.stderr)
+    state.active_skills.append({
+        "name": name,
+        "system_text": skill_md,
+        "tools_added": tools_added,
+    })
+    state.reset_transcript()
+    return (f"activated skill `{name}`"
+            + (f" (+{len(tools_added)} tools)" if tools_added else ""))
+
+
+def tool_activate_skill(state, args):
+    return activate_skill(state, args["name"])
+
+
+# =============================================================================
+# 8.0.0 — Auto-memory (cross-workspace user-level)
+# =============================================================================
+
+USER_MEMORY_ROOT = Path.home() / ".loom" / "memory"
+
+
+def load_user_memory():
+    """Read ~/.loom/memory/MEMORY.md plus any referenced files, return a
+    single markdown blob suitable for the system prompt. Empty when no
+    user memory exists."""
+    index = USER_MEMORY_ROOT / "MEMORY.md"
+    if not index.is_file():
+        return ""
+    try:
+        head = index.read_text(encoding="utf-8", errors="replace")[:8000]
+    except OSError:
+        return ""
+    return f"# User Memory (~/.loom/memory/MEMORY.md)\n\n{head}"
+
+
+def tool_save_memory(state, args):
+    """Write a per-user memory record. `name` is a kebab-case slug used
+    as the filename; `body` is the memory content; `kind` (optional) is
+    a tag the index can group on."""
+    name = args["name"].strip().lower()
+    name = re.sub(r"[^a-z0-9_-]+", "-", name).strip("-") or "memory"
+    body = args["body"]
+    kind = args.get("kind", "user")
+    USER_MEMORY_ROOT.mkdir(parents=True, exist_ok=True)
+    target = USER_MEMORY_ROOT / f"{name}.md"
+    header = (f"---\nname: {name}\nkind: {kind}\nupdated: {_now_iso()}\n---\n\n")
+    target.write_text(header + body.strip() + "\n", encoding="utf-8")
+    # Update the index.
+    index = USER_MEMORY_ROOT / "MEMORY.md"
+    line = f"- [{name}]({name}.md) — {body.strip().splitlines()[0][:120] if body.strip() else kind}"
+    existing = ""
+    if index.is_file():
+        existing = index.read_text(encoding="utf-8")
+        if name in existing:
+            # Remove the old line.
+            existing = "\n".join(
+                l for l in existing.splitlines() if not l.startswith(f"- [{name}](")
+            )
+    if not existing.strip():
+        existing = "# User Memory\n\nLines below point to files under ~/.loom/memory/.\n"
+    if not existing.endswith("\n"):
+        existing += "\n"
+    index.write_text(existing + line + "\n", encoding="utf-8")
+    return f"saved memory `{name}` -> {target}"
+
+
+# Register the new 8.0.0 tools.
+BUILTIN_TOOL_FUNCS.update({
+    "ask_user": tool_ask_user,
+    "schedule_wakeup": tool_schedule_wakeup,
+    "loop_complete": tool_loop_complete,
+    "background_bash": tool_background_bash,
+    "monitor": tool_monitor,
+    "bash_output": tool_bash_output,
+    "kill_shell": tool_kill_shell,
+    "notebook_read": tool_notebook_read,
+    "notebook_edit": tool_notebook_edit,
+    "notebook_append": tool_notebook_append,
+    "activate_skill": tool_activate_skill,
+    "save_memory": tool_save_memory,
+})
+
+# Schema registrations for the new tools.
+BUILTIN_TOOL_SCHEMAS.extend([
+    {"type": "function", "function": {"name": "ask_user",
+        "description": "Ask the user a multiple-choice question. The tool BLOCKS until they answer. Returns JSON {selected, index, notes}.",
+        "parameters": {"type": "object", "properties": {
+            "question": {"type": "string"},
+            "header": {"type": "string"},
+            "options": {"type": "array", "items": {"type": "object", "properties": {
+                "label": {"type": "string"},
+                "description": {"type": "string"}},
+                "required": ["label"]}}},
+            "required": ["question", "options"]}}},
+    {"type": "function", "function": {"name": "schedule_wakeup",
+        "description": "Schedule a future re-entry of this agent. delay_seconds in [60, 86400]. Useful for autonomous loops.",
+        "parameters": {"type": "object", "properties": {
+            "delay_seconds": {"type": "integer"},
+            "prompt": {"type": "string"},
+            "reason": {"type": "string"}},
+            "required": ["delay_seconds", "prompt"]}}},
+    {"type": "function", "function": {"name": "loop_complete",
+        "description": "Signal that --loop mode should stop. Pass a summary of what was done.",
+        "parameters": {"type": "object", "properties": {
+            "summary": {"type": "string"}},
+            "required": []}}},
+    {"type": "function", "function": {"name": "background_bash",
+        "description": "Spawn a detached shell command. Returns shell_id. Use monitor/bash_output to read, kill_shell to stop.",
+        "parameters": {"type": "object", "properties": {
+            "command": {"type": "string"},
+            "label": {"type": "string"}},
+            "required": ["command"]}}},
+    {"type": "function", "function": {"name": "monitor",
+        "description": "Read or follow a background shell's log. follow=true blocks for new output up to timeout seconds (default 30).",
+        "parameters": {"type": "object", "properties": {
+            "shell_id": {"type": "string"},
+            "lines": {"type": "integer"},
+            "follow": {"type": "boolean"},
+            "until": {"type": "string"},
+            "timeout": {"type": "integer"}},
+            "required": ["shell_id"]}}},
+    {"type": "function", "function": {"name": "bash_output",
+        "description": "Incremental read of a background shell's log. since_line is 0-indexed.",
+        "parameters": {"type": "object", "properties": {
+            "shell_id": {"type": "string"},
+            "since_line": {"type": "integer"},
+            "max_lines": {"type": "integer"}},
+            "required": ["shell_id"]}}},
+    {"type": "function", "function": {"name": "kill_shell",
+        "description": "Terminate a background shell. SIGTERM first, SIGKILL after 5s.",
+        "parameters": {"type": "object", "properties": {
+            "shell_id": {"type": "string"}},
+            "required": ["shell_id"]}}},
+    {"type": "function", "function": {"name": "notebook_read",
+        "description": "Read a Jupyter .ipynb (whole notebook or one cell).",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"},
+            "cell_index": {"type": "integer"}},
+            "required": ["path"]}}},
+    {"type": "function", "function": {"name": "notebook_edit",
+        "description": "Replace the source of one cell in a Jupyter notebook. Optionally execute via `jupyter nbconvert --execute`.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"},
+            "cell_index": {"type": "integer"},
+            "new_source": {"type": "string"},
+            "run": {"type": "boolean"}},
+            "required": ["path", "cell_index", "new_source"]}}},
+    {"type": "function", "function": {"name": "notebook_append",
+        "description": "Append a new cell to a notebook. kind ∈ {code, markdown}.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"},
+            "source": {"type": "string"},
+            "kind": {"type": "string"}},
+            "required": ["path", "source"]}}},
+    {"type": "function", "function": {"name": "activate_skill",
+        "description": "Load a skill from ~/.loom/skills/<name>/. Prepends its prompt + registers its tools.",
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string"}},
+            "required": ["name"]}}},
+    {"type": "function", "function": {"name": "save_memory",
+        "description": "Persist a cross-workspace user memory. `name` is a kebab-case slug; `body` is the memory content. Future sessions in any workspace can read it.",
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string"},
+            "body": {"type": "string"},
+            "kind": {"type": "string"}},
+            "required": ["name", "body"]}}},
+])
+
+# Permission-gated additions for 8.0.0.
+DANGEROUS_TOOLS_EXTRA.update({
+    "schedule_wakeup", "background_bash", "kill_shell", "save_memory",
+    "notebook_edit", "notebook_append", "activate_skill",
+})
+
+# Safe parallelizable additions.
+SAFE_PARALLEL_TOOLS.update({
+    "notebook_read", "bash_output",
+})
 
 
 def install_completer(workspace, slash_commands):
@@ -5648,6 +6708,16 @@ terminal, backed by a local LM Studio model. You have these tools:
   installed in the local Python env
 - lsp_diagnostics(path) / lsp_definition / lsp_references - real code
   intelligence when an LSP server is configured via --lsp
+- ask_user(question, options) - block and ask the user a multi-choice
+  question. Use when disambiguation matters more than a guess.
+- schedule_wakeup(delay_seconds, prompt, reason?) - schedule a future
+  re-entry of this agent. Use in --loop mode.
+- background_bash(command, label?) + monitor(shell_id) + bash_output(shell_id)
+  + kill_shell(shell_id) - run long-lived processes detached.
+- notebook_read / notebook_edit / notebook_append - Jupyter .ipynb work.
+- save_memory(name, body, kind?) - persist a cross-workspace memory.
+- activate_skill(name) - load a skill from ~/.loom/skills/ for this turn.
+- loop_complete(summary) - in --loop mode, stop the loop.
 - run_bash(command, timeout_seconds?) - shell command, when enabled.
   Output streams live; long-running commands no longer appear silent
 - update_tasks(tasks) - replace the visible task list. Each task has
@@ -5794,6 +6864,37 @@ class AgentState:
         self.plugin_names = []
         # Drift warnings from project knowledge load.
         self.drift_warnings = []
+        # Queued followups: synthetic user messages that the dispatcher
+        # appends mid-turn (e.g. from `ship_it`) and which the outer
+        # drive_user_message drains as fresh top-level turns. Avoids the
+        # recursive run_turn hazard.
+        self.queued_followups = []
+        # 8.0.0 — hooks system. Loaded on session start from
+        # ~/.loom/hooks/ and <workspace>/.loom/hooks/. Event name -> list
+        # of script paths (workspace hooks first).
+        self.hooks = {}
+        # 8.0.0 — settings.json snapshot (for /settings inspection).
+        self.settings = {}
+        # 8.0.0 — active skills. Each entry: {"name", "system_text",
+        # "tools_added": [tool names]}. The skill's system text is
+        # prepended to system_message() while active.
+        self.active_skills = []
+        # 8.0.0 — background bash registry. shell_id -> {"proc", "log",
+        # "command", "started_at", "label"}.
+        self.bg_shells = {}
+        # 8.0.0 — pending question awaiting an answer from the user.
+        # When set, the next REPL turn prompts the user with the picker
+        # before sending anything to the model.
+        self.pending_question = None
+        # 8.0.0 — user-level memory (cross-workspace). Loaded once at
+        # session start from ~/.loom/memory/MEMORY.md.
+        self.user_memory_text = ""
+        # 8.0.0 — loop mode flags. The CLI re-enters drive_user_message
+        # with the original prompt until the model calls loop_complete
+        # (which flips this to True).
+        self.loop_should_exit = False
+        # 8.0.0 — slash command files discovered at SlashRouter init.
+        self.slash_command_files = {}
         # Multi-model routing (planner/coder/explainer override the
         # default `model`). Empty string = use default.
         self.planner_model = ""
@@ -5808,6 +6909,11 @@ class AgentState:
                           + self.constitution_text)
         if self.persona_text:
             extras.append(self.persona_text)
+        if self.user_memory_text:
+            extras.append(self.user_memory_text)
+        for skill in self.active_skills:
+            extras.append(f"# Skill: {skill['name']}\n\n"
+                          + skill["system_text"])
         if self.context_text:
             extras.append(self.context_text)
         if self.workspace_tree:
@@ -5855,6 +6961,25 @@ def run_turn(state, user_message, *, json_emit=None):
         state.transcript.append({"role": "system", "content": ext_note})
         if not json_emit:
             print(style("  ▸ file_watcher: external changes flagged", "tip"))
+    # user-prompt-submit hook: can reject the prompt (block=True returns
+    # empty without sending to the model) and/or inject a system note.
+    blocked, hook_note = run_hooks(
+        state, "user-prompt-submit",
+        {"prompt": user_message, "workspace": str(state.workspace)},
+        blocking=True,
+    )
+    if hook_note:
+        state.transcript.append({"role": "system",
+                                  "content": "HOOK user-prompt-submit:\n"
+                                             + hook_note})
+        if not json_emit:
+            print(style(f"  ▸ hook user-prompt-submit: "
+                        f"{hook_note[:200]}", "tip"))
+    if blocked:
+        if not json_emit:
+            print(style("  ▸ user-prompt-submit hook rejected the prompt",
+                        "warning"))
+        return ""
     user_payload = expand_mentions(user_message, state.workspace)
     state.transcript.append({"role": "user", "content": user_payload})
     state.absorb_text(user_payload)
@@ -6193,6 +7318,13 @@ def drive_user_message(state, user_message, *, json_emit=None):
     # Once the orchestrator gives up, anything still pending/in_progress
     # gets flipped to completed so the visible task list isn't stuck.
     state.sink.mark_remaining_complete()
+    # Drain any followups queued by tool handlers mid-turn (e.g. ship_it
+    # queues a scaffold + commit follow-up to avoid recursive run_turn).
+    try:
+        drain_queued_followups(state, json_emit=json_emit)
+    except Exception as e:
+        if not json_emit:
+            print(style(f"  followup drain failed: {e}", "warning"))
     # Self-reflection at the very end of the human-issued turn (after all
     # continuations have run). Saves the lesson into project_knowledge so
     # future sessions benefit.
@@ -6234,6 +7366,21 @@ def _dispatch_tool(state, name, args, *, narration=""):
 
     args_in = args if isinstance(args, dict) else {}
     canonical_in = _canonical(args_in)
+
+    # pre-tool-use hook. Can reject before any orchestrator logic runs.
+    blocked, hook_note = run_hooks(
+        state, "pre-tool-use",
+        {"name": name, "args": args_in},
+        blocking=True,
+    )
+    if hook_note:
+        # Surface in scrollback (not in tool result; that goes to model).
+        _render_tool_result_summary(name, f"hook: {hook_note[:160]}", True)
+    if blocked:
+        state.tool_history.append({
+            "name": name, "args": canonical_in, "error": True,
+        })
+        return f"Hook pre-tool-use rejected `{name}`:\n{hook_note}"
 
     # Constitution hard guardrail. Refuse BEFORE any other logic so the
     # model can't talk itself out of the rule via continuation/repair.
@@ -6299,6 +7446,21 @@ def _dispatch_tool(state, name, args, *, narration=""):
                                 + ", ".join("`" + k + "`" for k in missing_before))
                 repair_note = (repair_note + "  " + grammar_note
                                if repair_note else grammar_note)
+
+    # Fail-fast: after repair + grammar, if required args are still missing
+    # AND the tool is a builtin, return a clean error with the schema
+    # summary instead of letting the tool function raise KeyError into a
+    # Python traceback that the model can't easily fix.
+    if name in BUILTIN_TOOL_FUNCS and name != "update_tasks":
+        still_missing = missing_required(name, args_in)
+        if still_missing:
+            schema_text = schema_summary_for(name)
+            state.tool_history.append({
+                "name": name, "args": _canonical(args_in), "error": True,
+            })
+            return (f"Error: `{name}` is missing required argument(s) "
+                    f"{still_missing}. Schema:\n{schema_text}\n"
+                    f"Re-emit the call with every required field filled in.")
 
     # Speculative cache lookup (only safe, read-only tools land here).
     cache_key = (name, _canonical(args_in))
@@ -6367,6 +7529,16 @@ def _dispatch_tool(state, name, args, *, narration=""):
             "elapsed_ms": elapsed_ms,
         })
         memory_record(state, name, args_in, str(result))
+        # post-tool-use hook. Stdout becomes a system note appended after
+        # the tool result, so the model sees structured observations.
+        _, hook_note = run_hooks(
+            state, "post-tool-use",
+            {"name": name, "args": args_in, "result": str(result)[:4000],
+             "error": False},
+        )
+        if hook_note:
+            result = (str(result) + "\n\n[hook post-tool-use]:\n"
+                      + hook_note)
         if name in SAFE_PARALLEL_TOOLS and state.prefetch_enabled:
             state.prefetch_cache[cache_key] = {"ts": time.time(),
                                                "result": result}
@@ -6384,11 +7556,19 @@ def _dispatch_tool(state, name, args, *, narration=""):
         state.tool_history.append({
             "name": name, "args": _canonical(args_in), "error": True,
         })
+        # on-error hook (informational; can't unblock the failure).
+        _, hook_note = run_hooks(
+            state, "on-error",
+            {"name": name, "args": args_in, "error": str(e)},
+        )
+        msg = "Error: " + str(e)
         if repair_note:
-            return ("Error: " + str(e)
-                    + "\n\n[orchestrator: " + repair_note + " - but the tool "
-                    "still failed, so the inferred value may be wrong]")
-        return f"Error: {e}"
+            msg += ("\n\n[orchestrator: " + repair_note
+                    + " - but the tool still failed, so the inferred value "
+                      "may be wrong]")
+        if hook_note:
+            msg += "\n\n[hook on-error]:\n" + hook_note
+        return msg
 
 
 def _render_tool_result_summary(name, result, ok):
@@ -6455,19 +7635,47 @@ class SlashRouter:
             "/ship":    self.cmd_ship,
             "/web":     self.cmd_web,
             "/blocklist": self.cmd_blocklist,
+            "/hooks":   self.cmd_hooks,
+            "/wake":    self.cmd_wake,
+            "/settings": self.cmd_settings,
+            "/bg":      self.cmd_bg,
+            "/mon":     self.cmd_mon,
+            "/kill":    self.cmd_kill,
+            "/nb":      self.cmd_nb,
+            "/skill":   self.cmd_skill,
+            "/memory":  self.cmd_memory,
         }
 
     def names(self):
-        return sorted(self.commands.keys())
+        names = set(self.commands.keys())
+        names.update(f"/{n}" for n in self.state.slash_command_files)
+        return sorted(names)
 
     def dispatch(self, line):
         head, _, rest = line.partition(" ")
         handler = self.commands.get(head)
-        if not handler:
-            print(style(f"  unknown command: {head}", "warning"))
-            print(style(f"  type /help for the list", "dim"))
+        if handler:
+            return handler(rest.strip())
+        # Fall through to discovered slash command files
+        # (~/.loom/commands/<name>.md and workspace overrides).
+        cmd_name = head.lstrip("/")
+        meta = self.state.slash_command_files.get(cmd_name)
+        if meta:
+            body = meta["body"].replace("$ARGS", rest.strip())
+            if meta.get("model"):
+                # Per-command model override for this turn only.
+                prev = self.state.model
+                self.state.model = meta["model"]
+                try:
+                    drive_user_message(self.state, body)
+                finally:
+                    self.state.model = prev
+            else:
+                drive_user_message(self.state, body)
             return "continue"
-        return handler(rest.strip())
+        print(style(f"  unknown command: {head}", "warning"))
+        print(style(f"  type /help for the list", "dim"))
+        return "continue"
 
     # --- handlers ---
     def cmd_help(self, _):
@@ -6994,6 +8202,121 @@ class SlashRouter:
         print(tool_web_search(self.state, {"query": rest, "limit": 5}))
         return "continue"
 
+    def cmd_hooks(self, rest):
+        if rest == "reload":
+            self.state.hooks = discover_hooks(self.state.workspace)
+            print(style(f"  hooks reloaded ({sum(len(v) for v in self.state.hooks.values())} scripts)", "ok"))
+            return "continue"
+        if not self.state.hooks:
+            print(style("  no hooks installed. Drop scripts in ~/.loom/hooks/<event>.", "dim"))
+            return "continue"
+        for event, scripts in self.state.hooks.items():
+            print(f"  {style(event, 'key')}")
+            for s in scripts:
+                print(f"    {style(s, 'dim')}")
+        return "continue"
+
+    def cmd_wake(self, rest):
+        if not WAKEUP_ROOT.is_dir():
+            print(style("  no wakeups queued.", "dim"))
+            return "continue"
+        records = []
+        for path in sorted(WAKEUP_ROOT.glob("*.json")):
+            try:
+                rec = json.loads(path.read_text(encoding="utf-8"))
+                records.append((path, rec))
+            except (OSError, json.JSONDecodeError):
+                continue
+        if not records:
+            print(style("  no wakeups queued.", "dim"))
+            return "continue"
+        for path, rec in records:
+            wake_at = rec.get("wake_at", 0)
+            delta = wake_at - time.time()
+            when = (f"in {int(delta)}s" if delta > 0
+                    else f"OVERDUE by {-int(delta)}s")
+            print(f"  {style(rec.get('id', '?'), 'key')}  {when}  "
+                  f"{style((rec.get('reason') or '')[:80], 'dim')}")
+        return "continue"
+
+    def cmd_settings(self, rest):
+        if rest == "reload":
+            self.state.settings = load_workspace_settings(self.state.workspace)
+            if self.state.settings:
+                apply_settings_to_state(self.state, self.state.settings)
+            print(style("  settings reloaded.", "ok"))
+            return "continue"
+        if not self.state.settings:
+            print(style("  no .loom/settings.json found.", "dim"))
+            return "continue"
+        print(json.dumps(self.state.settings, indent=2))
+        return "continue"
+
+    def cmd_bg(self, rest):
+        if not rest:
+            if not self.state.bg_shells:
+                print(style("  no background shells.", "dim"))
+                return "continue"
+            for sid, entry in self.state.bg_shells.items():
+                status = ("running" if entry["proc"].poll() is None
+                          else f"exited rc={entry['proc'].returncode}")
+                print(f"  {style(sid, 'key')}  {status}  "
+                      f"{style(entry['command'][:80], 'dim')}")
+            return "continue"
+        print(tool_background_bash(self.state, {"command": rest}))
+        return "continue"
+
+    def cmd_mon(self, rest):
+        if not rest:
+            print(style("  usage: /mon <shell_id>", "dim"))
+            return "continue"
+        print(tool_monitor(self.state, {"shell_id": rest, "lines": 30}))
+        return "continue"
+
+    def cmd_kill(self, rest):
+        if not rest:
+            print(style("  usage: /kill <shell_id>", "dim"))
+            return "continue"
+        print(tool_kill_shell(self.state, {"shell_id": rest}))
+        return "continue"
+
+    def cmd_nb(self, rest):
+        if not rest:
+            print(style("  usage: /nb <path.ipynb>", "dim"))
+            return "continue"
+        print(tool_notebook_read(self.state, {"path": rest}))
+        return "continue"
+
+    def cmd_skill(self, rest):
+        if not rest:
+            skills = discover_skills()
+            if not skills:
+                print(style("  no skills installed.", "dim"))
+            else:
+                active = {s["name"] for s in self.state.active_skills}
+                for name in sorted(skills):
+                    marker = "*" if name in active else " "
+                    print(f"   {marker} {style(name, 'key')}")
+            return "continue"
+        print(activate_skill(self.state, rest))
+        return "continue"
+
+    def cmd_memory(self, rest):
+        index = USER_MEMORY_ROOT / "MEMORY.md"
+        if not rest:
+            if not index.is_file():
+                print(style("  no user memory yet.", "dim"))
+                return "continue"
+            print(index.read_text(encoding="utf-8")[:4000])
+            return "continue"
+        if rest == "reload":
+            self.state.user_memory_text = load_user_memory()
+            self.state.reset_transcript()
+            print(style("  memory reloaded.", "ok"))
+            return "continue"
+        print(style("  usage: /memory [reload]", "dim"))
+        return "continue"
+
     def cmd_blocklist(self, rest):
         if not rest:
             print(style(f"  web_blocklist: "
@@ -7158,7 +8481,39 @@ def main():
              "score the turn and save a lesson to project knowledge.")
     parser.add_argument("--no-plugins", action="store_true",
         help="Skip auto-loading ~/.loom/tools/*.py plugins.")
+    parser.add_argument("--loop", action="store_true",
+        help="Autonomous-loop mode. After each turn, re-enter the session "
+             "until the model calls `loop_complete`.")
+    parser.add_argument("--check-wakeups", action="store_true",
+        help="Scan ~/.loom/wakeups/ for due wakeups and fire them, then "
+             "exit. Wire this into cron/launchd.")
+    parser.add_argument("--resume-wakeup", default="",
+        help="Internal flag used by the wakeup runner. Loads the wakeup "
+             "record at the given path and runs its prompt.")
+    parser.add_argument("--no-hooks", action="store_true",
+        help="Skip discovering / running hooks.")
+    parser.add_argument("--no-settings", action="store_true",
+        help="Skip loading <workspace>/.loom/settings.json.")
     args = parser.parse_args()
+
+    # 8.0.0 — top-level helper modes that exit before normal session start.
+    if args.check_wakeups:
+        n = check_and_run_wakeups()
+        print(f"fired {n} wakeup(s)")
+        sys.exit(0)
+    if args.resume_wakeup:
+        try:
+            rec = json.loads(Path(args.resume_wakeup).read_text(encoding="utf-8"))
+            args.workspace = rec.get("workspace", args.workspace)
+            args.model = rec.get("model", args.model) or args.model
+            args.base_url = rec.get("base_url", args.base_url) or args.base_url
+            # Inject the saved prompt as a one-shot positional arg.
+            args.prompt = [rec.get("prompt", "")]
+            # Best-effort: remove the wakeup file so it doesn't fire again.
+            Path(args.resume_wakeup).unlink(missing_ok=True)
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"--resume-wakeup error: {e}", file=sys.stderr)
+            sys.exit(2)
 
     set_theme(args.theme)
     configure_styling(use_color=(sys.stdout.isatty()
@@ -7233,8 +8588,18 @@ def main():
             workspace)
         # Drift detection against the loaded project knowledge.
         detect_drift(state)
+        # 8.0.0 — user-level cross-workspace memory.
+        state.user_memory_text = load_user_memory()
     # Cross-session permission learning.
     load_permission_grants(state)
+    # 8.0.0 — settings.json apply (CLI args have already populated state).
+    if not args.no_settings:
+        state.settings = load_workspace_settings(workspace)
+        if state.settings:
+            apply_settings_to_state(state, state.settings)
+    # 8.0.0 — hooks discovery.
+    if not args.no_hooks:
+        state.hooks = discover_hooks(workspace)
     # Plugin auto-import.
     if not args.no_plugins:
         load_plugins(state)
@@ -7244,6 +8609,16 @@ def main():
     # Self-reflection.
     if args.reflect:
         state.self_reflect = True
+    # 8.0.0 — session-start hook (stdout becomes a system note).
+    _, hook_note = run_hooks(
+        state, "session-start",
+        {"workspace": str(workspace), "session_id": session_id,
+         "model": state.model},
+    )
+    if hook_note:
+        state.context_text = (
+            (state.context_text + "\n\n" if state.context_text else "")
+            + "# session-start hook\n" + hook_note)
     # Multi-model routing config from CLI flags.
     state.planner_model = args.planner_model or ""
     state.coder_model = args.coder_model or ""
@@ -7281,6 +8656,8 @@ def main():
             sys.exit(2)
 
     router = SlashRouter(state)
+    # 8.0.0 — discover slash command files (.md becomes /command).
+    state.slash_command_files = discover_slash_command_files(workspace)
     json_emit = make_json_emitter() if args.json else None
     if json_emit:
         json_emit("session_started",
@@ -7322,13 +8699,30 @@ def main():
             close_prompt_box(one_shot)
             print(bot)
             print()
-        try:
-            drive_user_message(state, one_shot, json_emit=json_emit)
-        except (KeyboardInterrupt, EscInterrupt):
-            if json_emit:
-                json_emit("interrupted")
-            else:
-                print(style("\n  (interrupted)", "warning"))
+        # 8.0.0 — --loop re-drives the same prompt until the model calls
+        # loop_complete (which sets state.loop_should_exit). One-shot
+        # without --loop runs exactly once.
+        iterations = 0
+        max_iterations = 100  # hard ceiling; loop_complete should fire first
+        while True:
+            try:
+                drive_user_message(state, one_shot, json_emit=json_emit)
+            except (KeyboardInterrupt, EscInterrupt):
+                if json_emit:
+                    json_emit("interrupted")
+                else:
+                    print(style("\n  (interrupted)", "warning"))
+                break
+            if not args.loop or state.loop_should_exit:
+                break
+            iterations += 1
+            if iterations >= max_iterations:
+                if not args.json:
+                    print(style(
+                        f"  loop: hit max iterations ({max_iterations}); "
+                        "exiting.", "warning"))
+                break
+            time.sleep(1.0)
         _shutdown(state, json_emit)
         return
 
@@ -7412,6 +8806,21 @@ def _shutdown(state, json_emit):
         pass
     try:
         stop_file_watcher(state)
+    except Exception:
+        pass
+    # 8.0.0 — clean up any background shells.
+    for shell_id, entry in list(state.bg_shells.items()):
+        try:
+            if entry["proc"].poll() is None:
+                entry["proc"].terminate()
+            entry["log_fd"].close()
+        except Exception:
+            pass
+    # 8.0.0 — session-end hook.
+    try:
+        run_hooks(state, "session-end",
+                  {"session_id": state.session_id,
+                   "elapsed_seconds": int(time.time() - state.started_at)})
     except Exception:
         pass
     if json_emit:

@@ -400,6 +400,120 @@ Minimal client (no resources/prompts/sampling, one server at a time, no diagnost
 
 `find_todos(pattern?, path?)` greps the workspace for the usual markers (`TODO|FIXME|XXX|HACK|NOTE` by default) with `WORKSPACE_TREE_IGNORE` excluded so `node_modules` etc. don't dominate the results. Cap 200 hits.
 
+## 8.0.0 — Claude Code parity batch
+
+### Hooks system
+
+Drop executable scripts into `~/.loom/hooks/<event>` or `<workspace>/.loom/hooks/<event>`. Workspace hooks run before user-level hooks. Events:
+
+- `user-prompt-submit` — runs before each user message goes to the model. Stdin: `{"prompt", "workspace"}`. Non-zero exit blocks the prompt entirely. Stdout becomes a synthetic system note.
+- `pre-tool-use` — runs before every tool dispatch. Stdin: `{"name", "args"}`. Non-zero exit refuses the call.
+- `post-tool-use` — runs after every successful dispatch. Stdin: `{"name", "args", "result", "error": false}`. Stdout is appended to the tool result.
+- `on-error` — runs after a tool raises. Stdin: `{"name", "args", "error"}`. Stdout is appended.
+- `session-start` / `session-end` — one-shot bookends.
+
+`/hooks` lists registered hooks; `/hooks reload` re-scans. Skip discovery entirely with `--no-hooks`.
+
+### `ask_user` tool (interactive picker)
+
+The model can call `ask_user(question, options[, header])` to present a multi-choice picker. Arrow keys navigate, Enter selects, Esc cancels. The picker always appends an "Other" option that lets the user supply free text. Returns JSON `{"selected", "index", "notes"}` back to the model. Non-TTY sessions fall back to a numbered prompt.
+
+### `schedule_wakeup` + `loop_complete` + `--loop` mode
+
+- `schedule_wakeup(delay_seconds, prompt, reason?)` writes a record to `~/.loom/wakeups/<id>.json` and returns. The agent does NOT block waiting — an external scheduler (cron / launchd) is expected to fire `lmstudio --check-wakeups` periodically.
+- `lmstudio --check-wakeups` scans the wakeup directory and runs every record whose `wake_at` is in the past via `lmstudio --resume-wakeup <path>` as a fresh subprocess.
+- `--loop` re-drives the same prompt in a tight loop until the model calls `loop_complete(summary)` (or hits the 100-iteration safety ceiling). Enables truly autonomous workflows.
+- `/wake` lists pending wakeups.
+
+### `.loom/settings.json`
+
+Centralized workspace config. Loaded at session start; explicit CLI flags still win over settings.
+
+```json
+{
+  "model": "qwen/qwen3-coder-30b",
+  "theme": "cyberpunk",
+  "allow_bash": true,
+  "auto_test": true,
+  "auto_compact": true,
+  "auto_screenshot": false,
+  "auto_commit": false,
+  "aggressive_batching": false,
+  "self_reflect": false,
+  "max_continuations": 20,
+  "router": {"planner": "qwen-3b", "coder": "qwen-30b"},
+  "tools_disabled": ["http_request"],
+  "env": {"OPENAI_API_KEY": "${KEYCHAIN:openai-key}"}
+}
+```
+
+`${ENV:NAME}` interpolates env vars; `${KEYCHAIN:service}` runs `security find-generic-password -s service -w`. `/settings` shows the loaded config; `/settings reload` re-reads.
+
+### Background bash trio
+
+- `background_bash(command, label?)` — detaches a shell, returns a `shell_id`. Output streams to `~/.loom/shells/<id>.log`.
+- `monitor(shell_id, follow?, until?, timeout?, lines?)` — read or follow the log. `follow=true` blocks for new output up to `timeout` seconds (default 30); `until` is a regex that ends the follow early.
+- `bash_output(shell_id, since_line?, max_lines?)` — incremental reads.
+- `kill_shell(shell_id)` — SIGTERM, escalate to SIGKILL after 5s.
+- `/bg` lists, `/bg <command>` starts; `/mon <id>` reads; `/kill <id>` terminates.
+
+### Jupyter notebook tools
+
+- `notebook_read(path, cell_index?)` — read whole notebook or one cell.
+- `notebook_edit(path, cell_index, new_source, run?)` — replace cell source; with `run=true`, execute via `jupyter nbconvert --execute --inplace`.
+- `notebook_append(path, source, kind?)` — append a `code` or `markdown` cell.
+
+Edits go through the journal so `/undo` rolls them back. `/nb <path>` shows the cell list.
+
+### Worktree isolation for `spawn_agent`
+
+Pass `isolation="worktree"` to `spawn_agent` and the subagent runs in `~/.loom/worktrees/<id>` (a temporary git worktree on a fresh branch). On exit the diff vs HEAD is printed; the worktree is preserved for inspection (clean up with `git worktree remove`). Parent workspace untouched even if the subagent thrashes.
+
+### Slash command files
+
+Drop a `.md` file into `~/.loom/commands/<name>.md` (user-level) or `<workspace>/.loom/commands/<name>.md` (workspace overrides user). The file's body becomes the prompt sent to the model when the user types `/<name>`.
+
+Frontmatter (optional):
+
+```markdown
+---
+description: Review the current changes for bugs
+model: qwen/qwen3-coder-30b
+---
+Review the staged changes carefully. Look for:
+- Bugs and logic errors
+- Performance issues
+- Test coverage gaps
+
+$ARGS
+```
+
+`$ARGS` is replaced with whatever the user typed after the command name. `model` routes that single turn to a specific model.
+
+### Skills (`~/.loom/skills/<name>/`)
+
+A directory with `skill.md` (system-prompt addendum) and an optional `tools.py` (declaring `LMSTUDIO_TOOLS`) loads as a skill. `/skill <name>` activates it for the current session. `/skill` (no arg) lists installed skills with a `*` next to active ones. The model can also call `activate_skill(name)` mid-session.
+
+Skills differ from plugins (always-on, persistent tools) by being session-scoped and prompt-extending — useful for "load my test-writing skill for the next 10 turns."
+
+### Auto-memory (cross-workspace)
+
+`~/.loom/memory/MEMORY.md` is a markdown index pointing at `~/.loom/memory/<name>.md` files. The contents are auto-injected into the system prompt regardless of workspace.
+
+The model can call `save_memory(name, body, kind?)` to add a memory. `kind` is freeform (typical: `user`, `feedback`, `reference`). `/memory` prints the current MEMORY.md; `/memory reload` re-reads.
+
+Workspace `project_knowledge` is for per-project state; user memory is for cross-workspace facts ("user prefers pytest", "user has a Loom project at ~/Documents/Xcode/Loom").
+
+### Stability fixes (7.1.0 batch, shipped with 8.0.0)
+
+- WebSocket frame buffering — added `_recv_exact` helper so frames no longer truncate on partial recv()s.
+- Prefetch thread pool — bounded `ThreadPoolExecutor(max_workers=4)`; no more unbounded daemon spawn during heavy narration.
+- Two-phase file watcher — 2s fast stat of the known set; 30s full rglob to discover new files. Cheap on huge repos.
+- `run_bash` select-based reads — wakes every 1s to check the deadline; children that prompt without a newline are killed cleanly.
+- Fail-fast missing args — when `_dispatch_tool` sees required args still missing after repair + grammar, it returns a structured error with the schema instead of letting the tool raise `KeyError`.
+- Stale permission filter — `load_permission_grants` drops entries for tools no longer registered (e.g., uninstalled plugins).
+- `ship_it` recursion fix — refactored to queue followups onto `state.queued_followups` and drain them after the human turn, avoiding the nested `run_turn` hazard.
+
 ## Internet access (7.0.0)
 
 Five tools let the agent reach the web without going through the browser subprocess:
