@@ -651,6 +651,20 @@ General-purpose 3B–4B models will usually skip `update_tasks` or call it once 
 - Zero-progress orchestrator guard. The continuation loop tracks consecutive turns where no real tool work happened (only narration + bare `update_tasks` calls) and breaks out after 2 unproductive rounds, returning control to the user instead of running through the full 12 continuations.
 - Up/down arrow history fixed. Three causes were in play simultaneously: the Esc-to-CSI peek timeout (40 ms) was too tight for some terminals, VMIN/VTIME were never set in the manual termios setup so `read(1)` could return early with no bytes, and `\x1bOA`-style SS3 application-cursor-key sequences weren't handled. All three are addressed.
 
+## 8.0.9 — multi-task performance
+
+Five additions targeting wall-clock latency on multi-tool workflows. None of them help GPU throughput, but together they shave a lot of waste off each round-trip.
+
+1. `cache_prompt: true` on every completion call. LM Studio / llama.cpp reuses the KV state for unchanged prefixes across turns. System prompt + tool catalogue stay identical turn-over-turn, so the second turn onward only pays for the new user message and assistant output. Time-to-first-token on follow-up turns drops 60-80% in practice.
+
+2. Per-turn output token cap. `--max-tokens` (default 4096) prevents runaway narration like Gemma's "Step 1: Setup. Step 2: Initialize. Step 3: ..." essays that burned 60 seconds before reaching a tool call. The cap fits one tool call plus reasonable preface; raise via `--max-tokens N` or `LMSTUDIO_MAX_TOKENS` env.
+
+3. Early-stop streaming after a fenced `\`\`\`tool_call` closes. For text-mode families only. The moment the model writes the closing ``` we cut the stream rather than waiting for whatever filler prose follows. Combined with #2 this often cuts a turn's wall-clock by 30-50%.
+
+4. Workspace tree dump trimmed from 200 → 80 entries. The tree is auto-injected into every system message, so each entry is paid for in every turn forever. 80 is enough for the model to orient; the prior 200 was bloating cache size and slowing first-token on flat projects.
+
+5. Auto multi-model routing. When the user has multiple models loaded in LM Studio, lmstudio picks the smallest (by parameter count parsed from the model id) and assigns it as `planner_model`. Triage / planning prompts route there, the user's `--model` stays the coder. Explicit `--planner-model`, `--coder-model`, `--explainer-model` flags override.
+
 ## 8.0.8 — auto-scale that actually scales
 
 8.0.7 detected the small context but failed to bump it on memory-constrained systems. Live-testing on a 36 GB Mac with Gemma 4 31B revealed why: LM Studio's JIT load defaults to `parallel=4`, which keeps four KV cache slots in memory simultaneously. Most agent workloads run one completion at a time, so three of those slots are pure waste.

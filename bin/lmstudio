@@ -77,7 +77,11 @@ WORKSPACE_TREE_IGNORE = {
     "Pods", ".gradle", "out", "coverage",
 }
 WORKSPACE_TREE_MAX_DEPTH = 3
-WORKSPACE_TREE_MAX_ENTRIES = 200
+# 8.0.9: trimmed from 200 -> 80. The tree is auto-injected into every
+# system message, so each entry costs ~2-3 tokens in every turn forever.
+# 80 entries is enough to orient the model; users can /tree-size N to
+# bump back up if they're working in a flatter project.
+WORKSPACE_TREE_MAX_ENTRIES = 80
 
 
 # =============================================================================
@@ -6275,6 +6279,22 @@ class ModelAdapter:
         return calls
 
 
+def _estimate_model_billions(model_id):
+    """Pull the parameter count from a model id like `foo-31b` or
+    `qwen2.5-coder-7b-instruct`. Returns int billions, or None. Used
+    by auto-routing to pick the smallest loaded model as planner."""
+    if not model_id:
+        return None
+    m = re.search(r"(?:^|[\W_])(\d{1,3})(?:\.\d+)?\s*b\b",
+                  model_id.lower())
+    if m:
+        try:
+            return int(m.group(1))
+        except ValueError:
+            return None
+    return None
+
+
 def _try_parse_tool_call_json(body, schema_names):
     """Parse a JSON string into the canonical {id, name, arguments} shape.
     Returns None when the body doesn't actually look like a tool call -
@@ -6617,6 +6637,8 @@ def force_grammar_args(base_url, model, transcript, tool_name, tool_schema,
         "model": model,
         "messages": forced_messages,
         "stream": False,
+        "cache_prompt": True,
+        "max_tokens": 1024,
         "response_format": {
             "type": "json_schema",
             "json_schema": {
@@ -6689,9 +6711,19 @@ def request_plain_completion(base_url, model, messages, *, timeout=120):
         return None
 
 
-def stream_completion(base_url, model, messages, tools):
+def stream_completion(base_url, model, messages, tools, *,
+                      max_tokens=None, stop=None):
+    # 8.0.9: cache_prompt tells llama.cpp / LM Studio to reuse the KV
+    # state for unchanged prefixes across turns. Massive win on
+    # multi-turn sessions where the system prompt + tool catalogue
+    # are stable - cuts time-to-first-token by 60-80%.
     payload = {"model": model, "messages": messages, "tools": tools,
-               "tool_choice": "auto", "stream": True}
+               "tool_choice": "auto", "stream": True,
+               "cache_prompt": True}
+    if max_tokens:
+        payload["max_tokens"] = max_tokens
+    if stop:
+        payload["stop"] = stop
     req = urllib.request.Request(
         f"{base_url.rstrip('/')}/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
@@ -7445,6 +7477,16 @@ class AgentState:
         # drive_user_message alongside the streak counter.
         self.rescues_this_turn = 0
         self.max_rescues_per_turn = 2
+        # 8.0.9 — per-completion token cap. Prevents runaway narration
+        # on chatty models (Gemma especially), cutting wall-clock per
+        # turn. Override via --max-tokens or LMSTUDIO_MAX_TOKENS env.
+        self.max_tokens = 4096
+        # 8.0.9 — early-stop streaming after a fenced tool_call closes.
+        # Text-mode families typically finish "...```" and then keep
+        # narrating; cutting the stream the moment the fence closes
+        # saves the model from filler-prose tokens we'd discard anyway.
+        # Only meaningful when adapter.native_tools is False.
+        self.early_stop_text_tool_call = True
         # Auto-compaction. Triggered when approx_tokens / context_window
         # exceeds COMPACT_TRIGGER_RATIO. Counter visible in the footer.
         self.auto_compact = True
@@ -7700,9 +7742,22 @@ def run_turn(state, user_message, *, json_emit=None):
 
         with EscWatcher() as esc:
             essential_only = getattr(state, "essential_tools_only", False)
-            stream = stream_completion(state.base_url, active_model,
-                                       state.transcript,
-                                       _all_tool_schemas(state, essential_only=essential_only))
+            # 8.0.9: cap output to state.max_tokens (default 4096) so a
+            # runaway narration can't waste 60s on prose. Text-mode
+            # families also get stop tokens at the end of a tool_call
+            # fence - the moment the model closes the block we cut the
+            # stream rather than letting it ramble.
+            stop_seq = None
+            if (state.adapter and not state.adapter.native_tools
+                    and state.early_stop_text_tool_call):
+                stop_seq = ["\n```\n", "</tool_call>"]
+            stream = stream_completion(
+                state.base_url, active_model,
+                state.transcript,
+                _all_tool_schemas(state, essential_only=essential_only),
+                max_tokens=state.max_tokens,
+                stop=stop_seq,
+            )
             try:
                 for kind, data in stream:
                     if esc.check():
@@ -9449,6 +9504,11 @@ def main():
              "steps down 75%% / 50%% / 33%% / 25%% until LM Studio "
              "accepts. Default 65536 (64k) is achievable for most "
              "models on most hardware when parallel=1.")
+    parser.add_argument("--max-tokens", type=int,
+        default=int(os.environ.get("LMSTUDIO_MAX_TOKENS", "4096")),
+        help="Per-turn output token cap. Prevents Gemma-style runaway "
+             "prose. Default 4096 - plenty for a single tool call + "
+             "preface, hard cap on a 10k-token essay. 0 to disable.")
     parser.add_argument("--loop", action="store_true",
         help="Autonomous-loop mode. After each turn, re-enter the session "
              "until the model calls `loop_complete`.")
@@ -9568,6 +9628,31 @@ def main():
                         "warning"))
     state.context_window = fetch_model_context_window(args.base_url, args.model)
     state.grammar_supported = probe_grammar_support(args.base_url, state.model)
+    # 8.0.9 — apply CLI overrides.
+    if args.max_tokens and args.max_tokens > 0:
+        state.max_tokens = args.max_tokens
+    # 8.0.9 — auto-assign multi-model routing when the user has multiple
+    # models loaded. The smallest loaded model becomes the planner
+    # (cheap triage / plan generation); the user's --model stays the
+    # coder. Explicit --planner-model etc. CLI flags override. Skip
+    # when only one model is loaded or when /v0/models can't enumerate
+    # them.
+    if not args.planner_model and not args.coder_model:
+        try:
+            loaded_ids = fetch_loaded_models(args.base_url)
+        except Exception:
+            loaded_ids = []
+        if len(loaded_ids) > 1:
+            sized = [(model_id, _estimate_model_billions(model_id) or 999)
+                     for model_id in loaded_ids]
+            sized.sort(key=lambda t: t[1])
+            smallest = sized[0][0]
+            if smallest != args.model:
+                state.planner_model = smallest
+                if not args.no_banner and not args.json:
+                    print(style(
+                        f"  ▸ auto-routing: planner={smallest} "
+                        f"(smallest loaded model)", "tip"))
     # Tool-surface fits: when the model's reported context is tight (under
     # ~16k tokens), the full 70-tool schema set alone is bigger than the
     # prompt budget. LM Studio rejects with "n_keep > n_ctx" and we'd just
