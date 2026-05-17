@@ -1,8 +1,6 @@
 ## Changes
 
-- Codex Usage now reads local Codex session logs line by line, so the dashboard shows timeframe activity bars, token mix, model and project breakdowns, recent prompts, top topics, and hour-of-day usage instead of only lifetime token totals.
-- Codex Usage now shows the latest locally logged Codex rate-limit snapshot when available, including primary and secondary meters, reset times, plan type, credit balance, and observation time.
-- The Usage Dashboard guide now documents the fuller Codex local-log reader and makes clear that no Anthropic or OpenAI API call is made for live quota lookup.
-- Tasks now separate live sessions by product, model, and session id, so Claude Code and Codex can run side by side without sharing one ambiguous monitor.
-- Clearing Codex task groups now works without deleting rollout history: Loom hides the cleared product/model/session until its log advances, while Claude still clears its task JSON files.
-- The clear confirmation and help text now describe the actual visible products/models instead of hard-coding Claude-only wording.
+- Terminal panes now support screenshot/image paste for Codex workflows: image-only clipboards insert editable `--image '<path>' ` text instead of sending image bytes into the PTY.
+- Finder-copied image files reuse their original file path, while raw clipboard screenshots are saved as PNG files under Loom's Application Support folder.
+- Dragged image files or raw image data now use the same editable `--image '<path>' ` argument behavior and never auto-submit the command.
+- Text paste still wins when rich clipboard content includes both text and an image, so browser and document copies keep the normal text-paste behavior.

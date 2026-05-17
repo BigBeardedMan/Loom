@@ -446,10 +446,27 @@ When detection fires:
 
 When the agent process exits, detection drops on the next 2 second poll.
 
-#### Copy / paste
+#### Copy / paste / image drop
 
 Standard macOS shortcuts: `Command C` copies the selection, `Command V`
 pastes. Selection works with mouse drag.
+
+When the Terminal pane receives an image-only pasteboard, Loom inserts an
+editable Codex argument instead of sending image bytes into the PTY:
+`--image '<path>' `. Finder-copied image files reuse their existing path.
+Direct clipboard images, such as screenshots, are saved as PNG files under
+`~/Library/Application Support/Loom/Clipboard Images/`. Loom does not press
+Return; you review or edit the command and run it yourself.
+
+If the clipboard contains both text and image data, text paste wins. That
+keeps rich browser and document copies from unexpectedly becoming image
+arguments. `Command Shift V` keeps its plain-text behavior for text paste and
+uses the same image argument behavior only when no text is available.
+
+Dragging an image file or raw image data onto a Terminal pane uses the same
+argument shape: Loom inserts `--image '<path>' ` at the cursor and does not
+submit the command. Finder-dragged image files keep their original path; raw
+dragged images are saved as PNG files in the same Clipboard Images folder.
 
 #### Scrollback
 

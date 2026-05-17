@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 import Observation
 import SwiftTerm
+import UniformTypeIdentifiers
 
 /// PTY-backed shell session. Hosts a long-running login shell so interactive
 /// CLIs (claude, gemini, codex) can run their TUIs and OAuth handoffs the same
@@ -240,6 +241,7 @@ final class LoomTerminalView: LocalProcessTerminalView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         installClickToPosition()
+        registerForDraggedTypes(Self.imageDragPasteboardTypes)
     }
 
     @available(*, unavailable)
@@ -262,13 +264,26 @@ final class LoomTerminalView: LocalProcessTerminalView {
     /// avoids the CSI 200~/201~ markers that some apps render literally
     /// when they don't recognize the sequence.
     @objc func pasteAsPlainText(_ sender: Any) {
-        guard let text = NSPasteboard.general.string(forType: .string) else { return }
-        send(txt: text)
+        let pasteboard = NSPasteboard.general
+        if insertImageArgument(from: pasteboard, allowRawImage: false) {
+            return
+        }
+        if let text = pasteboard.string(forType: .string) {
+            send(txt: text)
+            return
+        }
+        _ = insertImageArgument(from: pasteboard)
     }
 
     override func paste(_ sender: Any) {
+        let pasteboard = NSPasteboard.general
         if UserDefaults.standard.bool(forKey: "loom.terminal.pasteAsPlainText") {
             pasteAsPlainText(sender)
+        } else if insertImageArgument(from: pasteboard, allowRawImage: false) {
+            return
+        } else if pasteboard.string(forType: .string) == nil,
+                  insertImageArgument(from: pasteboard) {
+            return
         } else {
             super.paste(sender)
         }
@@ -276,9 +291,171 @@ final class LoomTerminalView: LocalProcessTerminalView {
 
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         if item.action == #selector(pasteAsPlainText(_:)) {
-            return NSPasteboard.general.string(forType: .string) != nil
+            return Self.canPasteTerminalContent(from: NSPasteboard.general)
+        }
+        if item.action == #selector(NSText.paste(_:)),
+           Self.canPasteTerminalContent(from: NSPasteboard.general) {
+            return true
         }
         return super.validateUserInterfaceItem(item)
+    }
+
+    @discardableResult
+    private func insertImageArgument(
+        from pasteboard: NSPasteboard,
+        allowRawImage: Bool = true
+    ) -> Bool {
+        switch Self.clipboardImageURL(from: pasteboard, allowRawImage: allowRawImage) {
+        case .file(let url):
+            let argument = "--image \(Self.zshSingleQuoted(url.path)) "
+            send(txt: argument)
+            return true
+        case .noImage:
+            return false
+        case .unavailable:
+            return true
+        }
+    }
+
+    private static let imageDragPasteboardTypes: [NSPasteboard.PasteboardType] = [
+        .fileURL,
+        .URL,
+        .png,
+        .tiff,
+        NSPasteboard.PasteboardType("public.image")
+    ]
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        Self.pasteboardContainsImage(from: sender.draggingPasteboard) ? .copy : []
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        Self.pasteboardContainsImage(from: sender.draggingPasteboard) ? .copy : []
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        Self.pasteboardContainsImage(from: sender.draggingPasteboard)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        insertImageArgument(from: sender.draggingPasteboard)
+    }
+
+    private static func canPasteTerminalContent(from pasteboard: NSPasteboard) -> Bool {
+        pasteboard.string(forType: .string) != nil || pasteboardContainsImage(from: pasteboard)
+    }
+
+    private enum ClipboardImageResolution {
+        case file(URL)
+        case noImage
+        case unavailable
+    }
+
+    private static func clipboardImageURL(
+        from pasteboard: NSPasteboard,
+        allowRawImage: Bool
+    ) -> ClipboardImageResolution {
+        if let url = imageFileURL(from: pasteboard) {
+            return .file(url.standardizedFileURL)
+        }
+        guard allowRawImage else { return .noImage }
+        guard pasteboardContainsRawImage(from: pasteboard) else { return .noImage }
+        guard let url = saveRawClipboardImage(from: pasteboard) else { return .unavailable }
+        return .file(url)
+    }
+
+    private static func pasteboardContainsImage(from pasteboard: NSPasteboard) -> Bool {
+        imageFileURL(from: pasteboard) != nil || pasteboardContainsRawImage(from: pasteboard)
+    }
+
+    private static func imageFileURL(from pasteboard: NSPasteboard) -> URL? {
+        for item in pasteboard.pasteboardItems ?? [] {
+            guard let data = item.data(forType: .fileURL),
+                  let url = URL(dataRepresentation: data, relativeTo: nil),
+                  url.isFileURL,
+                  isImageFileURL(url) else {
+                continue
+            }
+            return url
+        }
+
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingFileURLsOnly: true
+        ]
+        let objects = pasteboard.readObjects(forClasses: [NSURL.self], options: options) ?? []
+        for object in objects {
+            guard let url = object as? URL,
+                  url.isFileURL,
+                  isImageFileURL(url) else {
+                continue
+            }
+            return url
+        }
+
+        return nil
+    }
+
+    private static func isImageFileURL(_ url: URL) -> Bool {
+        let fileExtension = url.pathExtension.lowercased()
+        if let type = UTType(filenameExtension: fileExtension),
+           type.conforms(to: .image) {
+            return true
+        }
+        let knownImageExtensions: Set<String> = [
+            "avif", "bmp", "gif", "heic", "heif", "ico", "jpeg", "jpg",
+            "jp2", "png", "psd", "svg", "tif", "tiff", "webp"
+        ]
+        return knownImageExtensions.contains(fileExtension)
+    }
+
+    private static func pasteboardContainsRawImage(from pasteboard: NSPasteboard) -> Bool {
+        pasteboard.types?.contains { type in
+            if type == .png || type == .tiff { return true }
+            guard let uniformType = UTType(type.rawValue) else { return false }
+            return uniformType.conforms(to: .image)
+        } ?? false
+    }
+
+    private static func saveRawClipboardImage(from pasteboard: NSPasteboard) -> URL? {
+        guard let image = NSImage(pasteboard: pasteboard),
+              let tiffData = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiffData),
+              let pngData = bitmap.representation(using: .png, properties: [:]) else {
+            return nil
+        }
+
+        let directory = clipboardImagesDirectory()
+        do {
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+            let filename = "clipboard-\(Int(Date().timeIntervalSince1970 * 1000))-\(UUID().uuidString).png"
+            let url = directory.appendingPathComponent(filename, isDirectory: false)
+            try pngData.write(to: url, options: .atomic)
+            return url
+        } catch {
+            return nil
+        }
+    }
+
+    private static func clipboardImagesDirectory() -> URL {
+        let fileManager = FileManager.default
+        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent(
+                "Library/Application Support",
+                isDirectory: true
+            )
+        let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
+            ?? "Loom"
+        return base
+            .appendingPathComponent(appName, isDirectory: true)
+            .appendingPathComponent("Clipboard Images", isDirectory: true)
+    }
+
+    private static func zshSingleQuoted(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 
     // MARK: - Context menu
