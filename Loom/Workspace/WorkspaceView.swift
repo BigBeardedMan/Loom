@@ -4,6 +4,7 @@ import SwiftData
 struct WorkspaceView: View {
     @Environment(WorkspaceLayout.self) private var layout
     @Environment(UpdateService.self) private var updates
+    @Environment(UsageService.self) private var usage
     @Environment(WorkspaceContext.self) private var workspaceContext
     @Environment(\.openURL) private var openURL
     @Query(sort: \Workspace.createdAt) private var workspaces: [Workspace]
@@ -176,6 +177,7 @@ struct WorkspaceView: View {
 
     private func usageTab(_ tool: CLITool, label: String) -> some View {
         let isSelected = selectedUsageTool == tool
+        let hasLimitWarning = usage.hasUnacknowledgedLimitWarning(for: tool)
         return Button {
             selectedUsageTool = isSelected ? nil : tool
         } label: {
@@ -192,10 +194,16 @@ struct WorkspaceView: View {
             .background(isSelected ? tool.brandColor : LoomTheme.softPanel.opacity(0.7))
             .overlay(Capsule().stroke(LoomTheme.hairline, lineWidth: 1))
             .clipShape(Capsule())
+            .overlay(alignment: .topLeading) {
+                if hasLimitWarning {
+                    LoomNotificationBadge()
+                        .offset(x: -5, y: -6)
+                }
+            }
         }
         .buttonStyle(.plain)
         .pointingHandCursor()
-        .help(isSelected ? "Click a workspace to return" : "Open \(label) dashboard")
+        .help(hasLimitWarning ? "\(label) is near its limit" : (isSelected ? "Click a workspace to return" : "Open \(label) dashboard"))
     }
 
     private var addBlockStrip: some View {

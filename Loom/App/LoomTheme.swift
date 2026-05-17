@@ -95,3 +95,19 @@ extension View {
         }
     }
 }
+
+struct LoomNotificationBadge: View {
+    var value: Int = 1
+
+    var body: some View {
+        Text("\(value)")
+            .font(.system(size: 9, weight: .bold, design: .rounded))
+            .foregroundStyle(.white)
+            .frame(width: 15, height: 15)
+            .background(LoomTheme.pink)
+            .clipShape(Circle())
+            .overlay(Circle().stroke(LoomTheme.panel, lineWidth: 1.5))
+            .shadow(color: LoomTheme.pink.opacity(0.45), radius: 4, x: 0, y: 1)
+            .accessibilityLabel("\(value) usage limit warning")
+    }
+}

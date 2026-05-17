@@ -452,6 +452,13 @@ struct UsageView: View {
                 }
                 usageModeButton(title: "Limits", isActive: mode == .limits) {
                     mode = .limits
+                    usage.acknowledgeLimitWarning(for: tool)
+                }
+                .overlay(alignment: .topLeading) {
+                    if usage.hasUnacknowledgedLimitWarning(for: tool) {
+                        LoomNotificationBadge()
+                            .offset(x: -5, y: -6)
+                    }
                 }
             }
             .padding(2)

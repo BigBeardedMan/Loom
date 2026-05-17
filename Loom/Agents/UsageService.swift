@@ -216,6 +216,14 @@ struct UsageLimitSnapshot: Hashable {
     let observedAt: Date?
 }
 
+struct UsageLimitWarning: Hashable, Identifiable {
+    let id: String
+    let tool: CLITool
+    let peakUsedPercent: Double?
+    let reachedType: String?
+    let observedAt: Date?
+}
+
 struct CLIToolUsage: Identifiable, Hashable {
     let tool: CLITool
     let isInstalled: Bool
@@ -289,6 +297,10 @@ struct CLIToolUsage: Identifiable, Hashable {
 @Observable
 @MainActor
 final class UsageService {
+    /// Testing Edition threshold for this build. Production target is 85%;
+    /// this build intentionally warns at 20% so the badge flow is testable.
+    nonisolated static let limitWarningThresholdPercent: Double = 20
+
     /// How many sessions across all known CLIs were touched within
     /// `liveWindow`. Drives the Prompt-workspace badge.
     var activeSessionCount: Int = 0
@@ -316,6 +328,13 @@ final class UsageService {
     /// Surfaces I/O failures while reading log directories.
     var lastError: String?
 
+    /// Latest warning-worthy limit snapshots by tool. The UI filters these
+    /// through acknowledgements so a viewed warning stays quiet until a newer
+    /// snapshot crosses the threshold again.
+    var limitWarnings: [CLITool: UsageLimitWarning] = [:]
+
+    var limitWarningThresholdPercent: Double { Self.limitWarningThresholdPercent }
+
     /// Active = log file touched in the last 5 minutes. CLIs flush to disk on
     /// every assistant turn, so this is a reliable "is somebody actively
     /// chatting" signal without being so tight that it flickers between turns.
@@ -323,14 +342,20 @@ final class UsageService {
 
     private var lightTimer: Timer?
     private let lightPollInterval: TimeInterval = 3.0
+    private var limitWarningTimer: Timer?
+    private let limitWarningPollInterval: TimeInterval = 20 * 60
 
     private var refreshTask: Task<Void, Never>?
+    private var limitWarningRefreshTask: Task<Void, Never>?
     /// Bumped on every `requestRefresh()` so a still-running detached snapshot
     /// can detect that a newer request superseded it. `Task.isCancelled` was
     /// unreliable here — the detached body never checkpoints, so the flag
     /// often hadn't propagated by the time the older task tried to write
     /// back its (now-stale) snapshot.
     private var refreshGeneration: Int = 0
+    private var limitWarningRefreshGeneration: Int = 0
+    private var acknowledgedLimitWarningIDs: Set<String>
+    private let acknowledgedLimitWarningDefaultsKey = "loom.usage.acknowledgedLimitWarnings.v1"
 
     private let claudeProjectsRoot: URL = {
         FileManager.default.homeDirectoryForCurrentUser
@@ -347,22 +372,43 @@ final class UsageService {
             .appendingPathComponent(".gemini", isDirectory: true)
     }()
 
+    init() {
+        acknowledgedLimitWarningIDs = Set(
+            UserDefaults.standard.stringArray(forKey: acknowledgedLimitWarningDefaultsKey) ?? []
+        )
+    }
+
     func start() {
         guard lightTimer == nil else { return }
         refreshActiveCountInBackground()
+        refreshLimitWarningsInBackground()
         lightTimer = Timer.scheduledTimer(
             withTimeInterval: lightPollInterval,
             repeats: true
         ) { [weak self] _ in
             Task { @MainActor in self?.refreshActiveCountInBackground() }
         }
+        limitWarningTimer = Timer.scheduledTimer(
+            withTimeInterval: limitWarningPollInterval,
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor in self?.refreshLimitWarningsInBackground() }
+        }
     }
 
     func stop() {
         lightTimer?.invalidate()
         lightTimer = nil
+        limitWarningTimer?.invalidate()
+        limitWarningTimer = nil
         refreshTask?.cancel()
         refreshTask = nil
+        limitWarningRefreshTask?.cancel()
+        limitWarningRefreshTask = nil
+    }
+
+    func requestLimitWarningRefresh() {
+        refreshLimitWarningsInBackground()
     }
 
     /// Recompute the full per-tool snapshot off the main actor.
@@ -394,9 +440,32 @@ final class UsageService {
             guard myGeneration == self.refreshGeneration else { return }
             self.tools = snapshot
             self.activeSessionCount = snapshot.reduce(0) { $0 + $1.activeSessions }
+            self.applyLimitSnapshots(snapshot.reduce(into: [CLITool: UsageLimitSnapshot]()) { partial, tool in
+                if let limitSnapshot = tool.limitSnapshot {
+                    partial[tool.tool] = limitSnapshot
+                }
+            })
             self.lastRefreshedAt = .now
             self.isRefreshing = false
         }
+    }
+
+    func hasUnacknowledgedLimitWarning(for tool: CLITool) -> Bool {
+        guard let warning = limitWarnings[tool] else { return false }
+        return !acknowledgedLimitWarningIDs.contains(warning.id)
+    }
+
+    func acknowledgeLimitWarning(for tool: CLITool) {
+        guard let warning = limitWarnings[tool] else { return }
+        acknowledgedLimitWarningIDs.insert(warning.id)
+        persistAcknowledgedLimitWarnings()
+    }
+
+    private func persistAcknowledgedLimitWarnings() {
+        UserDefaults.standard.set(
+            Array(acknowledgedLimitWarningIDs),
+            forKey: acknowledgedLimitWarningDefaultsKey
+        )
     }
 
     // MARK: - Light path (active count only)
@@ -417,6 +486,107 @@ final class UsageService {
                 self.activeSessionCount = total
             }
         }
+    }
+
+    // MARK: - Limit warning path
+
+    private func refreshLimitWarningsInBackground() {
+        limitWarningRefreshTask?.cancel()
+        limitWarningRefreshGeneration &+= 1
+        let myGeneration = limitWarningRefreshGeneration
+        let codexRoot = codexSessionsRoot
+
+        limitWarningRefreshTask = Task { [weak self] in
+            let snapshots = await Task.detached(priority: .utility) {
+                Self.computeLimitSnapshots(codexRoot: codexRoot)
+            }.value
+            guard let self, myGeneration == self.limitWarningRefreshGeneration else { return }
+            self.applyLimitSnapshots(snapshots)
+        }
+    }
+
+    private func applyLimitSnapshots(_ snapshots: [CLITool: UsageLimitSnapshot]) {
+        let warnings = snapshots.reduce(into: [CLITool: UsageLimitWarning]()) { partial, entry in
+            if let warning = Self.limitWarning(
+                tool: entry.key,
+                snapshot: entry.value,
+                threshold: Self.limitWarningThresholdPercent
+            ) {
+                partial[entry.key] = warning
+            }
+        }
+        if limitWarnings != warnings {
+            limitWarnings = warnings
+        }
+    }
+
+    private nonisolated static func computeLimitSnapshots(
+        codexRoot: URL
+    ) -> [CLITool: UsageLimitSnapshot] {
+        var snapshots: [CLITool: UsageLimitSnapshot] = [:]
+        if let codex = readLatestCodexLimitSnapshot(root: codexRoot) {
+            snapshots[.codex] = codex
+        }
+        return snapshots
+    }
+
+    private nonisolated static func readLatestCodexLimitSnapshot(root: URL) -> UsageLimitSnapshot? {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: root.path),
+              let enumerator = fm.enumerator(
+                at: root,
+                includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+                options: [.skipsHiddenFiles]
+              ) else {
+            return nil
+        }
+
+        var latest: UsageLimitSnapshot?
+        for case let url as URL in enumerator {
+            guard url.pathExtension == "jsonl" else { continue }
+            guard let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate else { continue }
+            guard let data = try? Data(contentsOf: url),
+                  let text = String(data: data, encoding: .utf8),
+                  let snapshot = parseCodexLatestLimitSnapshot(in: text, fallback: mtime) else {
+                continue
+            }
+            let observedAt = snapshot.observedAt ?? .distantPast
+            if latest?.observedAt.map({ observedAt > $0 }) ?? true {
+                latest = snapshot
+            }
+        }
+        return latest
+    }
+
+    private nonisolated static func limitWarning(
+        tool: CLITool,
+        snapshot: UsageLimitSnapshot,
+        threshold: Double
+    ) -> UsageLimitWarning? {
+        let reached = snapshot.reachedType?.nilIfEmpty
+        let peak = [
+            snapshot.primaryUsedPercent,
+            snapshot.secondaryUsedPercent
+        ].compactMap { $0 }.max()
+
+        guard reached != nil || peak.map({ $0 >= threshold }) == true else {
+            return nil
+        }
+
+        let observed = snapshot.observedAt?.timeIntervalSince1970.description ?? "unknown"
+        let primary = snapshot.primaryUsedPercent?.description ?? "nil"
+        let secondary = snapshot.secondaryUsedPercent?.description ?? "nil"
+        let reachedPart = reached ?? "nil"
+        let id = "\(tool.rawValue)|\(observed)|\(primary)|\(secondary)|\(reachedPart)"
+
+        return UsageLimitWarning(
+            id: id,
+            tool: tool,
+            peakUsedPercent: peak,
+            reachedType: reached,
+            observedAt: snapshot.observedAt
+        )
     }
 
     /// Walk a directory and count `.jsonl` files modified after `cutoff`.

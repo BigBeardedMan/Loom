@@ -507,7 +507,7 @@ When detection fires:
 
 When the agent process exits, detection drops on the next 2 second poll.
 
-#### Copy / paste
+#### Copy / paste / image drop
 
 Standard macOS shortcuts: `Command C` copies the selection, `Command V`
 pastes. Selection works with mouse drag.
@@ -524,6 +524,11 @@ If the clipboard contains both text and image data, text paste wins. That
 keeps rich browser and document copies from unexpectedly becoming image
 arguments. `Command Shift V` keeps its plain-text behavior for text paste and
 uses the same image argument behavior only when no text is available.
+
+Dragging an image file or raw image data onto a Terminal pane uses the same
+argument shape: Loom inserts `--image '<path>' ` at the cursor and does not
+submit the command. Finder-dragged image files keep their original path; raw
+dragged images are saved as PNG files in the same Clipboard Images folder.
 
 #### Scrollback
 
@@ -1438,6 +1443,14 @@ prompts, and hour-of-day heatmap. When Codex writes rate-limit snapshots,
 the dedicated Limits view shows primary and secondary limit meters, reset
 times, plan type, credit balance, and the latest observed timestamp.
 
+When any tool has readable local limit data at or above the warning
+threshold, Loom adds a red `1` badge to that tool's usage pill. Opening the
+dashboard carries the same badge to the **Limits** button; clicking
+**Limits** acknowledges that snapshot and clears the badge until a newer
+warning snapshot appears. In Testing Edition `8.0.25`, the threshold is set
+to 20% so this alert flow can be tested; the intended production threshold is
+85%.
+
 ### Timeframes
 
 Pick a timeframe at the top of the dashboard:
@@ -1461,6 +1474,8 @@ Two cadences:
 
 - **Light path.** Every 3 seconds, count `.jsonl` files modified within the
   last 5 minutes. Drives the active sessions badge.
+- **Limit warning path.** On app open/foreground and then every 20 minutes,
+  read the latest local limit snapshots and update warning badges.
 - **Full snapshot.** Heavy. On demand (timeframe change or pane open).
   Reads every JSONL file in full, runs the regex scan off the main actor.
   Year-range refreshes can take roughly a minute on large logs; the

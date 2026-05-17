@@ -241,6 +241,7 @@ final class LoomTerminalView: LocalProcessTerminalView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         installClickToPosition()
+        registerForDraggedTypes(Self.imageDragPasteboardTypes)
     }
 
     @available(*, unavailable)
@@ -264,24 +265,24 @@ final class LoomTerminalView: LocalProcessTerminalView {
     /// when they don't recognize the sequence.
     @objc func pasteAsPlainText(_ sender: Any) {
         let pasteboard = NSPasteboard.general
-        if pasteClipboardImageArgument(from: pasteboard, allowRawImage: false) {
+        if insertImageArgument(from: pasteboard, allowRawImage: false) {
             return
         }
         if let text = pasteboard.string(forType: .string) {
             send(txt: text)
             return
         }
-        _ = pasteClipboardImageArgument(from: pasteboard)
+        _ = insertImageArgument(from: pasteboard)
     }
 
     override func paste(_ sender: Any) {
         let pasteboard = NSPasteboard.general
         if UserDefaults.standard.bool(forKey: "loom.terminal.pasteAsPlainText") {
             pasteAsPlainText(sender)
-        } else if pasteClipboardImageArgument(from: pasteboard, allowRawImage: false) {
+        } else if insertImageArgument(from: pasteboard, allowRawImage: false) {
             return
         } else if pasteboard.string(forType: .string) == nil,
-                  pasteClipboardImageArgument(from: pasteboard) {
+                  insertImageArgument(from: pasteboard) {
             return
         } else {
             super.paste(sender)
@@ -300,7 +301,7 @@ final class LoomTerminalView: LocalProcessTerminalView {
     }
 
     @discardableResult
-    private func pasteClipboardImageArgument(
+    private func insertImageArgument(
         from pasteboard: NSPasteboard,
         allowRawImage: Bool = true
     ) -> Bool {
@@ -314,6 +315,30 @@ final class LoomTerminalView: LocalProcessTerminalView {
         case .unavailable:
             return true
         }
+    }
+
+    private static let imageDragPasteboardTypes: [NSPasteboard.PasteboardType] = [
+        .fileURL,
+        .URL,
+        .png,
+        .tiff,
+        NSPasteboard.PasteboardType("public.image")
+    ]
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        Self.pasteboardContainsImage(from: sender.draggingPasteboard) ? .copy : []
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        Self.pasteboardContainsImage(from: sender.draggingPasteboard) ? .copy : []
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        Self.pasteboardContainsImage(from: sender.draggingPasteboard)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        insertImageArgument(from: sender.draggingPasteboard)
     }
 
     private static func canPasteTerminalContent(from pasteboard: NSPasteboard) -> Bool {

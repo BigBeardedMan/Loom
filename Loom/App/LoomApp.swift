@@ -65,6 +65,7 @@ struct LoomApp: App {
                 .onReceive(NotificationCenter.default.publisher(
                     for: NSApplication.didBecomeActiveNotification
                 )) { _ in
+                    usageService.requestLimitWarningRefresh()
                     Task { await updateService.checkRemote() }
                 }
                 .onOpenURL { url in

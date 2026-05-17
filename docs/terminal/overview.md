@@ -39,7 +39,7 @@ Layouts persist: the next time you open the workspace, the panes return with the
 
 The terminal launches in the workspace's folder URL. Subsequent `cd`s persist within the session. Restart the pane (× then re-add) to reset to the workspace folder.
 
-## Copy / paste
+## Copy / paste / image drop
 
 Standard macOS shortcuts: ⌘C copies the selection, ⌘V pastes. Selection works with mouse drag. There's no "select rectangle" mode today.
 
@@ -52,6 +52,8 @@ When the focused Terminal pane receives an image-only pasteboard, Loom inserts a
 Loom also inserts a trailing space after the argument. Copied image files from Finder reuse the original file path. Direct clipboard images, such as screenshots, are encoded as PNG files under `~/Library/Application Support/Loom Testing Edition/Clipboard Images/` in the Testing Edition build. Loom never presses Return for this path; the command stays editable so you can review it before running it.
 
 If the clipboard contains both text and image data, text paste wins. That keeps rich copies from browsers and documents from unexpectedly turning into image arguments. ⇧⌘V keeps its existing plain-text behavior for text paste, and uses the same image argument behavior only when no text is available.
+
+Dragging an image file or raw image data onto a Terminal pane uses the same command shape. Loom inserts `--image '<path>' ` at the cursor, keeps Finder-dragged image file paths intact, saves raw image drags as PNG files in the same Clipboard Images folder, and never presses Return.
 
 ## Scrollback
 
