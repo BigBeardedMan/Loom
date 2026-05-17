@@ -1245,7 +1245,10 @@ in-flight plan won't appear in the Tasks pane until the CLI emits a
 structured plan log.
 
 Loom polls every 2 seconds via `LiveAgentTasksService` (off-main-thread
-JSON decode) and surfaces active tasks grouped by source plus session id.
+JSON decode) and surfaces active tasks grouped by product, model, and
+session id. Codex model names come from the rollout's latest
+`turn_context`; Claude model names come from the matching
+`~/.claude/projects/.../<session-id>.jsonl` when available.
 
 ### Task statuses
 
@@ -1265,7 +1268,8 @@ descending.
 In a Prompt workspace's Tasks pane, live agent tasks appear in their own
 section above the kanban columns:
 
-- Header: **Live . <session-id-prefix>** (e.g. `Live . 33280421`).
+- Header: **<product> . <model> . <session-id-prefix>** (for example,
+  `Codex . gpt-5.5 . 019e34ad`).
 - One row per task, with a status badge.
 - Click a task to expand and read its full description and `activeForm`.
 
@@ -1305,7 +1309,8 @@ forever. Only `.json` task-file mtimes count.
 
 ### Privacy
 
-Loom only reads files under `~/.claude/tasks/` and `~/.codex/sessions/`.
+Loom only reads files under `~/.claude/tasks/`, `~/.claude/projects/`, and
+`~/.codex/sessions/`.
 Nothing leaves your machine. The polling service uses standard
 `FileManager` calls and does not watch via FSEvents (which would require a
 separate privacy entitlement).
@@ -1320,10 +1325,10 @@ header runs "Clear all". The effect on disk depends on the source:
   zombie sessions.
 - **Codex** rollouts hold the full conversation alongside the plan, so
   Loom never deletes them. Instead it records a dismissal timestamp
-  (keyed by `codex:<session-id>`, persisted under
-  `UserDefaults` key `loom.tasks.dismissedSessions`) and hides the group
-  until the rollout's file mtime advances past that mark. An active
-  session reappears after its next event; a stuck session stays cleared.
+  keyed by product, model, and session id under `UserDefaults` key
+  `loom.tasks.dismissedSessions`, then hides the group until the rollout's
+  file mtime advances past that mark. An active session reappears after
+  its next event; a stuck session stays cleared.
 - **Gemini** isn't collected from disk today; the same dismissal
   mechanism applies if a future Gemini source is added.
 

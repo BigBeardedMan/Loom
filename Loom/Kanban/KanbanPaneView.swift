@@ -42,7 +42,7 @@ struct KanbanPaneView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Clears every session shown here. Claude task files are deleted on disk; live Claude sessions rewrite them on the next turn. Codex sessions are hidden until the rollout advances, so stuck/zombie sessions stay gone and active ones reappear after Codex's next event.")
+            Text(clearAllMessage)
         }
     }
 
@@ -51,7 +51,7 @@ struct KanbanPaneView: View {
             Image(systemName: group.source.systemImage)
                 .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(group.source.brandColor)
-            Text(group.source.label)
+            Text(group.displayName)
                 .font(.system(size: 10, weight: .semibold))
             Text(group.sessionID.prefix(8))
                 .font(.system(size: 9, design: .monospaced))
@@ -88,7 +88,7 @@ struct KanbanPaneView: View {
             }
             .buttonStyle(.plain)
             .pointingHandCursor()
-            .help(clearHelp(for: group.source))
+            .help(clearHelp(for: group))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
@@ -142,7 +142,7 @@ struct KanbanPaneView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-                .help("Clear all task files for visible sessions")
+                .help("Clear all visible task sessions")
             }
         }
         .padding(.horizontal, 12)
@@ -169,7 +169,7 @@ struct KanbanPaneView: View {
                         .lineLimit(2)
                 }
                 HStack(spacing: 6) {
-                    Text(task.source.label)
+                    Text(task.sourceLabel)
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(.tertiary)
                     if task.status != .pending {
@@ -196,10 +196,21 @@ struct KanbanPaneView: View {
         }
     }
 
-    private func clearHelp(for source: AgentSource) -> String {
-        switch source {
-        case .claude: return "Clear this session's task files"
-        case .codex, .gemini: return "Hide this session until it next updates"
+    private var clearAllMessage: String {
+        let labels = Array(Set(liveAgentTasks.groups.map(\.displayName))).sorted()
+        let labelText: String
+        if labels.count <= 3 {
+            labelText = labels.joined(separator: ", ")
+        } else {
+            labelText = labels.prefix(3).joined(separator: ", ") + ", and \(labels.count - 3) more"
+        }
+        return "Clears every visible session\(labelText.isEmpty ? "" : " for \(labelText)"). File-backed task sessions delete their task JSON files; log-backed sessions such as Codex are hidden until their log updates, so stuck sessions stay gone and active sessions reappear on the next event."
+    }
+
+    private func clearHelp(for group: LiveAgentTaskGroup) -> String {
+        switch group.source {
+        case .claude: return "Clear \(group.displayName) task files"
+        case .codex, .gemini: return "Hide \(group.displayName) until it next updates"
         }
     }
 

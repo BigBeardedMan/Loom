@@ -1042,9 +1042,11 @@ Claude Code (and other compatible CLIs) write per-session task state to:
 ```
 
 Each JSON file describes one task: id, subject, description, activeForm,
-status. Loom polls this directory every 2 seconds via
-`LiveAgentTasksService` (off-main-thread JSON decode) and surfaces the
-active tasks grouped by session id.
+status. Loom polls every 2 seconds via `LiveAgentTasksService`
+(off-main-thread JSON decode) and surfaces active tasks grouped by
+product, model, and session id. Codex model names come from the rollout's
+latest `turn_context`; Claude model names come from the matching
+`~/.claude/projects/.../<session-id>.jsonl` when available.
 
 ### Task statuses
 
@@ -1064,7 +1066,8 @@ descending.
 In a Prompt workspace's Tasks pane, live agent tasks appear in their own
 section above the kanban columns:
 
-- Header: **Live . <session-id-prefix>** (e.g. `Live . 33280421`).
+- Header: **<product> . <model> . <session-id-prefix>** (for example,
+  `Codex . gpt-5.5 . 019e34ad`).
 - One row per task, with a status badge.
 - Click a task to expand and read its full description and `activeForm`.
 
@@ -1104,18 +1107,19 @@ forever. Only `.json` task-file mtimes count.
 
 ### Privacy
 
-Loom only reads files under `~/.claude/tasks/`. Nothing leaves your
-machine. The polling service uses standard `FileManager` calls and does not
-watch via FSEvents (which would require a separate privacy entitlement).
+Loom only reads files under `~/.claude/tasks/`, `~/.claude/projects/`, and
+`~/.codex/sessions/`. Nothing leaves your machine. The polling service uses
+standard `FileManager` calls and does not watch via FSEvents (which would
+require a separate privacy entitlement).
 
 ### Clearing
 
-The trash icon next to a session's header deletes that session's `.json`
-files. Live CLI sessions will rewrite them on the next turn, so this only
-"sticks" for crashed or zombie sessions.
-
-The "Clear all" button in the pane header opens a confirmation, then deletes
-every visible session's task files.
+Every session header carries a × icon, and the trash icon in the pane
+header runs "Clear all". Claude sessions delete task JSON files. Codex
+sessions are hidden by a local dismissal timestamp keyed by product, model,
+and session id, because their rollout JSONL also contains conversation
+history. Active log-backed sessions reappear after their next event; stuck
+sessions stay cleared.
 
 ---
 

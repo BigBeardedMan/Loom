@@ -63,6 +63,7 @@ enum LiveAgentTaskStatus: String, Codable, Hashable {
 struct LiveAgentTask: Identifiable, Hashable {
     let id: String          // composite "<source>:<sessionID>:<taskID>"
     let source: AgentSource
+    let modelLabel: String?
     let sessionID: String
     let taskID: String
     let subject: String
@@ -70,17 +71,51 @@ struct LiveAgentTask: Identifiable, Hashable {
     let activeForm: String
     let status: LiveAgentTaskStatus
     let updatedAt: Date
+
+    var sourceLabel: String {
+        LiveAgentTaskGroup.displayName(source: source, modelLabel: modelLabel)
+    }
 }
 
 /// One concurrent agent CLI conversation. A user running `claude` in two
 /// terminals at once will produce two of these — each gets its own header
 /// in the Tasks pane so the user can tell them apart.
 struct LiveAgentTaskGroup: Identifiable, Hashable {
-    var id: String { "\(source.rawValue):\(sessionID)" }
+    var id: String { "\(source.rawValue):\(modelKey):\(sessionID)" }
     let sessionID: String
     let source: AgentSource
+    let modelLabel: String?
     let lastActivity: Date
     let tasks: [LiveAgentTask]
+
+    var displayName: String {
+        Self.displayName(source: source, modelLabel: modelLabel)
+    }
+
+    private var modelKey: String {
+        Self.identityModelKey(modelLabel)
+    }
+
+    static func displayName(source: AgentSource, modelLabel: String?) -> String {
+        guard let modelLabel = normalizedModelLabel(modelLabel) else {
+            return "\(source.label) · Default"
+        }
+        return "\(source.label) · \(modelLabel)"
+    }
+
+    private static func identityModelKey(_ modelLabel: String?) -> String {
+        normalizedModelLabel(modelLabel)?
+            .lowercased()
+            .replacingOccurrences(of: ":", with: "_")
+            .replacingOccurrences(of: "/", with: "_")
+            ?? "default"
+    }
+
+    static func normalizedModelLabel(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
 
     /// Best short label for "what is this session doing" — uses the in-progress
     /// task's activeForm/subject when available, otherwise falls back to the
@@ -125,6 +160,10 @@ final class LiveAgentTasksService {
     private let claudeTasksRoot: URL = {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/tasks", isDirectory: true)
+    }()
+    private let claudeProjectsRoot: URL = {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/projects", isDirectory: true)
     }()
     private let codexSessionsRoot: URL = {
         FileManager.default.homeDirectoryForCurrentUser
@@ -178,6 +217,7 @@ final class LiveAgentTasksService {
         guard !refreshInFlight else { return }
         refreshInFlight = true
         let claudeRoot = claudeTasksRoot
+        let claudeProjectsRoot = claudeProjectsRoot
         let codexRoot = codexSessionsRoot
         let cutoff = Date().addingTimeInterval(-activeWindow)
         let dismissed = dismissedSessions
@@ -185,6 +225,7 @@ final class LiveAgentTasksService {
             let sorted = await Task.detached(priority: .utility) {
                 Self.collectAllGroups(
                     claudeRoot: claudeRoot,
+                    claudeProjectsRoot: claudeProjectsRoot,
                     codexRoot: codexRoot,
                     cutoff: cutoff,
                     dismissed: dismissed
@@ -249,12 +290,17 @@ final class LiveAgentTasksService {
     /// blocking the main thread on disk I/O and JSON decoding.
     nonisolated static func collectAllGroups(
         claudeRoot: URL,
+        claudeProjectsRoot: URL,
         codexRoot: URL,
         cutoff: Date,
         dismissed: [String: Date]
     ) -> [LiveAgentTaskGroup] {
         var collected: [LiveAgentTaskGroup] = []
-        collected.append(contentsOf: collectClaudeGroups(root: claudeRoot, cutoff: cutoff))
+        collected.append(contentsOf: collectClaudeGroups(
+            root: claudeRoot,
+            projectsRoot: claudeProjectsRoot,
+            cutoff: cutoff
+        ))
         collected.append(contentsOf: collectCodexGroups(root: codexRoot, cutoff: cutoff))
         let filtered = collected.filter { group in
             guard let dismissedAt = dismissed[group.id] else { return true }
@@ -271,14 +317,18 @@ final class LiveAgentTasksService {
         let mostRecentMtime: Date
     }
 
-    nonisolated static func collectClaudeGroups(root: URL, cutoff: Date) -> [LiveAgentTaskGroup] {
+    nonisolated static func collectClaudeGroups(root: URL, projectsRoot: URL, cutoff: Date) -> [LiveAgentTaskGroup] {
         var collected: [LiveAgentTaskGroup] = []
-        for session in activeClaudeSessions(root: root, cutoff: cutoff) {
-            let tasks = readClaudeTasks(in: session)
+        let sessions = activeClaudeSessions(root: root, cutoff: cutoff)
+        let modelLabels = collectClaudeModelLabels(projectsRoot: projectsRoot, sessionIDs: Set(sessions.map(\.id)))
+        for session in sessions {
+            let modelLabel = modelLabels[session.id]
+            let tasks = readClaudeTasks(in: session, modelLabel: modelLabel)
             guard !tasks.isEmpty else { continue }
             collected.append(LiveAgentTaskGroup(
                 sessionID: session.id,
                 source: .claude,
+                modelLabel: modelLabel,
                 lastActivity: session.mostRecentMtime,
                 tasks: tasks
             ))
@@ -330,7 +380,7 @@ final class LiveAgentTasksService {
         let status: String?
     }
 
-    nonisolated private static func readClaudeTasks(in session: ClaudeSessionRef) -> [LiveAgentTask] {
+    nonisolated private static func readClaudeTasks(in session: ClaudeSessionRef, modelLabel: String?) -> [LiveAgentTask] {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(
             at: session.url,
@@ -351,6 +401,7 @@ final class LiveAgentTasksService {
             tasks.append(LiveAgentTask(
                 id: composite,
                 source: .claude,
+                modelLabel: modelLabel,
                 sessionID: session.id,
                 taskID: payload.id,
                 subject: payload.subject ?? "(no subject)",
@@ -366,6 +417,55 @@ final class LiveAgentTasksService {
             }
             return lhs.updatedAt > rhs.updatedAt
         }
+    }
+
+    private struct ClaudeProjectLine: Decodable {
+        struct Message: Decodable {
+            let model: String?
+        }
+        let message: Message?
+    }
+
+    nonisolated private static func collectClaudeModelLabels(
+        projectsRoot: URL,
+        sessionIDs: Set<String>
+    ) -> [String: String] {
+        guard !sessionIDs.isEmpty else { return [:] }
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: projectsRoot.path) else { return [:] }
+        guard let enumerator = fm.enumerator(
+            at: projectsRoot,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [:] }
+
+        var labels: [String: String] = [:]
+        for case let url as URL in enumerator {
+            guard url.pathExtension == "jsonl" else { continue }
+            let sessionID = url.deletingPathExtension().lastPathComponent
+            guard sessionIDs.contains(sessionID) else { continue }
+            if let model = readLatestClaudeModelLabel(at: url) {
+                labels[sessionID] = model
+            }
+            if labels.count == sessionIDs.count { break }
+        }
+        return labels
+    }
+
+    nonisolated private static func readLatestClaudeModelLabel(at url: URL) -> String? {
+        guard let data = try? Data(contentsOf: url),
+              let text = String(data: data, encoding: .utf8) else { return nil }
+
+        let decoder = JSONDecoder()
+        var latest: String?
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard line.contains("\"model\"") else { continue }
+            guard let lineData = String(line).data(using: .utf8),
+                  let parsed = try? decoder.decode(ClaudeProjectLine.self, from: lineData),
+                  let model = LiveAgentTaskGroup.normalizedModelLabel(parsed.message?.model) else { continue }
+            latest = model
+        }
+        return latest
     }
 
     // MARK: - Codex
@@ -390,13 +490,15 @@ final class LiveAgentTasksService {
             guard mtime >= cutoff else { continue }
 
             let sessionID = codexSessionID(from: url)
-            guard let plan = readLatestCodexPlan(at: url), !plan.isEmpty else { continue }
+            guard let snapshot = readLatestCodexPlanSnapshot(at: url), !snapshot.plan.isEmpty else { continue }
+            let modelLabel = snapshot.modelLabel
 
-            let tasks: [LiveAgentTask] = plan.enumerated().map { index, step in
+            let tasks: [LiveAgentTask] = snapshot.plan.enumerated().map { index, step in
                 let status = mapCodexStatus(step.status)
                 return LiveAgentTask(
                     id: "codex:\(sessionID):\(index)",
                     source: .codex,
+                    modelLabel: modelLabel,
                     sessionID: sessionID,
                     taskID: String(index),
                     subject: step.step,
@@ -409,6 +511,7 @@ final class LiveAgentTasksService {
             collected.append(LiveAgentTaskGroup(
                 sessionID: sessionID,
                 source: .codex,
+                modelLabel: modelLabel,
                 lastActivity: mtime,
                 tasks: tasks
             ))
@@ -438,10 +541,27 @@ final class LiveAgentTasksService {
 
     private struct CodexPlanLine: Decodable {
         struct Payload: Decodable {
+            struct CollaborationMode: Decodable {
+                struct Settings: Decodable {
+                    let model: String?
+                }
+                let settings: Settings?
+            }
             let type: String?
             let name: String?
             let arguments: String?
+            let model: String?
+            let collaborationMode: CollaborationMode?
+
+            enum CodingKeys: String, CodingKey {
+                case type
+                case name
+                case arguments
+                case model
+                case collaborationMode = "collaboration_mode"
+            }
         }
+        let type: String?
         let payload: Payload?
     }
 
@@ -454,22 +574,35 @@ final class LiveAgentTasksService {
         let status: String
     }
 
+    private struct CodexPlanSnapshot {
+        let plan: [CodexPlanStep]
+        let modelLabel: String?
+    }
+
     /// Scan a rollout JSONL for `function_call` lines whose `name` is
     /// `update_plan`. Returns the most recent plan, or nil if the rollout
     /// never emitted one.
-    nonisolated private static func readLatestCodexPlan(at url: URL) -> [CodexPlanStep]? {
+    nonisolated private static func readLatestCodexPlanSnapshot(at url: URL) -> CodexPlanSnapshot? {
         guard let data = try? Data(contentsOf: url),
               let text = String(data: data, encoding: .utf8) else { return nil }
 
         let decoder = JSONDecoder()
         var latest: [CodexPlanStep]?
+        var modelLabel: String?
         for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard line.contains("\"update_plan\"") || line.contains("\"turn_context\"") else { continue }
+            guard let lineData = String(line).data(using: .utf8) else { continue }
+            guard let parsed = try? decoder.decode(CodexPlanLine.self, from: lineData) else { continue }
+            if parsed.type == "turn_context" {
+                modelLabel = LiveAgentTaskGroup.normalizedModelLabel(
+                    parsed.payload?.model ?? parsed.payload?.collaborationMode?.settings?.model
+                ) ?? modelLabel
+            }
+
             // Cheap byte-level filter so 99% of lines never touch the JSON
             // decoder. Codex flushes every event in the conversation here,
             // and a long session can be thousands of lines.
             guard line.contains("\"update_plan\"") else { continue }
-            guard let lineData = String(line).data(using: .utf8) else { continue }
-            guard let parsed = try? decoder.decode(CodexPlanLine.self, from: lineData) else { continue }
             guard parsed.payload?.type == "function_call",
                   parsed.payload?.name == "update_plan",
                   let args = parsed.payload?.arguments,
@@ -477,7 +610,8 @@ final class LiveAgentTasksService {
             guard let envelope = try? decoder.decode(CodexPlanArguments.self, from: argsData) else { continue }
             latest = envelope.plan
         }
-        return latest
+        guard let latest else { return nil }
+        return CodexPlanSnapshot(plan: latest, modelLabel: modelLabel)
     }
 
     nonisolated private static func mapCodexStatus(_ raw: String) -> LiveAgentTaskStatus {
