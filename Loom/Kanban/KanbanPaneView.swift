@@ -42,7 +42,7 @@ struct KanbanPaneView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Deletes the on-disk task files for every Claude Code session shown here. Live sessions rewrite theirs on the next turn, so only crashed or zombie sessions stay gone. Codex sessions keep their plan inside the rollout log and are left untouched.")
+            Text(clearAllMessage)
         }
     }
 
@@ -51,7 +51,7 @@ struct KanbanPaneView: View {
             Image(systemName: group.source.systemImage)
                 .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(group.source.brandColor)
-            Text(group.source.label)
+            Text(group.displayName)
                 .font(.system(size: 10, weight: .semibold))
             Text(group.sessionID.prefix(8))
                 .font(.system(size: 9, design: .monospaced))
@@ -73,23 +73,18 @@ struct KanbanPaneView: View {
                 .padding(.vertical, 1)
                 .background(Color.white.opacity(0.05))
                 .clipShape(Capsule())
-            // Codex stores its plan inside the rollout JSONL alongside the
-            // rest of the conversation, so there's no safe per-session
-            // delete; only Claude groups get the × button.
-            if group.source == .claude {
-                Button {
-                    liveAgentTasks.clear(group: group)
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .padding(3)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .pointingHandCursor()
-                .help("Clear this session's task files")
+            Button {
+                liveAgentTasks.clear(group: group)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .padding(3)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .help(clearHelp(for: group))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
@@ -143,7 +138,7 @@ struct KanbanPaneView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-                .help("Clear all task files for visible sessions")
+                .help("Clear all visible task sessions")
             }
         }
         .padding(.horizontal, 12)
@@ -170,7 +165,7 @@ struct KanbanPaneView: View {
                         .lineLimit(2)
                 }
                 HStack(spacing: 6) {
-                    Text(task.source.label)
+                    Text(task.sourceLabel)
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(.tertiary)
                     if task.status != .pending {
@@ -194,6 +189,26 @@ struct KanbanPaneView: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(task.subject, forType: .string)
             }
+        }
+    }
+
+    private var clearAllMessage: String {
+        let labels = Array(Set(liveAgentTasks.groups.map(\.displayName))).sorted()
+        let labelText: String
+        if labels.count <= 3 {
+            labelText = labels.joined(separator: ", ")
+        } else {
+            labelText = labels.prefix(3).joined(separator: ", ") + ", and \(labels.count - 3) more"
+        }
+        return "Clears every visible session\(labelText.isEmpty ? "" : " for \(labelText)"). File-backed task sessions delete their task JSON files; log-backed sessions such as Codex are hidden until their log updates, so stuck sessions stay gone and active sessions reappear on the next event."
+    }
+
+    private func clearHelp(for group: LiveAgentTaskGroup) -> String {
+        switch group.source {
+        case .claude, .lmstudio:
+            return "Clear \(group.displayName) task files"
+        case .codex, .gemini, .ollama, .openAICompatible:
+            return "Hide \(group.displayName) until it next updates"
         }
     }
 

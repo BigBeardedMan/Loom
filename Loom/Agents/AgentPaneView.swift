@@ -588,7 +588,7 @@ struct AgentPaneView: View {
                 await requestToolApproval(request)
             }
         )
-        let runtime = AgentOrchestrator(provider: provider, toolRunner: runner, source: agentSource)
+        let runtime = AgentOrchestrator(provider: provider, toolRunner: runner, source: agentSource, modelLabel: model)
         orchestrator = runtime
 
         orchestratorTask = Task { @MainActor in

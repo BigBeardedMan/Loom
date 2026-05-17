@@ -59,6 +59,7 @@ final class AgentOrchestrator {
 
     let sessionID: String = UUID().uuidString
     let source: AgentSource
+    let modelLabel: String?
 
     private(set) var tasks: [LiveAgentTask] = []
     private(set) var turns: [Turn] = []
@@ -78,10 +79,11 @@ final class AgentOrchestrator {
     private var currentTask: Task<Void, Never>?
     private var transcript: [LLMMessage] = []
 
-    init(provider: LLMProvider, toolRunner: AgentToolRunner, source: AgentSource) {
+    init(provider: LLMProvider, toolRunner: AgentToolRunner, source: AgentSource, modelLabel: String? = nil) {
         self.provider = provider
         self.toolRunner = toolRunner
         self.source = source
+        self.modelLabel = LiveAgentTaskGroup.normalizedModelLabel(modelLabel)
     }
 
     func cancel() {
@@ -251,6 +253,7 @@ final class AgentOrchestrator {
             return LiveAgentTask(
                 id: "\(source.rawValue):\(sessionID):\(index)",
                 source: source,
+                modelLabel: modelLabel,
                 sessionID: sessionID,
                 taskID: String(index),
                 subject: item.subject,
@@ -275,6 +278,7 @@ final class AgentOrchestrator {
                 return LiveAgentTask(
                     id: task.id,
                     source: task.source,
+                    modelLabel: task.modelLabel,
                     sessionID: task.sessionID,
                     taskID: task.taskID,
                     subject: task.subject,
