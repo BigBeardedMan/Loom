@@ -31,6 +31,53 @@ SIGNING_KEYCHAIN_PUBLIC_ACCOUNT="production-public-base64"
 SIGNING_KEY_FALLBACK="${HOME}/.loom/release-signing/loom-production-ed25519.pem"
 SIGNING_PUBLIC_FALLBACK="${HOME}/.loom/release-signing/loom-production-ed25519-public-base64.txt"
 
+plist_value() {
+  /usr/libexec/PlistBuddy -c "Print :$2" "$1" 2>/dev/null || true
+}
+
+validate_production_bundle() {
+  local app_path="$1"
+  local expected_version="$2"
+  local info="${app_path}/Contents/Info.plist"
+
+  if [[ "$(basename "$app_path")" != "Loom.app" ]]; then
+    echo "error: built app has wrong name: $(basename "$app_path")" >&2
+    exit 1
+  fi
+  if [[ ! -f "$info" ]]; then
+    echo "error: built app is missing Info.plist" >&2
+    exit 1
+  fi
+  if [[ "$(plist_value "$info" CFBundleIdentifier)" != "com.chasesims.Loom" ]]; then
+    echo "error: built app has wrong bundle identifier" >&2
+    exit 1
+  fi
+  if [[ "$(plist_value "$info" CFBundleName)" != "Loom" ]]; then
+    echo "error: built app has wrong bundle name" >&2
+    exit 1
+  fi
+  if [[ "$(plist_value "$info" CFBundleDisplayName)" != "Loom" ]]; then
+    echo "error: built app has wrong display name" >&2
+    exit 1
+  fi
+  if [[ "$(plist_value "$info" CFBundleExecutable)" != "Loom" ]]; then
+    echo "error: built app has wrong executable name" >&2
+    exit 1
+  fi
+  if [[ ! -x "${app_path}/Contents/MacOS/Loom" ]]; then
+    echo "error: built app is missing executable" >&2
+    exit 1
+  fi
+  if [[ "$(plist_value "$info" CFBundleShortVersionString)" != "$expected_version" ]]; then
+    echo "error: built app version does not match release version" >&2
+    exit 1
+  fi
+  if [[ "$(plist_value "$info" LoomReleaseSignaturePublicKeyBase64)" != "${LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64:-}" ]]; then
+    echo "error: built app has wrong release signature public key" >&2
+    exit 1
+  fi
+}
+
 if [[ -z "$OPENSSL_BIN" ]]; then
   if [[ -x /opt/homebrew/opt/openssl@3/bin/openssl ]]; then
     OPENSSL_BIN=/opt/homebrew/opt/openssl@3/bin/openssl
@@ -168,6 +215,7 @@ if [[ -z "$BUILT" ]]; then
   echo "error: built Release/Loom.app not found under $DERIVED_BASE" >&2
   exit 1
 fi
+validate_production_bundle "$BUILT" "$VERSION"
 echo "==> built: $BUILT"
 
 # --- Package .dmg -----------------------------------------------------------
@@ -184,6 +232,7 @@ DMG_PATH="${RELEASE_DIR}/${DMG_NAME}"
 STAGE=$(mktemp -d -t loom-dmg)
 cp -R "$BUILT" "$STAGE/Loom.app"
 /usr/bin/xattr -cr "$STAGE/Loom.app"
+validate_production_bundle "$STAGE/Loom.app" "$VERSION"
 ln -s /Applications "$STAGE/Applications"
 
 echo "==> hdiutil create $DMG_NAME"

@@ -10,8 +10,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "4.0.2"
-    CURRENT_PROJECT_VERSION: "58"
+    MARKETING_VERSION: "4.0.3"
+    CURRENT_PROJECT_VERSION: "59"
     CODE_SIGN_STYLE: Manual
     CODE_SIGN_IDENTITY: "Loom Local Codesign"
     DEVELOPMENT_TEAM: ""
@@ -42,6 +42,7 @@ targets:
       path: Loom/Info.plist
       properties:
         LSApplicationCategoryType: public.app-category.developer-tools
+        CFBundleDisplayName: "Loom"
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LoomReleaseSignaturePublicKeyBase64: $(LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64)
