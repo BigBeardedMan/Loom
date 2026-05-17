@@ -26,6 +26,8 @@ Standard macOS pasteboard items, routed through the responder chain so they targ
 
 Settings → Shell has an **Always paste as plain text** toggle that makes ⌘V skip the bracketed-paste wrapper too, so you don't have to reach for ⇧⌘V every time.
 
+Image-only clipboard pastes in the Terminal pane become editable Codex image arguments (`--image '<path>' `) instead of binary data. Finder-copied image files keep their original path; direct clipboard images are saved under Application Support. Text paste still wins when rich clipboard content includes both text and an image.
+
 **Right-click anywhere in a terminal pane** to pop the same items as a context menu — Copy, Paste, Paste as Plain Text, Select All. Validation stays consistent with the menu bar (Copy disabled when no selection, Paste* disabled when the clipboard is empty). Text fields and the Editor / Notes panes inherit their context menu from AppKit, so the same right-click works there for free.
 
 ## Adding panes

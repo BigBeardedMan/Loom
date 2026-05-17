@@ -451,6 +451,19 @@ When the agent process exits, detection drops on the next 2 second poll.
 Standard macOS shortcuts: `Command C` copies the selection, `Command V`
 pastes. Selection works with mouse drag.
 
+When the Terminal pane receives an image-only pasteboard, Loom inserts an
+editable Codex argument instead of sending image bytes into the PTY:
+`--image '<path>' `. Finder-copied image files reuse their existing path.
+Direct clipboard images, such as screenshots, are saved as PNG files under
+`~/Library/Application Support/Loom Testing Edition/Clipboard Images/` in
+the Testing Edition build. Loom does not press Return; you review or edit the
+command and run it yourself.
+
+If the clipboard contains both text and image data, text paste wins. That
+keeps rich browser and document copies from unexpectedly becoming image
+arguments. `Command Shift V` keeps its plain-text behavior for text paste and
+uses the same image argument behavior only when no text is available.
+
 #### Scrollback
 
 SwiftTerm keeps the default 1000-line scrollback. Scroll with two-finger

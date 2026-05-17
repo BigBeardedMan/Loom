@@ -43,6 +43,16 @@ The terminal launches in the workspace's folder URL. Subsequent `cd`s persist wi
 
 Standard macOS shortcuts: ⌘C copies the selection, ⌘V pastes. Selection works with mouse drag. There's no "select rectangle" mode today.
 
+When the focused Terminal pane receives an image-only pasteboard, Loom inserts an editable Codex image argument instead of sending image bytes to the PTY:
+
+```sh
+--image '<path>'
+```
+
+Loom also inserts a trailing space after the argument. Copied image files from Finder reuse the original file path. Direct clipboard images, such as screenshots, are encoded as PNG files under `~/Library/Application Support/Loom Testing Edition/Clipboard Images/` in the Testing Edition build. Loom never presses Return for this path; the command stays editable so you can review it before running it.
+
+If the clipboard contains both text and image data, text paste wins. That keeps rich copies from browsers and documents from unexpectedly turning into image arguments. ⇧⌘V keeps its existing plain-text behavior for text paste, and uses the same image argument behavior only when no text is available.
+
 ## Scrollback
 
 SwiftTerm keeps the default 1000-line scrollback. Scroll with two-finger drag or the keyboard's Page Up / Page Down (depending on terminal app's `terminfo`).
