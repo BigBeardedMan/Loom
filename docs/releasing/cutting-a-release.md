@@ -13,7 +13,8 @@ Loom's release script is `bin/release.sh`. It bumps nothing for you — bump `MA
 
 ```bash
 # 1. Bump MARKETING_VERSION (and CURRENT_PROJECT_VERSION) in project.yml.
-# 2. Commit + push.
+# 2. Update docs/releasing/current-release-notes.md.
+# 3. Commit + push.
 bin/release.sh                 # run from the repo root
 ```
 
@@ -26,9 +27,9 @@ What the script does:
 5. **Locates the built `.app`** — searches `~/Library/Developer/Xcode/DerivedData/.../Build/Products/Release/Loom.app`.
 6. **Packages the DMG** — copies `Loom.app` and an `/Applications` alias into a staging temp dir, runs `hdiutil create -format UDZO`, names the file `Loom-<version>.dmg`.
 7. **Tags and pushes** — `git tag -a vX.Y.Z -m "Loom <version> (<build>)"`, `git push origin vX.Y.Z`.
-8. **Creates the GitHub release** — `gh release create vX.Y.Z <dmg> -t "Loom <version>" -F notes.md`.
+8. **Creates or updates the GitHub release** — writes the notes from `docs/releasing/current-release-notes.md`, then attaches the DMG, checksum, and signature.
 
-The release notes are boilerplate (install steps + auto-update note). If you want a real changelog, edit the heredoc in `bin/release.sh` or let `gh release edit` rewrite it after.
+The release notes include `docs/releasing/current-release-notes.md` plus install and auto-update instructions. Keep that file focused on the update you are about to tag; it is the changelog section that appears on the GitHub release.
 
 ## Post-release
 

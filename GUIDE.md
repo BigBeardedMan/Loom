@@ -1408,7 +1408,7 @@ Three CLIs are recognized by name today: Claude Code, Codex, Gemini.
 | CLI | Source |
 | --- | ------ |
 | Claude Code | `~/.claude/projects/<slug>/<id>.jsonl` (line by line) |
-| Codex | `~/.codex/sessions/.../<rollout>.jsonl` (cumulative `total_token_usage` event) |
+| Codex | `~/.codex/sessions/.../<rollout>.jsonl` (line by line) |
 | Gemini | Stub. The Gemini CLI does not expose usage we can read locally yet. |
 
 For Claude Code, every JSONL session file is scanned line by line for
@@ -1422,6 +1422,16 @@ prompt lines. This drives:
 - Top topics across user prompts (filtered against a hand-curated stopword
   list).
 - Recent prompts (newest first, capped for display).
+
+For Codex, every rollout JSONL file is scanned line by line for session
+metadata, working directory, model, user prompts, and `token_count` events.
+Codex reports cumulative `total_token_usage` values per rollout, so Loom uses
+the latest total in each session, then maps it into the selected timeframe by
+the event timestamp. This drives the same chart and list surfaces as Claude:
+per-bucket activity, token mix, model and project slices, top topics, recent
+prompts, and hour-of-day heatmap. When Codex writes rate-limit snapshots,
+the Codex dashboard also shows primary and secondary limit meters, reset
+times, plan type, credit balance, and the latest observed timestamp.
 
 ### Timeframes
 
@@ -1462,6 +1472,8 @@ Each tab opens a single-CLI dashboard tinted with that CLI's brand color
 - Top projects, top models, top topics.
 - An hourly distribution.
 - Recent prompts (clickable to expand).
+- Codex only: locally logged primary/secondary rate-limit meters and reset
+  times when Codex records that data.
 
 CLIs that are not installed render an "installed but no data" placeholder
 so the tab still works as a feature-discovery surface.
@@ -1471,7 +1483,8 @@ so the tab still works as a feature-discovery surface.
 The Anthropic console's quota and billing dashboards are the source of
 truth for paid usage. Loom's dashboard is purely a local-disk read of CLI
 session logs. It does not call the Anthropic API or the OpenAI API to look
-up live quotas.
+up live quotas. Codex limit meters are the latest values Codex already wrote
+locally, not a live billing-console lookup.
 
 ### Privacy
 
@@ -2137,7 +2150,7 @@ Adjacent precautions:
 | ---- | ----------------- |
 | `~/.claude/tasks/<session-id>/<task-id>.json` | Live agent tasks polling |
 | `~/.claude/projects/<slug>/<id>.jsonl` | Usage dashboard (Claude Code totals, per-bucket, per-model, per-project) |
-| `~/.codex/sessions/.../<rollout>.jsonl` | Usage dashboard (Codex `total_token_usage`) |
+| `~/.codex/sessions/.../<rollout>.jsonl` | Usage dashboard (Codex totals, per-bucket activity, per-model/per-project rollups, prompts, and locally logged rate-limit snapshots) |
 | `~/.gemini/...` | Existence check for the Gemini installed flag |
 | The workspace's folder URL | Editor file tree root, terminal `cwd`, agent `cwd` |
 
@@ -2232,7 +2245,8 @@ Loom's release script is `bin/release.sh`. Run from the repo root:
 
 ```bash
 # 1. Bump MARKETING_VERSION (and CURRENT_PROJECT_VERSION) in project.yml.
-# 2. Commit + push.
+# 2. Update docs/releasing/current-release-notes.md.
+# 3. Commit + push.
 bin/release.sh
 ```
 
@@ -2259,8 +2273,9 @@ bin/release.sh
 8. Compute SHA-256 of the DMG; write a `.sha256` sidecar file.
 9. Tag and push: `git tag -a v<version> -m "Loom <version> (<build>)"`,
    `git push origin v<version>`.
-10. Create the GitHub release via `gh release create` with both the DMG
-    and the `.sha256` sidecar attached.
+10. Create or update the GitHub release with the release notes from
+    `docs/releasing/current-release-notes.md`, plus the DMG, `.sha256`
+    sidecar, and `.sha256.sig` signature attached.
 
 ### Post-release
 

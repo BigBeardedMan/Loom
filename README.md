@@ -38,11 +38,12 @@ Then build & run from Xcode (⌘R). macOS 14+.
 
 ```bash
 # 1. Bump MARKETING_VERSION (and CURRENT_PROJECT_VERSION) in project.yml
-# 2. Commit + push
+# 2. Update docs/releasing/current-release-notes.md
+# 3. Commit + push
 bin/release.sh                 # run from the repo root
 ```
 
-`release.sh` regenerates the project, builds Release, packages a `.dmg`, tags `vX.Y.Z`, pushes the tag, and creates a GitHub release with the `.dmg` attached. Running Loom installs everywhere pick the new build up automatically.
+`release.sh` regenerates the project, builds Release, packages a `.dmg`, tags `vX.Y.Z`, pushes the tag, and creates a GitHub release with the current release notes and `.dmg` attached. Running Loom installs everywhere pick the new build up automatically.
 
 ## Docs
 

@@ -24,6 +24,7 @@ DERIVED_BASE="${HOME}/Library/Developer/Xcode/DerivedData"
 RELEASE_DIR="${PROJECT_ROOT}/build/release"
 REPO="BigBeardedMan/Loom"
 OPENSSL_BIN="${LOOM_OPENSSL_BIN:-}"
+RELEASE_NOTES_SOURCE="${PROJECT_ROOT}/docs/releasing/current-release-notes.md"
 
 if [[ -z "$OPENSSL_BIN" ]]; then
   if [[ -x /opt/homebrew/opt/openssl@3/bin/openssl ]]; then
@@ -189,6 +190,22 @@ NOTES_FILE=$(mktemp -t loom-notes)
 cat >"$NOTES_FILE" <<EOF
 Loom ${VERSION} (build ${BUILD})
 
+EOF
+
+if [[ -f "$RELEASE_NOTES_SOURCE" ]]; then
+  cat "$RELEASE_NOTES_SOURCE" >> "$NOTES_FILE"
+  printf '\n' >> "$NOTES_FILE"
+else
+  cat >>"$NOTES_FILE" <<EOF
+## Changes
+
+- See the commit history for this release.
+
+EOF
+fi
+
+cat >>"$NOTES_FILE" <<EOF
+
 ## Install
 1. Download \`${DMG_NAME}\` below.
 2. Open it and drag **Loom** into your Applications folder.
@@ -199,6 +216,12 @@ Already running Loom? It auto-checks GitHub every 60 seconds. The **Update** pil
 EOF
 
 if [[ "$REUSE_EXISTING_RELEASE" -eq 1 ]]; then
+  echo "==> gh release edit $TAG (refresh release notes)"
+  gh release edit "$TAG" \
+    -R "$REPO" \
+    -t "Loom ${VERSION}" \
+    -F "$NOTES_FILE"
+
   echo "==> gh release upload $TAG (append to existing release)"
   gh release upload "$TAG" "$DMG_PATH" "$CHECKSUM_PATH" "$SIGNATURE_PATH" \
     -R "$REPO" \
