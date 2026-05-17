@@ -10,6 +10,7 @@ struct WorkspaceSidebarView: View {
     @Query(sort: \IdeaNote.createdAt) private var allNotes: [IdeaNote]
     @Environment(\.modelContext) private var context
     @Environment(WorkspaceLayout.self) private var layout
+    @Environment(TerminalTranscriptStore.self) private var terminalHistory
 
     @Binding var selectedWorkspaceID: UUID?
     @Binding var selectedUsageTool: CLITool?
@@ -17,6 +18,8 @@ struct WorkspaceSidebarView: View {
     @State private var sessionRenameDraft: String = ""
     @State private var renamingNoteID: UUID?
     @State private var clearAllConfirm: ClearAllScope?
+    @State private var showRecentlyDeletedTerminals: Bool = false
+    @State private var transcriptSheet: TerminalTranscriptSession?
     @FocusState private var renameFocused: Bool
 
     private enum ClearAllScope: Identifiable {
@@ -55,6 +58,17 @@ struct WorkspaceSidebarView: View {
             Button("Cancel", role: .cancel) {}
         } message: { _ in
             Text("This can't be undone.")
+        }
+        .sheet(item: $transcriptSheet) { session in
+            TerminalTranscriptDetailView(
+                session: session,
+                onStartFreshShell: {
+                    let cwd = URL(fileURLWithPath: session.cwd)
+                    layout.addTerminalBlock(cwd: cwd)
+                    transcriptSheet = nil
+                }
+            )
+            .environment(terminalHistory)
         }
     }
 
@@ -194,31 +208,210 @@ struct WorkspaceSidebarView: View {
 
     private var terminalSessionsSection: some View {
         let sessions = terminalBlocks
+        let closed = terminalHistory.recentlyClosed(workspaceID: selectedWorkspaceID)
         return VStack(alignment: .leading, spacing: 10) {
-            sectionHeader(title: "Terminal Sessions", trailing: {
-                HStack(spacing: 6) {
-                    countBadge(sessions.count)
-                    if !sessions.isEmpty {
-                        clearAllButton {
-                            clearAllConfirm = .terminals
+            if showRecentlyDeletedTerminals {
+                recentlyDeletedTerminalsSection
+            } else {
+                sectionHeader(title: "Terminal Sessions", trailing: {
+                    HStack(spacing: 6) {
+                        countBadge(sessions.count)
+                        if !sessions.isEmpty {
+                            clearAllButton {
+                                clearAllConfirm = .terminals
+                            }
+                        }
+                    }
+                })
+
+                if sessions.isEmpty {
+                    emptyHint("No terminal blocks open. Use ＋Terminal in the top bar.")
+                } else {
+                    ScrollView(showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(sessions) { block in
+                                terminalRow(block)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 220)
+                }
+
+                if !closed.isEmpty {
+                    sectionHeader(title: "Recently Closed", trailing: {
+                        countBadge(closed.count)
+                    })
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(closed.prefix(5)) { session in
+                            closedTerminalRow(session)
                         }
                     }
                 }
+
+                Button {
+                    showRecentlyDeletedTerminals = true
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text("Recently Deleted")
+                            .font(.system(size: 11, weight: .medium))
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .bold))
+                    }
+                    .foregroundStyle(LoomTheme.mutedText)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(LoomTheme.softPanel.opacity(0.45))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+                .pointingHandCursor()
+            }
+        }
+    }
+
+    private var recentlyDeletedTerminalsSection: some View {
+        let deleted = terminalHistory.recentlyDeleted(workspaceID: selectedWorkspaceID)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Button {
+                    showRecentlyDeletedTerminals = false
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 10, weight: .bold))
+                    Text("Back")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(LoomTheme.mutedText)
+                .pointingHandCursor()
+                Spacer()
+            }
+
+            sectionHeader(title: "Recently Deleted", trailing: {
+                countBadge(deleted.count)
             })
 
-            if sessions.isEmpty {
-                emptyHint("No terminal blocks open. Use ＋Terminal in the top bar.")
+            if deleted.isEmpty {
+                emptyHint("Deleted terminal sessions will show up here.")
             } else {
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 6) {
-                        ForEach(sessions) { block in
-                            terminalRow(block)
+                        ForEach(deleted) { session in
+                            deletedTerminalRow(session)
                         }
                     }
                 }
-                .frame(maxHeight: 320)
+                .frame(maxHeight: 360)
             }
         }
+    }
+
+    private func closedTerminalRow(_ session: TerminalTranscriptSession) -> some View {
+        transcriptRow(
+            session,
+            icon: "clock.arrow.circlepath",
+            tint: LoomTheme.green,
+            primaryAction: {
+                transcriptSheet = session
+            },
+            trailing: {
+                HStack(spacing: 6) {
+                    Button {
+                        transcriptSheet = session
+                    } label: {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open transcript")
+
+                    Button {
+                        terminalHistory.moveToDeleted(session)
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Move to Recently Deleted")
+                }
+            }
+        )
+    }
+
+    private func deletedTerminalRow(_ session: TerminalTranscriptSession) -> some View {
+        transcriptRow(
+            session,
+            icon: "trash",
+            tint: LoomTheme.orange,
+            primaryAction: {
+                transcriptSheet = session
+            },
+            trailing: {
+                HStack(spacing: 6) {
+                    Button {
+                        terminalHistory.recoverDeleted(session)
+                    } label: {
+                        Image(systemName: "arrow.uturn.backward")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Recover")
+
+                    Button(role: .destructive) {
+                        terminalHistory.deletePermanently(session)
+                    } label: {
+                        Image(systemName: "xmark.bin")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Delete permanently")
+                }
+            }
+        )
+    }
+
+    private func transcriptRow<Trailing: View>(
+        _ session: TerminalTranscriptSession,
+        icon: String,
+        tint: Color,
+        primaryAction: @escaping () -> Void,
+        @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(session.displayTitle)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(LoomTheme.primaryText)
+                    .lineLimit(1)
+                Text(session.displayCwd)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(LoomTheme.mutedText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 4)
+            trailing()
+                .foregroundStyle(LoomTheme.mutedText)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(LoomTheme.softPanel.opacity(0.5))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(LoomTheme.hairline, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .contentShape(RoundedRectangle(cornerRadius: 6))
+        .onTapGesture(perform: primaryAction)
     }
 
     private func terminalRow(_ block: WorkspaceBlock) -> some View {

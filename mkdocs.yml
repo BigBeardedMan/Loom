@@ -82,6 +82,7 @@ nav:
   - Terminal:
       - terminal/overview.md
       - terminal/cli-detection.md
+      - terminal/command-history.md
       - terminal/command-injection.md
   - Editor:
       - editor/overview.md
@@ -89,6 +90,8 @@ nav:
       - settings/appearance.md
       - settings/tasks.md
       - settings/providers.md
+      - settings/mcp.md
+      - settings/shell.md
       - settings/advanced.md
   - Updates:
       - updates/auto-update.md

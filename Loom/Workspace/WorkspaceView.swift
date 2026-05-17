@@ -429,7 +429,11 @@ struct WorkspaceView: View {
         switch block.kind {
         case .terminal:
             if !block.terminalSessions.isEmpty {
-                TerminalPaneView(block: block)
+                TerminalPaneView(
+                    block: block,
+                    workspaceID: selectedWorkspace?.id,
+                    workspaceName: selectedWorkspace?.name
+                )
             } else {
                 Color.black
             }

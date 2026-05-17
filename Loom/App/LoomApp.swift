@@ -12,6 +12,7 @@ struct LoomApp: App {
     @State private var workspaceContext = WorkspaceContext()
     @State private var mcpService = MCPService()
     @State private var commandHistory = CommandHistoryService()
+    @State private var terminalTranscripts = TerminalTranscriptStore()
     @State private var crashService = CrashService.shared
 
     init() {
@@ -46,8 +47,10 @@ struct LoomApp: App {
                 .environment(localEndpoints)
                 .environment(workspaceContext)
                 .environment(commandHistory)
+                .environment(terminalTranscripts)
                 .task {
                     ShellIntegration.install()
+                    terminalTranscripts.start()
                     layout.prefetchAllKinds()
                     liveAgentTasks.start()
                     usageService.start()
@@ -195,6 +198,7 @@ struct LoomApp: App {
                 .environment(localEndpoints)
                 .environment(agentRegistry)
                 .environment(mcpService)
+                .environment(terminalTranscripts)
         }
     }
 

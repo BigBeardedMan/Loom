@@ -6,10 +6,17 @@ Where Loom (and the things Loom reads from) keeps state on disk.
 
 | Path | Purpose |
 | ---- | ------- |
-| `~/Library/Application Support/Loom/staging/Loom.app` | Newly downloaded build, waiting for the Update pill click. |
-| `~/Library/Application Support/Loom/staging/manifest.json` | `{ version, build, stagedAt }` for the staged build. |
-| `~/Library/Application Support/com.chasesims.Loom/default.store` | SwiftData store (workspaces, kanban, notes). Path varies by SwiftData version. |
-| `~/Library/Preferences/com.chasesims.Loom.plist` | UserDefaults (theme, stale window, local endpoints). |
+| `~/Library/Application Support/Loom Testing Edition/staging/Loom Testing Edition.app` | Newly downloaded Testing Edition build, waiting for the Update pill click. |
+| `~/Library/Application Support/Loom Testing Edition/staging/manifest.json` | `{ version, build, stagedAt }` for the staged build. |
+| `~/Library/Application Support/Loom Testing Edition/layout.json` | Workspace pane layout, custom titles, terminal cwd, and split state. |
+| `~/Library/Application Support/Loom Testing Edition/shell/.zshrc` | zsh command-history shim sourced via `ZDOTDIR`. |
+| `~/Library/Application Support/Loom Testing Edition/shell/history.jsonl` | Append-only structured command log. |
+| `~/Library/Application Support/Loom Testing Edition/shell/output/cap-*.out` | Captured stdout/stderr for Loom-submitted commands. |
+| `~/Library/Application Support/Loom Testing Edition/Terminal History/sessions.json` | Terminal transcript metadata and active/closed/deleted state. |
+| `~/Library/Application Support/Loom Testing Edition/Terminal History/transcripts/<uuid>.ansi` | Raw ANSI PTY transcript for one terminal session. |
+| `~/Library/Application Support/Loom Testing Edition/Clipboard Images/clipboard-*.png` | Raw clipboard or drag image data saved before inserting a Codex `--image` argument. |
+| `~/Library/Application Support/com.chasesims.LoomTestingEdition/default.store` | SwiftData store (workspaces, kanban, notes). Path varies by SwiftData version. |
+| `~/Library/Preferences/com.chasesims.LoomTestingEdition.plist` | UserDefaults (theme, stale window, local endpoints, shell settings). |
 
 ## Loom-read (external)
 
@@ -24,8 +31,8 @@ Where Loom (and the things Loom reads from) keeps state on disk.
 | Path | Purpose |
 | ---- | ------- |
 | `<repo>/` | Wherever you cloned Loom. Build outputs are deliberately *not* under iCloud-synced locations like `~/Documents` — see below. |
-| `~/Library/Developer/Xcode/DerivedData/Loom-*/Build/Products/Release/Loom.app` | Build output. `release.sh` searches here for the `.app` to package. |
-| `<repo>/build/release/Loom-<version>.dmg` | Packaged DMG ready for `gh release upload`. |
+| `~/Library/Developer/Xcode/DerivedData/LoomTestingEdition-*/Build/Products/Release/Loom Testing Edition.app` | Testing Edition build output. |
+| `<repo>/build/release/LoomTestingEdition-<version>.dmg` | Packaged Testing Edition DMG ready for release upload. |
 
 ## Why Application Support, not the app bundle?
 

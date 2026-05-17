@@ -674,8 +674,12 @@ private struct EndpointEditor: View {
 // MARK: - Shell
 
 private struct ShellSettings: View {
+    @Environment(TerminalTranscriptStore.self) private var terminalHistory
     @AppStorage("loom.shellIntegration") private var integrationEnabled: Bool = true
     @AppStorage("loom.terminal.pasteAsPlainText") private var pasteAsPlainText: Bool = false
+    @AppStorage(TerminalTranscriptStore.enabledDefaultsKey) private var terminalHistoryEnabled: Bool = true
+    @AppStorage(TerminalTranscriptStore.maxBytesDefaultsKey) private var terminalHistoryMaxBytes: Double = TerminalTranscriptStore.defaultStorageLimitBytes
+    @State private var confirmPruneTerminalHistory: Bool = false
 
     var body: some View {
         Form {
@@ -689,6 +693,42 @@ private struct ShellSettings: View {
                 Text("Applies to terminals opened after the change. Currently-running terminals keep whichever mode they started with.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+            }
+
+            Section("Terminal History") {
+                Toggle("Save terminal transcripts locally", isOn: $terminalHistoryEnabled)
+
+                Picker("Storage limit", selection: $terminalHistoryMaxBytes) {
+                    Text("250 MB").tag(250_000_000.0)
+                    Text("500 MB").tag(500_000_000.0)
+                    Text("1 GB").tag(1_073_741_824.0)
+                    Text("2 GB").tag(2_147_483_648.0)
+                    Text("5 GB").tag(5_368_709_120.0)
+                    Text("10 GB").tag(10_737_418_240.0)
+                }
+                .pickerStyle(.menu)
+                .onChange(of: terminalHistoryMaxBytes) { _, _ in
+                    terminalHistory.enforceStorageLimit()
+                }
+
+                LabeledContent("Currently saved") {
+                    Text(byteCount(terminalHistory.totalBytes))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack {
+                    Button("Prune Terminal History...", role: .destructive) {
+                        confirmPruneTerminalHistory = true
+                    }
+                    Button("Reveal History Folder") {
+                        terminalHistory.revealHistoryFolder()
+                    }
+                }
+
+                Text("Transcripts stay on this Mac. Loom prunes old closed and deleted sessions when saved history exceeds the limit; active terminals keep running.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Pasting") {
@@ -723,6 +763,22 @@ private struct ShellSettings: View {
             }
         }
         .formStyle(.grouped)
+        .confirmationDialog(
+            "Prune saved terminal history?",
+            isPresented: $confirmPruneTerminalHistory,
+            titleVisibility: .visible
+        ) {
+            Button("Prune History", role: .destructive) {
+                terminalHistory.pruneSavedHistory()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This clears saved terminal transcripts. Active terminal panes keep running, but their saved transcript files start over.")
+        }
+    }
+
+    private func byteCount(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 }
 

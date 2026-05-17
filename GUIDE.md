@@ -49,7 +49,10 @@ version of these chapters lives at
     1. [Appearance](#111-appearance)
     2. [Tasks](#112-tasks)
     3. [Providers](#113-providers)
-    4. [Advanced](#114-advanced)
+    4. [Agent](#114-agent)
+    5. [MCP](#115-mcp)
+    6. [Shell](#116-shell)
+    7. [Advanced](#117-advanced)
 12. [Updates](#12-updates)
     1. [Auto Update](#121-auto-update)
     2. [Manual Check](#122-manual-check)
@@ -139,6 +142,11 @@ Loom 2.x extends the cockpit. Highlights:
   stdout+stderr to a per-command file. Cards expand in place to show
   the captured output. Hand-typed commands skip the wrap so
   interactive TUIs keep working.
+- **Terminal transcripts and recovery**: Testing Edition saves local
+  PTY transcripts, shows closed sessions under **Recently Closed**, and
+  adds **Recently Deleted** with Recover and Delete Permanently actions.
+  Settings -> Shell controls the transcript cap, defaults to 1 GB, and
+  can prune saved history without stopping active terminals.
 
 ---
 
@@ -181,10 +189,13 @@ Subsequent launches behave normally. macOS remembers the override.
 
 Drag `/Applications/Loom.app` to the Trash. Loom-owned data lives in:
 
-- `~/Library/Application Support/Loom/` (staging directory, update
-  manifest, layout JSON, and the shell integration shim + history log)
-- `~/Library/Application Support/com.chasesims.Loom/` (SwiftData store)
-- `~/Library/Preferences/com.chasesims.Loom.plist` (UserDefaults)
+- `~/Library/Application Support/Loom Testing Edition/` (staging directory,
+  update manifest, layout JSON, shell history, terminal transcripts, and
+  clipboard image drops in the Testing Edition build)
+- `~/Library/Application Support/com.chasesims.LoomTestingEdition/`
+  (SwiftData store in the Testing Edition build)
+- `~/Library/Preferences/com.chasesims.LoomTestingEdition.plist`
+  (UserDefaults in the Testing Edition build)
 - macOS Keychain, service `com.chasesims.Loom` (Anthropic key, local endpoint
   bearer tokens)
 
@@ -474,18 +485,18 @@ flow into every subprocess you run:
 - Suffix matches: any variable ending in `_API_KEY`, `_SECRET_KEY`,
   `_ACCESS_TOKEN`, or `_AUTH_TOKEN`.
 
-#### Multi-row click to position cursor
+#### Claude click-to-edit
 
-When a known CLI agent (`claude`, `codex`, `gemini`) is the foreground
-process, single-clicking inside its prompt area sends arrow-key sequences to
-walk the cursor to the clicked column and row. Same UX as Warp or iTerm with
-shell integration.
+When Claude Code (`claude`) is the foreground process, single-clicking inside
+its active prompt sends arrow-key sequences to walk the cursor to the clicked
+column and row. That makes it possible to click into already-typed Claude
+prompt text and edit from that point without manually arrowing around.
 
-Vertical movement is gated behind the CLI-agent check because sending up or
-down arrows into a plain shell prompt would walk command history rather than
-move the cursor. Cross-row clicks are also bounded to a 10-row radius from
-the cursor so accidental scrollback clicks do not blast a hundred arrow
-sequences into the foreground.
+The behavior is intentionally Claude-only. Sending arrows into zsh, Codex,
+Gemini, or an arbitrary TUI can trigger command history or tool-specific
+shortcuts instead of moving text insertion. Cross-row clicks are bounded to a
+10-row radius from the cursor so accidental scrollback clicks do not blast a
+hundred arrow sequences into the foreground.
 
 Single clicks with any modifier (Shift, Command, Option, Control) are
 ignored so SwiftTerm's native selection and word-lookup gestures keep
@@ -503,7 +514,7 @@ When detection fires:
 - The active sessions badge in the workspace sidebar increments.
 - The Tasks pane (in Prompt workspaces) starts mirroring the agent's live
   task list from `~/.claude/tasks/<session>/<id>.json`.
-- The terminal's click-to-position behavior unlocks vertical movement.
+- Claude terminal prompts unlock click-to-edit cursor movement.
 
 When the agent process exits, detection drops on the next 2 second poll.
 
@@ -533,13 +544,15 @@ dragged images are saved as PNG files in the same Clipboard Images folder.
 #### Scrollback
 
 SwiftTerm keeps the default 1000-line scrollback. Scroll with two-finger
-drag or your terminal's Page Up / Page Down (depending on `terminfo`).
+drag or your terminal's Page Up / Page Down (depending on `terminfo`). This
+live scrollback is separate from saved terminal transcripts.
 
 #### Restart
 
 There is no "restart shell" button. Close the pane (the **x** in its title
 bar) and re-add it to get a fresh shell that respawns in the workspace
-folder. The previous shell's scrollback is lost.
+folder. The previous live scrollback is lost, but the saved transcript moves
+to **Recently Closed** when terminal history is enabled.
 
 #### Multi-pane splits (v1.9.0+)
 
@@ -569,6 +582,30 @@ shell in its saved cwd.
 Live-agent counts walk every session in every terminal block, so each
 pane that has a CLI agent (claude / codex / gemini) in the foreground
 counts toward the workspace badge.
+
+#### Session transcripts and recovery (Testing Edition)
+
+When terminal history is enabled, every Terminal pane writes its PTY output to
+a local ANSI transcript under `~/Library/Application Support/Loom Testing
+Edition/Terminal History/transcripts/`. Metadata lives next to it in
+`sessions.json`. This is a transcript of terminal output, not a resurrected
+process: closing a terminal still stops the shell.
+
+In the Prompt workspace sidebar:
+
+- Closed terminal panes appear under **Recently Closed**.
+- Clicking a closed row opens a transcript reader.
+- **Start Fresh Shell Here** creates a new Terminal block at the saved cwd.
+- The trash button moves the transcript to **Recently Deleted**.
+- **Recently Deleted** lives at the bottom of the Terminal Sessions section
+  and offers **Recover** or **Delete Permanently** for each transcript.
+
+Settings -> Shell -> Terminal History controls whether transcripts are saved,
+the storage limit, and pruning. The default limit is 1 GB; available choices
+are 250 MB, 500 MB, 1 GB, 2 GB, 5 GB, and 10 GB. When saved history exceeds the
+limit, Loom prunes old closed/deleted transcripts first and never kills an
+active terminal. **Prune Terminal History** clears saved transcripts; active
+terminal panes keep running, but their saved transcript files start over.
 
 #### Inline command cards (v2.1.0+)
 
@@ -917,8 +954,8 @@ to keep `LazyVStack` rendering fast.
 
 #### Privacy
 
-Loom only reads files under `~/Library/Application Support/Loom/shell/`.
-Nothing leaves your machine.
+Loom only reads files under `~/Library/Application Support/Loom Testing Edition/shell/`
+for command history in Testing Edition. Nothing leaves your machine.
 
 ---
 
@@ -1523,13 +1560,16 @@ leaves your machine.
 
 ## 11. Settings
 
-Loom's Settings window is a four-tab `TabView` (`SettingsScene.swift`),
+Loom's Settings window is a seven-tab `TabView` (`SettingsScene.swift`),
 sized 620x460:
 
 1. Appearance
 2. Tasks
 3. Providers
-4. Advanced
+4. Agent
+5. MCP
+6. Shell
+7. Advanced
 
 Open it via `Command ,` or the **Loom -> Settings...** menu item.
 
@@ -1597,7 +1637,20 @@ Test does not save the endpoint; you still have to click **Save**.
 Saving (or removing) an endpoint triggers `AgentRegistry.refresh(...)`. The
 Agent pane picker updates without an app restart.
 
-### 11.4. MCP
+### 11.4. Agent
+
+Controls local-agent runtime behavior and the optional terminal helper.
+
+| Field | Storage | Purpose |
+| ----- | ------- | ------- |
+| Max turns per run | UserDefaults `loom.agent.maxTurns` | Caps tool-call rounds for one agent run. Default 30 |
+| Allow run_bash tool | UserDefaults `loom.agent.allowBash` | Lets local agents execute shell commands in the workspace. Off by default |
+
+The tab also installs or uninstalls a `loom` helper at `~/.local/bin/loom`.
+That helper opens a `loom://run?...` URL so a terminal can launch an agent run
+inside the running app.
+
+### 11.5. MCP
 
 Manages Claude Code's MCP (Model Context Protocol) server registry. Loom
 doesn't speak MCP directly; every read and write goes through the
@@ -1636,23 +1689,31 @@ The tab surfaces an error if `claude` isn't on disk at any of the
 standard locations (`/usr/local/bin/claude`, `/opt/homebrew/bin/claude`,
 `~/.local/bin/claude`). Install Claude Code first.
 
-### 11.5. Shell
+### 11.6. Shell
 
 Toggles Loom's zsh shell integration on or off. The integration shim
-lives at `~/Library/Application Support/Loom/shell/.zshrc` and is
-sourced via `ZDOTDIR` when each terminal session spawns.
+lives at `~/Library/Application Support/Loom Testing Edition/shell/.zshrc` in
+Testing Edition and is sourced via `ZDOTDIR` when each terminal session
+spawns.
 
 | Field | Storage | Purpose |
 | ----- | ------- | ------- |
 | Capture commands from Loom terminals | UserDefaults `loom.shellIntegration` | Default true. When false, terminals launch with the user's normal `$ZDOTDIR` and no command logging happens. |
+| Save terminal transcripts locally | UserDefaults `loom.terminalHistory.enabled` | Default true. When false, Loom stops appending PTY output to transcript files |
+| Storage limit | UserDefaults `loom.terminalHistory.maxBytes` | Default 1 GB. Choices: 250 MB, 500 MB, 1 GB, 2 GB, 5 GB, 10 GB |
+| Always paste as plain text | UserDefaults `loom.terminal.pasteAsPlainText` | Sends clipboard text directly to the PTY instead of SwiftTerm bracketed paste |
 
-The tab also shows the on-disk paths to the shim and the history JSONL
-log, plus a **Reveal in Finder** button.
+The Terminal History section shows the currently saved byte count, a **Prune
+Terminal History** action, and **Reveal History Folder**. Pruning clears saved
+transcripts while active terminal panes keep running.
+
+The tab also shows the on-disk paths to the shim and the history JSONL log,
+plus a **Reveal in Finder** button.
 
 Toggling applies to terminals opened *after* the change. Currently
 running terminals keep whichever mode they started with.
 
-### 11.6. Advanced
+### 11.7. Advanced
 
 | Field | Storage | Purpose |
 | ----- | ------- | ------- |
@@ -1907,6 +1968,12 @@ Lightweight settings and lists where SwiftData would be overkill.
 | `loom.appearance` | String | Theme: `system`, `light`, `dark` |
 | `loom.tasks.staleHours` | Double | Live agent tasks stale window (hours) |
 | `loom.localEndpoints` | Data | JSON-encoded `[LocalEndpoint]` |
+| `loom.agent.maxTurns` | Int | Max tool-call rounds for one local-agent run |
+| `loom.agent.allowBash` | Bool | Enables the local-agent `run_bash` tool |
+| `loom.shellIntegration` | Bool | Enables the zsh command-history shim |
+| `loom.terminal.pasteAsPlainText` | Bool | Sends text paste directly to the PTY |
+| `loom.terminalHistory.enabled` | Bool | Enables local PTY transcript persistence |
+| `loom.terminalHistory.maxBytes` | Double | Terminal transcript storage cap in bytes |
 | `loom.workspaceSeed.v0_8` | Bool | Migration flag (v0.8 seed cleanup) |
 | `loom.workspaceSeed.v0_9` | Bool | Migration flag (v0.9 build -> review) |
 | `loom.workspaceSeed.v0_10` | Bool | Migration flag (v0.10 Code -> Prompt) |
@@ -1923,7 +1990,8 @@ Secrets only. Service: `com.chasesims.Loom`. See
 #### What is not persisted
 
 - Agent message history. In-memory only.
-- Terminal scrollback. SwiftTerm holds it; not persisted across launches.
+- Live terminal scrollback. SwiftTerm holds it in memory; Testing Edition saves
+  separate local transcript files when terminal history is enabled.
 - In-flight HTTP requests and subprocesses. All canceled on quit.
 
 ### 14.3. Swift Concurrency
@@ -2013,7 +2081,7 @@ command to `history.jsonl`.
 #### Layout on disk
 
 ```
-~/Library/Application Support/Loom/shell/
+~/Library/Application Support/Loom Testing Edition/shell/
 ├── .zshrc           # the shim, written on every Loom launch
 └── history.jsonl    # append-only command log, one record per line
 ```
@@ -2042,7 +2110,7 @@ command.
 #### Record format
 
 ```json
-{"started":1778302670,"ended":1778302675,"exit":0,"cwd":"/Users/me/code","command":"git pull","session":"7E3...","output":"/Users/me/Library/Application Support/Loom/shell/output/cap-1778302670-...-..out"}
+{"started":1778302670,"ended":1778302675,"exit":0,"cwd":"/Users/me/code","command":"git pull","session":"7E3...","output":"/Users/me/Library/Application Support/Loom Testing Edition/shell/output/cap-1778302670-...-..out"}
 ```
 
 - `started` / `ended`: Unix epoch seconds.
@@ -2084,9 +2152,9 @@ at the 500 most-recent.
 #### Privacy
 
 The shim writes only to the Loom-owned support directory. Nothing
-leaves the machine. Output is not captured (output capture without
-breaking interactive TUIs requires a `script`-style PTY tee, which is
-a future expansion).
+leaves the machine. Structured command records and captured command-output
+files are separate from the full terminal transcripts stored under Terminal
+History.
 
 #### Opting out
 
@@ -2095,6 +2163,41 @@ a future expansion).
 nothing is logged. Currently running terminals keep their existing
 mode. The shim file stays on disk; delete it manually if you want it
 removed entirely.
+
+### 14.5. Terminal Transcript History
+
+`TerminalTranscriptStore` owns full-session transcript persistence. Each
+`TerminalSession` registers itself when the terminal view appears, receives a
+transcript file URL, and attaches a lightweight `TerminalTranscriptRecorder` to
+`LoomTerminalView.dataReceived(slice:)`. The recorder appends PTY bytes on a
+serial background queue before SwiftTerm renders them.
+
+#### Layout on disk
+
+```
+~/Library/Application Support/Loom Testing Edition/Terminal History/
+├── sessions.json               # metadata: title, cwd, workspace, state, sizes
+└── transcripts/
+    └── <session-uuid>.ansi     # raw ANSI PTY transcript
+```
+
+Session states are `active`, `closed`, and `deleted`. App launch sweeps any
+stale `active` rows left behind by a previous quit into `closed`, so recoverable
+transcripts appear in **Recently Closed** after relaunch.
+
+#### Storage cap
+
+`loom.terminalHistory.maxBytes` defaults to 1 GB. The store refreshes usage on
+launch, every 60 seconds, and when Settings changes the cap. If saved history is
+over the limit, closed/deleted transcripts are pruned oldest first. Active
+terminal processes are not killed by pruning or cap enforcement.
+
+#### Transcript viewer
+
+The viewer reads at most the newest 2 MB of a transcript, strips ANSI escape
+sequences for readability, and shows a trim notice when the saved file is
+larger. **Start Fresh Shell Here** creates a new Terminal block at the saved
+cwd; it does not resurrect the old process.
 
 ---
 
@@ -2161,15 +2264,18 @@ Adjacent precautions:
 
 | Path | Purpose |
 | ---- | ------- |
-| `~/Library/Application Support/Loom/staging/Loom.app` | Newly downloaded build, waiting for Update click |
-| `~/Library/Application Support/Loom/staging/manifest.json` | `{ version, build, stagedAt }` for the staged build |
-| `~/Library/Application Support/Loom/staging/last-apply.log` | Helper-script log from the last apply |
-| `~/Library/Application Support/Loom/layout.json` | Per-kind block list (custom titles, pins, span flags, terminal cwds, multi-pane split axis) |
-| `~/Library/Application Support/Loom/shell/.zshrc` | Shell-integration shim sourced via `ZDOTDIR` |
-| `~/Library/Application Support/Loom/shell/history.jsonl` | Append-only command-log written by the shim |
-| `~/Library/Application Support/Loom/shell/output/cap-*.out` | Captured stdout+stderr for commands wrapped via `__loom_capture` |
-| `~/Library/Application Support/com.chasesims.Loom/default.store` | SwiftData store (workspaces, kanban, notes) |
-| `~/Library/Preferences/com.chasesims.Loom.plist` | UserDefaults |
+| `~/Library/Application Support/Loom Testing Edition/staging/Loom Testing Edition.app` | Newly downloaded Testing Edition build, waiting for Update click |
+| `~/Library/Application Support/Loom Testing Edition/staging/manifest.json` | `{ version, build, stagedAt }` for the staged build |
+| `~/Library/Application Support/Loom Testing Edition/staging/last-apply.log` | Helper-script log from the last apply |
+| `~/Library/Application Support/Loom Testing Edition/layout.json` | Per-kind block list (custom titles, pins, span flags, terminal cwds, multi-pane split axis) |
+| `~/Library/Application Support/Loom Testing Edition/shell/.zshrc` | Shell-integration shim sourced via `ZDOTDIR` |
+| `~/Library/Application Support/Loom Testing Edition/shell/history.jsonl` | Append-only command-log written by the shim |
+| `~/Library/Application Support/Loom Testing Edition/shell/output/cap-*.out` | Captured stdout+stderr for commands wrapped via `__loom_capture` |
+| `~/Library/Application Support/Loom Testing Edition/Terminal History/sessions.json` | Terminal transcript metadata and active/closed/deleted state |
+| `~/Library/Application Support/Loom Testing Edition/Terminal History/transcripts/<uuid>.ansi` | Raw ANSI PTY transcript for one terminal session |
+| `~/Library/Application Support/Loom Testing Edition/Clipboard Images/clipboard-*.png` | Raw clipboard or drag image data saved before inserting a Codex `--image` argument |
+| `~/Library/Application Support/com.chasesims.LoomTestingEdition/default.store` | SwiftData store (workspaces, kanban, notes) |
+| `~/Library/Preferences/com.chasesims.LoomTestingEdition.plist` | UserDefaults |
 
 #### Loom-read (external)
 
@@ -2253,7 +2359,12 @@ security dump-keychain | awk -F\" '/svce.*com.chasesims.Loom/{getline; print $4}
 | `loom.appearance` | String | Theme picker value |
 | `loom.tasks.staleHours` | Double | Live tasks stale window (hours) |
 | `loom.localEndpoints` | Data | JSON-encoded `[LocalEndpoint]` |
+| `loom.agent.maxTurns` | Int | Max tool-call rounds for one local-agent run |
+| `loom.agent.allowBash` | Bool | Enables the local-agent `run_bash` tool |
 | `loom.shellIntegration` | Bool | Settings → Shell toggle. Default true; false skips the `ZDOTDIR` override and command logging |
+| `loom.terminal.pasteAsPlainText` | Bool | Settings -> Shell paste toggle |
+| `loom.terminalHistory.enabled` | Bool | Settings -> Shell transcript persistence toggle |
+| `loom.terminalHistory.maxBytes` | Double | Settings -> Shell transcript storage cap in bytes. Default 1 GB |
 | `loom.workspaceSeed.v0_8` | Bool | One-time migration flag |
 | `loom.workspaceSeed.v0_9` | Bool | One-time migration flag |
 | `loom.workspaceSeed.v0_10` | Bool | One-time migration flag |
@@ -2484,8 +2595,7 @@ Items in active design, not promises. Order is rough priority.
 
 | Item | Why |
 | ---- | --- |
-| Command-block terminal history | Every shell command becomes its own scrollable, copyable card with exit code and timing. The terminal is Loom's product differentiator; structuring its output is the next step. |
-| Multi-pane terminal layouts | Split panes inside one Terminal pane (without spinning up multiple Terminal blocks). |
+| Transcript search and export | Full local terminal transcripts now exist; next step is fast search, filtering, and export for long-running sessions. |
 | MCP server bridging | Native MCP support so Loom can expose its own state (kanban cards, workspace folder, layout) as MCP tools to the agents it hosts. |
 | CodeEdit integration | Replace the plain `TextEditor` with [CodeEdit](https://github.com/CodeEditApp/CodeEdit)'s `NSTextView`-based editing surface. Syntax highlighting, save in-pane. |
 | Persistent agent message history | Today the chat log is in-memory only. Persist per-workspace so a quit-relaunch does not lose context. |

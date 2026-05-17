@@ -25,6 +25,12 @@ Lightweight settings + lists where SwiftData would be overkill.
 | `loom.appearance` | String (`AppearanceSetting` rawValue) | Theme — match-system / light / dark. |
 | `loom.tasks.staleHours` | Double | Live agent tasks stale window (in hours). |
 | `loom.localEndpoints` | Data (JSON `[LocalEndpoint]`) | User-configured local LLM endpoints. |
+| `loom.agent.maxTurns` | Int | Max tool-call rounds for one local-agent run. |
+| `loom.agent.allowBash` | Bool | Enables the local-agent `run_bash` tool. |
+| `loom.shellIntegration` | Bool | Enables the zsh command-history shim. |
+| `loom.terminal.pasteAsPlainText` | Bool | Sends terminal text paste directly to the PTY. |
+| `loom.terminalHistory.enabled` | Bool | Enables local terminal transcript persistence. |
+| `loom.terminalHistory.maxBytes` | Double | Terminal transcript storage cap in bytes. Defaults to 1 GB. |
 
 `@AppStorage` reads these in views; the `LocalEndpointStore` reads/writes the JSON blob directly.
 
@@ -42,7 +48,9 @@ See [Keychain keys](../reference/keychain-keys.md) for the full list and rotatio
 ## What we don't persist
 
 - **Agent message history** — in-memory only. Closing a workspace and reopening it within the same session preserves messages; quitting the app loses them.
-- **Terminal scrollback** — SwiftTerm holds it; not persisted across app launches.
+- **Live terminal scrollback** — SwiftTerm holds it in memory. Testing Edition
+  saves separate transcript files under Application Support when terminal
+  history is enabled.
 - **In-flight HTTP requests / subprocesses** — all canceled on quit.
 
 ## What about iCloud?

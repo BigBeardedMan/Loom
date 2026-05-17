@@ -287,6 +287,16 @@ final class WorkspaceLayout {
         persistCurrent()
     }
 
+    func addTerminalBlock(cwd: URL, title: String? = nil) {
+        var current = blocks
+        let block = WorkspaceBlock(kind: .terminal, cwd: cwd)
+        block.autoTerminalIndex = Self.nextTerminalIndex(in: current)
+        block.customTitle = title
+        current.append(block)
+        blocksByKind[currentKind] = current
+        persistCurrent()
+    }
+
     private static func nextTerminalIndex(in blocks: [WorkspaceBlock]) -> Int {
         let used = Set(blocks.compactMap { $0.kind == .terminal ? $0.autoTerminalIndex : nil })
         var n = 1

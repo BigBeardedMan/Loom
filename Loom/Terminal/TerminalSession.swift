@@ -19,6 +19,8 @@ final class TerminalSession: Identifiable {
     /// keeps its scrollback and child process across SwiftUI mount cycles.
     let terminalView: LoomTerminalView
     private let bridge: ProcessBridge
+    private var transcriptStore: TerminalTranscriptStore?
+    private var transcriptRecorder: TerminalTranscriptRecorder?
     private var hasStarted = false
 
     init(cwd: URL = FileManager.default.homeDirectoryForCurrentUser) {
@@ -79,7 +81,35 @@ final class TerminalSession: Identifiable {
     }
 
     func cleanup() {
+        transcriptStore?.close(sessionID: id)
+        transcriptRecorder?.close()
+        transcriptRecorder = nil
+        terminalView.transcriptRecorder = nil
         terminalView.terminate()
+    }
+
+    func attachTranscriptStore(
+        _ store: TerminalTranscriptStore,
+        workspaceID: UUID?,
+        workspaceName: String?,
+        title: String
+    ) {
+        guard TerminalTranscriptStore.persistenceEnabled else { return }
+        if transcriptStore === store, transcriptRecorder != nil {
+            store.update(sessionID: id, cwd: cwd, title: title)
+            return
+        }
+        transcriptStore = store
+        let url = store.register(
+            sessionID: id,
+            workspaceID: workspaceID,
+            workspaceName: workspaceName,
+            cwd: cwd,
+            title: title
+        )
+        let recorder = TerminalTranscriptRecorder(url: url, sessionID: id)
+        transcriptRecorder = recorder
+        terminalView.transcriptRecorder = recorder
     }
 
     var tabLabel: String {
@@ -119,9 +149,8 @@ final class TerminalSession: Identifiable {
         return Self.knownCLIAgents.contains(cmd)
     }
 
-    /// CLI agents whose foreground state we recognize. Drives both the
-    /// "active session" badge above and the click-to-position cursor logic
-    /// in `LoomTerminalView` below.
+    /// CLI agents whose foreground state we recognize for the active-session
+    /// badge. Click-to-edit is narrower and currently Claude-only.
     static let knownCLIAgents: Set<String> = ["claude", "codex", "gemini", "lmstudio"]
 
     fileprivate static func processName(pid: pid_t) -> String? {
@@ -150,6 +179,12 @@ final class TerminalSession: Identifiable {
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else { return }
         let url = URL(fileURLWithPath: path).standardized
         if url != cwd { cwd = url }
+        transcriptStore?.update(sessionID: id, cwd: url)
+    }
+
+    fileprivate func updateReportedTitle(_ title: String) {
+        lastReportedTitle = title
+        transcriptStore?.update(sessionID: id, title: title)
     }
 
     private func configureAppearance() {
@@ -238,6 +273,8 @@ final class TerminalSession: Identifiable {
 /// shell integration. Implemented as a gesture recognizer (not a mouseDown
 /// override) because SwiftTerm's `mouseDown` isn't `open`.
 final class LoomTerminalView: LocalProcessTerminalView {
+    var transcriptRecorder: TerminalTranscriptRecorder?
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         installClickToPosition()
@@ -252,6 +289,11 @@ final class LoomTerminalView: LocalProcessTerminalView {
     override func setFrameSize(_ newSize: NSSize) {
         guard newSize.width >= 80, newSize.height >= 40 else { return }
         super.setFrameSize(newSize)
+    }
+
+    override func dataReceived(slice: ArraySlice<UInt8>) {
+        transcriptRecorder?.append(slice)
+        super.dataReceived(slice: slice)
     }
 
     // MARK: - Pasteboard
@@ -557,12 +599,13 @@ final class LoomTerminalView: LocalProcessTerminalView {
         let clampedCol = max(0, min(clickedCol, term.cols - 1))
         let colDelta = clampedCol - cursorCol
 
-        // Same-row clicks stay safe for any prompt (shell, TUI). Cross-row
-        // clicks only fire when a CLI agent owns the PTY — sending up/down
-        // arrows into zsh would walk command history, not move the cursor.
+        // Click-to-edit is scoped to Claude's interactive prompt. Sending
+        // arrows into zsh, Codex, Gemini, or an arbitrary TUI can trigger
+        // history navigation or tool-specific shortcuts instead of moving
+        // text insertion.
+        guard isClaudeForeground else { return }
         if rowDelta != 0 {
-            guard abs(rowDelta) <= Self.verticalClickRadius,
-                  isInteractiveTUIForeground else { return }
+            guard abs(rowDelta) <= Self.verticalClickRadius else { return }
         }
         guard rowDelta != 0 || colDelta != 0 else { return }
 
@@ -580,16 +623,16 @@ final class LoomTerminalView: LocalProcessTerminalView {
         send(txt: sequence)
     }
 
-    /// True when a known CLI agent (claude/codex/gemini) is the foreground
-    /// process — i.e. up/down arrows are safe to send as visual cursor moves
-    /// rather than being interpreted as shell history navigation.
-    private var isInteractiveTUIForeground: Bool {
+    /// True when Claude is the foreground process. The text-click editing
+    /// affordance is intentionally Claude-only so other shells and TUIs keep
+    /// their default click behavior.
+    private var isClaudeForeground: Bool {
         let fd = process.childfd
         guard fd >= 0 else { return false }
         let pgid = tcgetpgrp(fd)
         guard pgid > 0 else { return false }
         guard let name = TerminalSession.processName(pid: pgid)?.lowercased() else { return false }
-        return TerminalSession.knownCLIAgents.contains(name)
+        return name == "claude"
     }
 
     /// Mirrors SwiftTerm's internal `computeFontDimensions`: cell width is the
@@ -626,7 +669,7 @@ private final class ProcessBridge: NSObject, LocalProcessTerminalViewDelegate {
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
         let session = self.session
         Task { @MainActor in
-            session?.lastReportedTitle = title
+            session?.updateReportedTitle(title)
         }
     }
 
