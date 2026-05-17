@@ -24,7 +24,6 @@
 set -euo pipefail
 
 PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
-DERIVED_BASE="${HOME}/Library/Developer/Xcode/DerivedData"
 RELEASE_DIR="${PROJECT_ROOT}/build/release"
 REPO="BigBeardedMan/Loom"
 OPENSSL_BIN="${LOOM_OPENSSL_BIN:-}"
@@ -34,6 +33,41 @@ SIGNING_KEYCHAIN_PRIVATE_ACCOUNT="testing-private-pem-base64"
 SIGNING_KEYCHAIN_PUBLIC_ACCOUNT="testing-public-base64"
 SIGNING_KEY_FALLBACK="${HOME}/.loom/release-signing/loom-testing-ed25519.pem"
 SIGNING_PUBLIC_FALLBACK="${HOME}/.loom/release-signing/loom-testing-ed25519-public-base64.txt"
+DERIVED_DATA=$(mktemp -d -t loom-testing-derived)
+STAGE=""
+
+cleanup_release_tmp() {
+  if [[ -n "${STAGE:-}" && -d "$STAGE" ]]; then
+    rm -rf "$STAGE"
+  fi
+  if [[ -n "${DERIVED_DATA:-}" && -d "$DERIVED_DATA" ]]; then
+    rm -rf "$DERIVED_DATA"
+  fi
+}
+trap cleanup_release_tmp EXIT INT TERM
+
+validate_testing_bundle_version() {
+  local app_path="$1"
+  local expected_version="$2"
+  local info_plist="${app_path}/Contents/Info.plist"
+  local actual_version
+  local actual_build
+
+  if [[ ! -d "$app_path" ]]; then
+    echo "error: built Release/Loom Testing Edition.app not found at $app_path" >&2
+    exit 1
+  fi
+
+  actual_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info_plist" 2>/dev/null || true)
+  actual_build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$info_plist" 2>/dev/null || true)
+
+  if [[ "$actual_version" != "$expected_version" ]]; then
+    echo "error: bundle version '$actual_version' does not match release tag version '$expected_version'" >&2
+    exit 1
+  fi
+
+  echo "==> validated bundle version ${actual_version} (${actual_build:-unknown build})"
+}
 
 if [[ -z "$OPENSSL_BIN" ]]; then
   if [[ -x /opt/homebrew/opt/openssl@3/bin/openssl ]]; then
@@ -166,16 +200,14 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
     -project LoomTestingEdition.xcodeproj \
     -scheme LoomTestingEdition \
     -configuration Release \
+    -derivedDataPath "$DERIVED_DATA" \
     -quiet \
     "MARKETING_VERSION=${VERSION}" \
     "LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64=${LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64}" \
     build
 
-BUILT=$(find "$DERIVED_BASE" -maxdepth 6 -type d -name "Loom Testing Edition.app" -path "*/Build/Products/Release/*" -print -quit)
-if [[ -z "$BUILT" ]]; then
-  echo "error: built Release/Loom Testing Edition.app not found under $DERIVED_BASE" >&2
-  exit 1
-fi
+BUILT="${DERIVED_DATA}/Build/Products/Release/Loom Testing Edition.app"
+validate_testing_bundle_version "$BUILT" "$VERSION"
 echo "==> built: $BUILT"
 
 # --- Package .dmg -----------------------------------------------------------
@@ -189,6 +221,7 @@ DMG_PATH="${RELEASE_DIR}/${DMG_NAME}"
 STAGE=$(mktemp -d -t loom-testing-dmg)
 cp -R "$BUILT" "$STAGE/Loom Testing Edition.app"
 /usr/bin/xattr -cr "$STAGE/Loom Testing Edition.app"
+validate_testing_bundle_version "$STAGE/Loom Testing Edition.app" "$VERSION"
 ln -s /Applications "$STAGE/Applications"
 
 echo "==> hdiutil create $DMG_NAME"

@@ -1890,9 +1890,12 @@ bin/release-testing.sh
    (via `gh api user`), the working tree is clean, the local tag does not
    already exist, and whether the GitHub pre-release already exists.
 3. Regenerate the Xcode project: `xcodegen generate`.
-4. Build Release: `xcodebuild ... -configuration Release build`.
-5. Locate the built `Loom Testing Edition.app` under DerivedData.
-6. Stage `.app` and an `/Applications` alias in a temp dir; strip xattrs.
+4. Build Release into a fresh temporary Xcode derived-data folder:
+   `xcodebuild ... -configuration Release -derivedDataPath <temp> build`.
+5. Validate the built `Loom Testing Edition.app`: its
+   `CFBundleShortVersionString` must match `MARKETING_VERSION`.
+6. Stage `.app` and an `/Applications` alias in a temp dir; strip xattrs and
+   validate the copied bundle version again before packaging.
 7. Package the DMG via `hdiutil create -format UDZO`, named
    `LoomTestingEdition-<version>.dmg`.
 8. Compute SHA-256 of the DMG; write a `.sha256` sidecar file.
@@ -1912,9 +1915,12 @@ published.
 
 - "tag testing-X.Y.Z already exists locally": you forgot to bump
   `MARKETING_VERSION`. Bump it, commit, retry.
-- "built Release/Loom Testing Edition.app not found under DerivedData":
+- "built Release/Loom Testing Edition.app not found at ...":
   `xcodebuild` failed silently. Re-run with `-quiet` removed from the script
   to see the actual compile errors.
+- "bundle version ... does not match release tag version ...": the package is
+  stale or the version override did not make it into the app bundle. Do not
+  upload the DMG; fix the build/version issue and rerun the script.
 - If Windows CI created the pre-release first, `release-testing.sh` refreshes
   the release notes and appends the Mac DMG assets.
 - Local codesign fails: see [Building from Source](#18-building-from-source)

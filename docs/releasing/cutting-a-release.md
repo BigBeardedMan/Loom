@@ -25,9 +25,9 @@ What the script does:
 1. **Reads version** — `MARKETING_VERSION` from `project.yml`.
 2. **Pre-flight** — verifies the branch is `loom-testing-edition`, `gh` is authed (via `gh api user`, not `gh auth status` which trips on stale background accounts), the working tree is clean, the local tag doesn't already exist, and whether the GitHub pre-release already exists.
 3. **Regenerates the Xcode project** — `xcodegen generate`.
-4. **Builds Release** — `xcodebuild -project LoomTestingEdition.xcodeproj -scheme LoomTestingEdition -configuration Release build`.
-5. **Locates the built `.app`** — searches `~/Library/Developer/Xcode/DerivedData/.../Build/Products/Release/Loom Testing Edition.app`.
-6. **Packages the DMG** — copies `Loom Testing Edition.app` and an `/Applications` alias into a staging temp dir, runs `hdiutil create -format UDZO`, names the file `LoomTestingEdition-<version>.dmg`.
+4. **Builds Release** — `xcodebuild -project LoomTestingEdition.xcodeproj -scheme LoomTestingEdition -configuration Release -derivedDataPath <fresh temp dir> build`.
+5. **Validates the built `.app`** — reads `CFBundleShortVersionString` from the fresh build output and refuses to continue unless it matches `MARKETING_VERSION`.
+6. **Packages the DMG** — copies the validated `Loom Testing Edition.app` and an `/Applications` alias into a staging temp dir, validates the copied bundle again, runs `hdiutil create -format UDZO`, and names the file `LoomTestingEdition-<version>.dmg`.
 7. **Tags and pushes** — `git tag -a testing-X.Y.Z -m "Loom Testing Edition <version>"`, `git push origin testing-X.Y.Z`.
 8. **Creates or updates the GitHub pre-release** — writes notes from `docs/releasing/current-release-notes.md`, then attaches the DMG, checksum, and signature.
 
@@ -43,7 +43,8 @@ Testing Edition update pill after the pre-release is published.
 ## What can go wrong
 
 - **`error: tag testing-X.Y.Z already exists locally`** — you forgot to bump `MARKETING_VERSION`. Bump it, commit, retry.
-- **`error: built Release/Loom Testing Edition.app not found under DerivedData`** — `xcodebuild` failed silently. Re-run with `-quiet` removed from the script to see the actual compile errors.
+- **`error: built Release/Loom Testing Edition.app not found at ...`** — `xcodebuild` failed silently. Re-run with `-quiet` removed from the script to see the actual compile errors.
+- **`error: bundle version ... does not match release tag version ...`** — the package is stale or the version override did not make it into the app bundle. Do not upload the DMG; fix the build/version issue and rerun the script.
 - **Windows CI created the release first** — the script refreshes the release notes and appends the Mac DMG assets.
 
 ## Why ad-hoc signing?
