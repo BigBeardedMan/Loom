@@ -40,6 +40,7 @@ jobs:
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
 
       - name: Rust advisory audit
+        working-directory: windows-tauri/src-tauri
         run: |
           cargo install cargo-audit --locked
           cargo audit --deny warnings
