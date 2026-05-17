@@ -2311,6 +2311,7 @@
 </tbody>
 </table>
 <p>Settings → Shell has an <strong>Always paste as plain text</strong> toggle that makes ⌘V skip the bracketed-paste wrapper too, so you don't have to reach for ⇧⌘V every time.</p>
+<p>Image-only clipboard pastes in the Terminal pane become editable Codex image arguments (<code>--image '&lt;path&gt;'</code>) instead of binary data. Finder-copied image files keep their original path; direct clipboard images are saved under Application Support. Text paste still wins when rich clipboard content includes both text and an image.</p>
 <p><strong>Right-click anywhere in a terminal pane</strong> to pop the same items as a context menu — Copy, Paste, Paste as Plain Text, Select All. Validation stays consistent with the menu bar (Copy disabled when no selection, Paste* disabled when the clipboard is empty). Text fields and the Editor / Notes panes inherit their context menu from AppKit, so the same right-click works there for free.</p>
 <h2 id="adding-panes">Adding panes<a class="headerlink" href="#adding-panes" title="Permanent link">&para;</a></h2>
 <p>The number maps to the panel order for the current workspace kind. In a <strong>Prompt</strong> workspace the order is Terminal, Editor, Tasks, Agent — so ⌘⇧1 adds a terminal, ⌘⇧4 adds an agent. In an <strong>Ideas</strong> workspace ⌘⇧1 adds Notes, ⌘⇧2 adds Agent.</p>

@@ -1225,10 +1225,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#copy-paste" class="md-nav__link">
+  <a href="#copy-paste-image-drop" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Copy / paste
+        Copy / paste / image drop
       
     </span>
   </a>
@@ -2239,10 +2239,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#copy-paste" class="md-nav__link">
+  <a href="#copy-paste-image-drop" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Copy / paste
+        Copy / paste / image drop
       
     </span>
   </a>
@@ -2326,8 +2326,14 @@
 <p>Layouts persist: the next time you open the workspace, the panes return with the same axis, count, and per-pane cwd. PTYs themselves don't survive relaunch — each restored pane spawns a fresh shell in its saved directory.</p>
 <h2 id="working-directory">Working directory<a class="headerlink" href="#working-directory" title="Permanent link">&para;</a></h2>
 <p>The terminal launches in the workspace's folder URL. Subsequent <code>cd</code>s persist within the session. Restart the pane (× then re-add) to reset to the workspace folder.</p>
-<h2 id="copy-paste">Copy / paste<a class="headerlink" href="#copy-paste" title="Permanent link">&para;</a></h2>
+<h2 id="copy-paste-image-drop">Copy / paste / image drop<a class="headerlink" href="#copy-paste-image-drop" title="Permanent link">&para;</a></h2>
 <p>Standard macOS shortcuts: ⌘C copies the selection, ⌘V pastes. Selection works with mouse drag. There's no "select rectangle" mode today.</p>
+<p>When the focused Terminal pane receives an image-only pasteboard, Loom inserts an editable Codex image argument instead of sending image bytes to the PTY:</p>
+<div class="language-sh highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>--image<span class="w"> </span><span class="s1">&#39;&lt;path&gt;&#39;</span>
+</span></code></pre></div>
+<p>Loom also inserts a trailing space after the argument. Copied image files from Finder reuse the original file path. Direct clipboard images, such as screenshots, are encoded as PNG files under <code>~/Library/Application Support/Loom/Clipboard Images/</code>. Loom never presses Return for this path; the command stays editable so you can review it before running it.</p>
+<p>If the clipboard contains both text and image data, text paste wins. That keeps rich copies from browsers and documents from unexpectedly turning into image arguments. ⇧⌘V keeps its existing plain-text behavior for text paste, and uses the same image argument behavior only when no text is available.</p>
+<p>Dragging an image file or raw image data onto a Terminal pane uses the same command shape. Loom inserts <code>--image '&lt;path&gt;'</code> at the cursor, keeps Finder-dragged image file paths intact, saves raw image drags as PNG files in the same Clipboard Images folder, and never presses Return.</p>
 <h2 id="scrollback">Scrollback<a class="headerlink" href="#scrollback" title="Permanent link">&para;</a></h2>
 <p>SwiftTerm keeps the default 1000-line scrollback. Scroll with two-finger drag or the keyboard's Page Up / Page Down (depending on terminal app's <code>terminfo</code>).</p>
 <h2 id="the-terminal-as-the-differentiator">The terminal as the differentiator<a class="headerlink" href="#the-terminal-as-the-differentiator" title="Permanent link">&para;</a></h2>

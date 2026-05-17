@@ -722,10 +722,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#copy-paste" class="md-nav__link">
+  <a href="#copy-paste-image-drop" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Copy / paste
+        Copy / paste / image drop
       
     </span>
   </a>
@@ -4669,10 +4669,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#copy-paste" class="md-nav__link">
+  <a href="#copy-paste-image-drop" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Copy / paste
+        Copy / paste / image drop
       
     </span>
   </a>
@@ -7016,9 +7016,23 @@ command name. Three names are currently recognized: <code>claude</code>, <code>c
 <li>The terminal's click-to-position behavior unlocks vertical movement.</li>
 </ul>
 <p>When the agent process exits, detection drops on the next 2 second poll.</p>
-<h4 id="copy-paste">Copy / paste<a class="headerlink" href="#copy-paste" title="Permanent link">&para;</a></h4>
+<h4 id="copy-paste-image-drop">Copy / paste / image drop<a class="headerlink" href="#copy-paste-image-drop" title="Permanent link">&para;</a></h4>
 <p>Standard macOS shortcuts: <code>Command C</code> copies the selection, <code>Command V</code>
 pastes. Selection works with mouse drag.</p>
+<p>When the Terminal pane receives an image-only pasteboard, Loom inserts an
+editable Codex argument instead of sending image bytes into the PTY:
+<code>--image '&lt;path&gt;'</code>. Finder-copied image files reuse their existing path.
+Direct clipboard images, such as screenshots, are saved as PNG files under
+<code>~/Library/Application Support/Loom/Clipboard Images/</code>. Loom does not press
+Return; you review or edit the command and run it yourself.</p>
+<p>If the clipboard contains both text and image data, text paste wins. That
+keeps rich browser and document copies from unexpectedly becoming image
+arguments. <code>Command Shift V</code> keeps its plain-text behavior for text paste and
+uses the same image argument behavior only when no text is available.</p>
+<p>Dragging an image file or raw image data onto a Terminal pane uses the same
+argument shape: Loom inserts <code>--image '&lt;path&gt;'</code> at the cursor and does not
+submit the command. Finder-dragged image files keep their original path; raw
+dragged images are saved as PNG files in the same Clipboard Images folder.</p>
 <h4 id="scrollback">Scrollback<a class="headerlink" href="#scrollback" title="Permanent link">&para;</a></h4>
 <p>SwiftTerm keeps the default 1000-line scrollback. Scroll with two-finger
 drag or your terminal's Page Up / Page Down (depending on <code>terminfo</code>).</p>
