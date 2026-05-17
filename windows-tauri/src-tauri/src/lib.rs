@@ -4,6 +4,7 @@ mod db;
 mod db_commands;
 mod fs_walk;
 mod keychain;
+mod security;
 mod shell_integration;
 mod state;
 mod terminal;
@@ -14,7 +15,7 @@ use state::AppState;
 use std::sync::Arc;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tracing_subscriber::EnvFilter;
 
 fn install_tray(app: &AppHandle) -> tauri::Result<()> {
@@ -106,10 +107,59 @@ fn window_open(app: AppHandle, workspace_id: Option<String>) -> tauri::Result<()
     Ok(())
 }
 
+#[tauri::command]
+fn shell_open(state: State<'_, AppState>, target: String) -> Result<(), String> {
+    let resolved = if target == "app-data" {
+        state.data_dir.clone()
+    } else if target.starts_with("https://") {
+        let url = url::Url::parse(&target).map_err(|e| e.to_string())?;
+        let host = url.host_str().unwrap_or_default();
+        let allowed = url.scheme() == "https"
+            && host.eq_ignore_ascii_case("github.com")
+            && (url.path() == "/BigBeardedMan/Loom"
+                || url.path().starts_with("/BigBeardedMan/Loom/"));
+        if !allowed {
+            return Err(format!("external URL is not allowed: {target}"));
+        }
+        return open_target(&target);
+    } else {
+        security::validate_app_data_path(&state, &target)?
+    };
+    open_target(&resolved.to_string_lossy())
+}
+
+fn open_target(target: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("explorer.exe");
+        c.arg(target);
+        c
+    };
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("open");
+        c.arg(target);
+        c
+    };
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let mut cmd = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(target);
+        c
+    };
+
+    cmd.spawn()
+        .map(|_| ())
+        .map_err(|e| format!("open target: {e}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,loom_lib=debug")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info,loom_lib=debug")),
+        )
         .with_target(false)
         .try_init();
     crash::install_hook();
@@ -127,10 +177,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            let data_dir = app
-                .path()
-                .app_data_dir()
-                .context("resolve app data dir")?;
+            let data_dir = app.path().app_data_dir().context("resolve app data dir")?;
             std::fs::create_dir_all(&data_dir).context("create data dir")?;
 
             let logs_dir = data_dir.join("logs");
@@ -154,6 +201,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_version,
             window_open,
+            shell_open,
             db_commands::workspace_list,
             db_commands::workspace_create,
             db_commands::workspace_update,

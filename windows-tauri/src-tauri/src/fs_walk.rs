@@ -1,3 +1,5 @@
+use crate::security;
+use crate::state::AppState;
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -46,16 +48,25 @@ pub struct FsNode {
 
 #[tauri::command]
 pub async fn fs_walk_tree(
+    state: State<'_, AppState>,
     root: String,
     max_depth: Option<usize>,
     show_hidden: Option<bool>,
 ) -> Result<FsNode, String> {
     let depth = max_depth.unwrap_or(8);
     let hidden = show_hidden.unwrap_or(false);
-    walk(Path::new(&root), depth, hidden, 0).map_err(|e| e.to_string())
+    let root = security::validate_existing_path(&state, &root)?;
+    let roots = security::allowed_roots(&state);
+    walk(&root, &roots, depth, hidden, 0).map_err(|e| e.to_string())
 }
 
-fn walk(path: &Path, max_depth: usize, show_hidden: bool, depth: usize) -> Result<FsNode> {
+fn walk(
+    path: &Path,
+    allowed_roots: &[PathBuf],
+    max_depth: usize,
+    show_hidden: bool,
+    depth: usize,
+) -> Result<FsNode> {
     let meta = std::fs::metadata(path).with_context(|| format!("stat {path:?}"))?;
     let name = path
         .file_name()
@@ -96,7 +107,19 @@ fn walk(path: &Path, max_depth: usize, show_hidden: bool, depth: usize) -> Resul
         if SKIP_NAMES.iter().any(|s| *s == name) {
             continue;
         }
-        if let Ok(child) = walk(&entry_path, max_depth, show_hidden, depth + 1) {
+        if security::is_path_sensitive(&entry_path) {
+            continue;
+        }
+        let Ok(canonical) = std::fs::canonicalize(&entry_path) else {
+            continue;
+        };
+        if !allowed_roots
+            .iter()
+            .any(|root| security::path_is_within(&canonical, root))
+        {
+            continue;
+        }
+        if let Ok(child) = walk(&canonical, allowed_roots, max_depth, show_hidden, depth + 1) {
             children.push(child);
         }
     }
@@ -110,24 +133,35 @@ fn walk(path: &Path, max_depth: usize, show_hidden: bool, depth: usize) -> Resul
 }
 
 #[tauri::command]
-pub async fn fs_read_file(path: String) -> Result<String, String> {
-    std::fs::read_to_string(&path).map_err(|e| e.to_string())
+pub async fn fs_read_file(state: State<'_, AppState>, path: String) -> Result<String, String> {
+    let path = security::validate_existing_path(&state, &path)?;
+    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    Ok(security::redact_secrets(&text))
 }
 
 #[tauri::command]
-pub async fn fs_write_file(path: String, contents: String) -> Result<(), String> {
-    if let Some(parent) = Path::new(&path).parent() {
-        let _ = std::fs::create_dir_all(parent);
+pub async fn fs_write_file(
+    state: State<'_, AppState>,
+    path: String,
+    contents: String,
+) -> Result<(), String> {
+    let path = security::validate_write_path(&state, &path)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     std::fs::write(&path, contents).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn fs_pick_workspace_seed_files(folder: String) -> Result<Vec<String>, String> {
+pub async fn fs_pick_workspace_seed_files(
+    state: State<'_, AppState>,
+    folder: String,
+) -> Result<Vec<String>, String> {
+    let folder = security::validate_existing_path(&state, &folder)?;
     let candidates = ["CLAUDE.md", "AGENTS.md", "GUIDE.md", "README.md"];
     let mut found = Vec::new();
     for name in candidates {
-        let p = Path::new(&folder).join(name);
+        let p = folder.join(name);
         if p.exists() {
             found.push(p.to_string_lossy().into_owned());
         }
@@ -162,9 +196,11 @@ pub struct FsChangeEvent {
 #[tauri::command]
 pub async fn fs_watch_start(
     app: AppHandle,
+    state: State<'_, AppState>,
     registry: State<'_, Arc<WatcherRegistry>>,
     root: String,
 ) -> Result<String, String> {
+    let root = security::validate_existing_path(&state, &root)?;
     let id = Uuid::new_v4().to_string();
     let app_clone = app.clone();
     let id_clone = id.clone();
@@ -179,10 +215,7 @@ pub async fn fs_watch_start(
                 if paths.is_empty() {
                     return;
                 }
-                let _ = app_clone.emit(
-                    &format!("fs://{id_clone}/change"),
-                    FsChangeEvent { paths },
-                );
+                let _ = app_clone.emit(&format!("fs://{id_clone}/change"), FsChangeEvent { paths });
             }
         },
     )
@@ -190,7 +223,7 @@ pub async fn fs_watch_start(
 
     let mut deb = debouncer;
     deb.watcher()
-        .watch(Path::new(&root), notify::RecursiveMode::Recursive)
+        .watch(&root, notify::RecursiveMode::Recursive)
         .map_err(|e| e.to_string())?;
     registry.inner.lock().insert(id.clone(), deb);
     Ok(id)

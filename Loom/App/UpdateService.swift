@@ -84,6 +84,10 @@ final class UpdateService {
     /// this location.
     static let installedBundleURL = URL(fileURLWithPath: "/Applications/Loom.app")
 
+    private static let expectedBundleID = "com.chasesims.Loom"
+    private static let expectedBundleName = "Loom"
+    private static let expectedExecutableName = "Loom"
+
     func start() {
         guard pollTimer == nil else { return }
         try? FileManager.default.createDirectory(at: Self.appSupportRoot, withIntermediateDirectories: true)
@@ -223,6 +227,12 @@ final class UpdateService {
     /// argv, which can't be tampered with after launch.
     func applyAndRelaunch() {
         guard let staged = available, !isApplying else { return }
+        guard staged.bundlePath == Self.stagedBundleURL.path,
+              Self.validatedBundleInfo(at: Self.stagedBundleURL) != nil else {
+            lastRemoteError = "Staged update failed bundle validation."
+            available = nil
+            return
+        }
         isApplying = true
 
         let pid = ProcessInfo.processInfo.processIdentifier
@@ -276,6 +286,12 @@ final class UpdateService {
         guard let payload = try? JSONDecoder().decode(ManifestPayload.self, from: data) else { return nil }
         let bundleURL = stagedBundleURL
         guard FileManager.default.fileExists(atPath: bundleURL.path) else { return nil }
+        guard let info = validatedBundleInfo(at: bundleURL),
+              info.version == payload.version,
+              info.build == payload.build else {
+            updateLog.error("Rejecting staged update with invalid bundle metadata")
+            return nil
+        }
         let date = ISO8601DateFormatter().date(from: payload.stagedAt) ?? .now
         return StagedUpdate(
             version: payload.version,
@@ -283,6 +299,34 @@ final class UpdateService {
             stagedAt: date,
             bundlePath: bundleURL.path
         )
+    }
+
+    static func validatedBundleInfo(at bundleURL: URL) -> (version: String, build: String)? {
+        guard bundleURL.standardizedFileURL == stagedBundleURL.standardizedFileURL,
+              bundleURL.lastPathComponent == "\(expectedBundleName).app" else {
+            return nil
+        }
+        let infoURL = bundleURL.appendingPathComponent("Contents/Info.plist")
+        guard let data = try? Data(contentsOf: infoURL),
+              let info = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else {
+            return nil
+        }
+        guard info["CFBundleIdentifier"] as? String == expectedBundleID,
+              info["CFBundleName"] as? String == expectedBundleName,
+              info["CFBundleDisplayName"] as? String == expectedBundleName,
+              info["CFBundleExecutable"] as? String == expectedExecutableName else {
+            return nil
+        }
+        let executableURL = bundleURL
+            .appendingPathComponent("Contents/MacOS", isDirectory: true)
+            .appendingPathComponent(expectedExecutableName)
+        guard FileManager.default.isExecutableFile(atPath: executableURL.path) else {
+            return nil
+        }
+        let version = info["CFBundleShortVersionString"] as? String ?? ""
+        let build = info["CFBundleVersion"] as? String ?? ""
+        guard !version.isEmpty, !build.isEmpty else { return nil }
+        return (version, build)
     }
 
     // MARK: - Running version

@@ -1,0 +1,64 @@
+name: Security Checks
+
+on:
+  push:
+    branches: [main, loom-testing-edition]
+  pull_request:
+    branches: [main, loom-testing-edition]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  supply-chain:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: windows-tauri
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: 11
+          run_install: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          cache-dependency-path: windows-tauri/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Production dependency audit
+        run: pnpm audit --prod
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+
+      - name: Rust advisory audit
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit --deny warnings
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Scan for committed secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -n -I -E \
+            -e '-----BEGIN (RSA |DSA |EC |OPENSSH |PGP )?PRIVATE KEY-----' \
+            -e 'AKIA[0-9A-Z]{16}' \
+            -e 'gh[pousr]_[A-Za-z0-9_]{20,}' \
+            -e 'sk-[A-Za-z0-9]{32,}' \
+            -- ':!docs/**' ':!GUIDE.md' ':!windows-tauri/pnpm-lock.yaml' ':!.github/workflows/security.yml'; then
+            echo "secret-like material found" >&2
+            exit 1
+          fi

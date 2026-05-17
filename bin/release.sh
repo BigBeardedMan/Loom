@@ -11,6 +11,8 @@
 #   - xcodegen, xcodebuild        (dev tools)
 #   - hdiutil                     (built-in, used to build the .dmg)
 #   - gh CLI authenticated        (gh auth login)
+#   - OpenSSL 3                   (used to sign release metadata)
+#   - LOOM_RELEASE_SIGNING_KEY_PEM and LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64
 #   - clean working tree          (we tag the current HEAD)
 
 set -euo pipefail
@@ -21,6 +23,17 @@ PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 DERIVED_BASE="${HOME}/Library/Developer/Xcode/DerivedData"
 RELEASE_DIR="${PROJECT_ROOT}/build/release"
 REPO="BigBeardedMan/Loom"
+OPENSSL_BIN="${LOOM_OPENSSL_BIN:-}"
+
+if [[ -z "$OPENSSL_BIN" ]]; then
+  if [[ -x /opt/homebrew/opt/openssl@3/bin/openssl ]]; then
+    OPENSSL_BIN=/opt/homebrew/opt/openssl@3/bin/openssl
+  elif [[ -x /usr/local/opt/openssl@3/bin/openssl ]]; then
+    OPENSSL_BIN=/usr/local/opt/openssl@3/bin/openssl
+  else
+    OPENSSL_BIN=$(command -v openssl || true)
+  fi
+fi
 
 cd "$PROJECT_ROOT"
 
@@ -32,6 +45,11 @@ TAG="v${VERSION}"
 
 if [[ -z "$VERSION" || -z "$BUILD" ]]; then
   echo "error: could not parse version/build from project.yml" >&2
+  exit 1
+fi
+
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "error: MARKETING_VERSION '$VERSION' is not MAJOR.MINOR.PATCH semver" >&2
   exit 1
 fi
 
@@ -49,6 +67,31 @@ fi
 # exercises only the active token.
 if ! gh api user >/dev/null 2>&1; then
   echo "error: gh not authenticated for the active account. run: gh auth login -h github.com" >&2
+  exit 1
+fi
+
+if [[ -z "$OPENSSL_BIN" || ! -x "$OPENSSL_BIN" ]]; then
+  echo "error: OpenSSL 3 is required to sign release metadata. Install with: brew install openssl@3" >&2
+  exit 1
+fi
+
+if ! "$OPENSSL_BIN" list -public-key-algorithms 2>/dev/null | /usr/bin/grep -qi "ED25519"; then
+  echo "error: $OPENSSL_BIN does not support Ed25519. Set LOOM_OPENSSL_BIN to an OpenSSL 3 binary." >&2
+  exit 1
+fi
+
+if [[ -z "${LOOM_RELEASE_SIGNING_KEY_PEM:-}" ]]; then
+  echo "error: LOOM_RELEASE_SIGNING_KEY_PEM is required to sign the .sha256 sidecar" >&2
+  exit 1
+fi
+
+if [[ -z "${LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64:-}" ]]; then
+  echo "error: LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64 is required for the embedded updater trust key" >&2
+  exit 1
+fi
+
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "error: working tree has uncommitted tracked changes; commit before releasing" >&2
   exit 1
 fi
 
@@ -77,6 +120,9 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
     -scheme Loom \
     -configuration Release \
     -quiet \
+    "MARKETING_VERSION=${VERSION}" \
+    "CURRENT_PROJECT_VERSION=${BUILD}" \
+    "LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64=${LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64}" \
     build
 
 BUILT=$(find "$DERIVED_BASE" -maxdepth 6 -type d -name "Loom.app" -path "*/Build/Products/Release/*" -print -quit)
@@ -122,6 +168,15 @@ CHECKSUM_PATH="${DMG_PATH}.sha256"
 ( cd "$RELEASE_DIR" && /usr/bin/shasum -a 256 "$DMG_NAME" > "$(basename "$CHECKSUM_PATH")" )
 echo "==> sha256: $(awk '{print $1}' "$CHECKSUM_PATH")"
 
+SIGNATURE_PATH="${CHECKSUM_PATH}.sig"
+KEY_FILE=$(mktemp -t loom-release-key)
+trap 'rm -f "$KEY_FILE"' EXIT
+printf '%s' "$LOOM_RELEASE_SIGNING_KEY_PEM" > "$KEY_FILE"
+"$OPENSSL_BIN" pkeyutl -sign -rawin -inkey "$KEY_FILE" -in "$CHECKSUM_PATH" | /usr/bin/base64 | /usr/bin/tr -d '\n' > "$SIGNATURE_PATH"
+rm -f "$KEY_FILE"
+trap - EXIT
+echo "==> signature: $SIGNATURE_PATH"
+
 # --- Tag + push -------------------------------------------------------------
 
 echo "==> git tag $TAG"
@@ -145,12 +200,12 @@ EOF
 
 if [[ "$REUSE_EXISTING_RELEASE" -eq 1 ]]; then
   echo "==> gh release upload $TAG (append to existing release)"
-  gh release upload "$TAG" "$DMG_PATH" "$CHECKSUM_PATH" \
+  gh release upload "$TAG" "$DMG_PATH" "$CHECKSUM_PATH" "$SIGNATURE_PATH" \
     -R "$REPO" \
     --clobber
 else
   echo "==> gh release create $TAG"
-  gh release create "$TAG" "$DMG_PATH" "$CHECKSUM_PATH" \
+  gh release create "$TAG" "$DMG_PATH" "$CHECKSUM_PATH" "$SIGNATURE_PATH" \
     -R "$REPO" \
     -t "Loom ${VERSION}" \
     -F "$NOTES_FILE"

@@ -1091,17 +1091,7 @@ function AdvancedPanel() {
   };
 
   const revealData = async () => {
-    try {
-      const { open } = await import("@tauri-apps/plugin-shell");
-      const appdata = "%APPDATA%\\com.chasesims.Loom";
-      await open(appdata);
-    } catch {
-      // Fallback: open via env path encoding so Explorer expands the variable.
-      try {
-        const { open } = await import("@tauri-apps/plugin-shell");
-        await open("file:///%APPDATA%/com.chasesims.Loom");
-      } catch {}
-    }
+    await ipc.shell.open("app-data").catch(() => {});
   };
 
   return (

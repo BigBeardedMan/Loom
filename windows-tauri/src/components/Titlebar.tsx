@@ -1,5 +1,5 @@
-import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { useApp } from "../lib/store";
+import { ipc } from "../lib/ipc";
 import { LoomLogoMark } from "./LoomLogoMark";
 import { UpdatePill } from "./UpdatePill";
 import { Icons } from "../lib/icons";
@@ -50,7 +50,7 @@ export function Titlebar() {
         href="#"
         onClick={(e) => {
           e.preventDefault();
-          openExternal("https://github.com/BigBeardedMan/Loom").catch(() => {});
+          ipc.shell.open("https://github.com/BigBeardedMan/Loom").catch(() => {});
         }}
         className="flex items-center gap-1.5"
         style={{

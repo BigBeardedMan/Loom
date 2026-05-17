@@ -1,8 +1,7 @@
 import { useState } from "react";
-import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { Icons } from "../../lib/icons";
-import type { CrashReport } from "../../lib/ipc";
+import { ipc, type CrashReport } from "../../lib/ipc";
 
 type Props = {
   report: CrashReport;
@@ -104,7 +103,7 @@ export function CrashModal({ report, onClose }: Props) {
             {copied ? "Copied" : "Copy details"}
           </button>
           <button
-            onClick={() => openExternal(reportUrl).catch(() => {})}
+            onClick={() => ipc.shell.open(reportUrl).catch(() => {})}
             style={{
               padding: "6px 14px",
               fontSize: 12,

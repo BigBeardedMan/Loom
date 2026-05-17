@@ -3,9 +3,12 @@
 // installed via shell_integration::shell_integration_install) and returns
 // the most recent commands as a struct list.
 
+use crate::security;
+use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use tauri::State;
 
 const MAX_RECORDS: usize = 500;
 
@@ -56,9 +59,12 @@ fn read_records(path: &PathBuf) -> Vec<CommandRecord> {
         };
         let started = s.started_at.unwrap_or(0);
         let id = s.id.unwrap_or_else(|| format!("{started}-{idx}"));
+        if security::should_skip_command(&s.command) {
+            continue;
+        }
         out.push(CommandRecord {
             id,
-            command: s.command,
+            command: security::redact_secrets(&s.command),
             cwd: s.cwd,
             shell: s.shell.unwrap_or_else(|| "pwsh".to_string()),
             exit_code: s.exit_code.unwrap_or(0),
@@ -98,16 +104,18 @@ pub fn command_history_list(workspace_path: Option<String>) -> Vec<CommandRecord
 }
 
 #[tauri::command]
-pub fn command_history_read_output(path: String) -> Result<String, String> {
+pub fn command_history_read_output(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<String, String> {
     const MAX_BYTES: usize = 1_048_576;
+    let path = security::validate_app_data_path(&state, &path)?;
     let bytes = fs::read(&path).map_err(|e| e.to_string())?;
     if bytes.len() <= MAX_BYTES {
-        return Ok(String::from_utf8_lossy(&bytes).into_owned());
+        return Ok(security::redact_secrets(&String::from_utf8_lossy(&bytes)));
     }
     let trimmed = &bytes[..MAX_BYTES];
     let dropped = bytes.len() - MAX_BYTES;
-    let prefix = String::from_utf8_lossy(trimmed).into_owned();
-    Ok(format!(
-        "{prefix}\n\n... ({dropped} more bytes truncated)"
-    ))
+    let prefix = security::redact_secrets(&String::from_utf8_lossy(trimmed));
+    Ok(format!("{prefix}\n\n... ({dropped} more bytes truncated)"))
 }
