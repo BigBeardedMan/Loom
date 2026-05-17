@@ -194,9 +194,7 @@ fn is_valid_installer_name(name: &str, token: &str) -> bool {
     if name.contains('/') || name.contains('\\') || name.contains("..") {
         return false;
     }
-    let Ok(re) = Regex::new(
-        r"(?i)^Loom(TestingEdition| Testing Edition)[A-Za-z0-9._ -]*_(x64|arm64)-setup\.exe$",
-    ) else {
+    let Ok(re) = Regex::new(r"(?i)^Loom[A-Za-z0-9._ -]*_(x64|arm64)-setup\.exe$") else {
         return false;
     };
     re.is_match(name)

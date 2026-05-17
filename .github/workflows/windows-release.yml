@@ -130,9 +130,10 @@ jobs:
           fi
 
           installer_name="$(basename "${installers[0]}")"
-          cp "${installers[0]}" "$out/$installer_name"
-          pnpm tauri signer sign -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" "$out/$installer_name"
-          test -s "$out/$installer_name.sig"
+          artifact_name="${installer_name// /.}"
+          cp "${installers[0]}" "$out/$artifact_name"
+          pnpm tauri signer sign -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" "$out/$artifact_name"
+          test -s "$out/$artifact_name.sig"
           find "$out" -maxdepth 1 -type f -print
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

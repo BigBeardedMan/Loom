@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Icons } from "../../lib/icons";
 import {
   useUsage,
@@ -15,11 +15,13 @@ const TIMEFRAMES: Timeframe[] = ["day", "week", "month", "year"];
 
 type Props = { tool: Tool };
 type UsageData = NonNullable<ReturnType<typeof useUsage>["data"]>;
+type UsageMode = "usage" | "limits";
 
 export function UsageView({ tool }: Props) {
   const timeframe = useApp((s) => s.usageTimeframe);
   const setTimeframe = useApp((s) => s.setUsageTimeframe);
   const { data, loading, error, refresh } = useUsage(tool, timeframe);
+  const [mode, setMode] = useState<UsageMode>("usage");
 
   const brand = toolBrandColor(tool);
 
@@ -45,7 +47,7 @@ export function UsageView({ tool }: Props) {
         <div className="flex flex-col leading-tight">
           <span style={{ fontSize: 13, fontWeight: 600 }}>{toolLabel(tool)}</span>
           <span style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>
-            {timeframeHeadline(timeframe)}
+            {mode === "limits" ? "Limits" : timeframeHeadline(timeframe)}
             {data?.lastActivity && ` · last activity ${shortAgo(data.lastActivity)}`}
           </span>
         </div>
@@ -53,20 +55,37 @@ export function UsageView({ tool }: Props) {
           {TIMEFRAMES.map((tf) => (
             <button
               key={tf}
-              onClick={() => setTimeframe(tf)}
+              onClick={() => {
+                setMode("usage");
+                setTimeframe(tf);
+              }}
               style={{
                 padding: "4px 10px",
                 fontSize: 11,
                 fontWeight: 500,
                 borderRadius: 6,
                 border: "1px solid rgba(255,255,255,0.10)",
-                background: tf === timeframe ? brand : "rgba(255,255,255,0.05)",
-                color: tf === timeframe ? "white" : "rgba(255,255,255,0.7)",
+                background: mode === "usage" && tf === timeframe ? brand : "rgba(255,255,255,0.05)",
+                color: mode === "usage" && tf === timeframe ? "white" : "rgba(255,255,255,0.7)",
               }}
             >
               {timeframeLabel(tf)}
             </button>
           ))}
+          <button
+            onClick={() => setMode("limits")}
+            style={{
+              padding: "4px 10px",
+              fontSize: 11,
+              fontWeight: 600,
+              borderRadius: 6,
+              border: "1px solid rgba(255,255,255,0.10)",
+              background: mode === "limits" ? brand : "rgba(255,255,255,0.05)",
+              color: mode === "limits" ? "white" : "rgba(255,255,255,0.7)",
+            }}
+          >
+            Limits
+          </button>
           <button
             onClick={refresh}
             aria-label="Refresh"
@@ -113,21 +132,22 @@ export function UsageView({ tool }: Props) {
         )}
 
         {data && data.isInstalled && (
-          <>
-            <StatGrid data={data} />
-            {tool === "codex" && hasCodexLimitData(data) && (
-              <CodexLimits data={data} brand={brand} />
-            )}
-            {data.chartBuckets.length > 0 && (
-              <Section title="Activity">
-                <BucketBars buckets={data.chartBuckets} brand={brand} />
-              </Section>
-            )}
-            <DonutsRow data={data} brand={brand} />
-            <HourlyHeatmap hours={data.hourlyDistribution} brand={brand} />
-            <PromptsAndTopics data={data} />
-            <ProjectsList data={data} />
-          </>
+          mode === "limits" ? (
+            <LimitsDashboard data={data} tool={tool} brand={brand} />
+          ) : (
+            <>
+              <StatGrid data={data} />
+              {data.chartBuckets.length > 0 && (
+                <Section title="Activity">
+                  <BucketBars buckets={data.chartBuckets} brand={brand} />
+                </Section>
+              )}
+              <DonutsRow data={data} brand={brand} />
+              <HourlyHeatmap hours={data.hourlyDistribution} brand={brand} />
+              <PromptsAndTopics data={data} />
+              <ProjectsList data={data} />
+            </>
+          )
         )}
       </div>
     </div>
@@ -182,7 +202,73 @@ function hasCodexLimitData(data: UsageData): boolean {
   );
 }
 
-function CodexLimits({ data, brand }: { data: UsageData; brand: string }) {
+function LimitsDashboard({ data, tool, brand }: { data: UsageData; tool: Tool; brand: string }) {
+  const pressure = limitPressure(data, tool, brand);
+  const ratio = limitRatio(data);
+  return (
+    <div className="flex flex-col gap-3">
+      <div
+        className="flex items-center gap-4"
+        style={{
+          padding: 16,
+          background: `linear-gradient(135deg, ${alpha(brand, 0.22)}, rgba(255,255,255,0.045) 58%, ${alpha(pressure.color, 0.18)})`,
+          border: `1px solid ${alpha(brand, 0.26)}`,
+          borderRadius: 10,
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 10, letterSpacing: 0.7, textTransform: "uppercase", color: "rgba(255,255,255,0.5)" }}>
+            Limit pressure
+          </div>
+          <div style={{ marginTop: 3, fontSize: 30, lineHeight: 1, fontWeight: 700 }}>
+            {pressure.label}
+          </div>
+          <div style={{ marginTop: 6, fontSize: 12, color: "rgba(255,255,255,0.58)" }}>
+            {pressure.detail}
+          </div>
+        </div>
+        <div
+          className="ml-auto flex items-center justify-center"
+          style={{
+            width: 84,
+            height: 84,
+            borderRadius: 999,
+            background: `conic-gradient(${pressure.color} ${Math.max(8, ratio * 100)}%, rgba(255,255,255,0.09) 0)`,
+            boxShadow: `0 0 30px ${alpha(pressure.color, 0.18)}`,
+            flex: "none",
+          }}
+        >
+          <div
+            className="flex items-center justify-center"
+            style={{
+              width: 58,
+              height: 58,
+              borderRadius: 999,
+              background: "rgba(0,0,0,0.38)",
+              color: pressure.color,
+            }}
+          >
+            <Icons.sparkles size={22} strokeWidth={2.2} />
+          </div>
+        </div>
+      </div>
+
+      {tool === "codex" && hasCodexLimitData(data) ? (
+        <CodexLimitMeters data={data} brand={brand} />
+      ) : (
+        <NoLimitSignal tool={tool} brand={brand} />
+      )}
+
+      <div className="grid grid-cols-3 gap-3">
+        <MiniStat label="Active" value={String(data.activeSessions)} />
+        <MiniStat label="Last activity" value={data.lastActivity ? shortAgo(data.lastActivity) : "None" } />
+        <MiniStat label="Local tokens" value={fmt(data.inputTokens + data.outputTokens + data.cachedTokens)} />
+      </div>
+    </div>
+  );
+}
+
+function CodexLimitMeters({ data, brand }: { data: UsageData; brand: string }) {
   const rows = [
     {
       label: "Primary",
@@ -199,56 +285,109 @@ function CodexLimits({ data, brand }: { data: UsageData; brand: string }) {
   ].filter((row) => row.used != null || row.window != null || row.resetsAt != null);
 
   return (
-    <Section title="Codex limits">
+    <div
+      style={{
+        padding: 12,
+        background: "rgba(255,255,255,0.04)",
+        border: "1px solid rgba(255,255,255,0.06)",
+        borderRadius: 10,
+      }}
+    >
+      <div className="flex items-center gap-2" style={{ marginBottom: 10 }}>
+        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.55)" }}>
+          Latest local Codex limit signal
+        </span>
+        {data.planType && (
+          <span
+            style={{
+              marginLeft: "auto",
+              fontSize: 10,
+              padding: "2px 7px",
+              borderRadius: 999,
+              background: "rgba(255,255,255,0.07)",
+              color: "rgba(255,255,255,0.72)",
+              textTransform: "uppercase",
+            }}
+          >
+            {data.planType}
+          </span>
+        )}
+      </div>
+      {rows.length > 0 && (
+        <div className="grid grid-cols-2 gap-3">
+          {rows.map((row) => (
+            <LimitMeter key={row.label} {...row} brand={brand} />
+          ))}
+        </div>
+      )}
       <div
+        className="flex flex-wrap items-center gap-x-4 gap-y-1"
+        style={{ marginTop: 10, fontSize: 11, color: "rgba(255,255,255,0.5)" }}
+      >
+        <span>
+          {data.credits == null
+            ? "credit balance unavailable"
+            : `Credit balance ${fmtCredits(data.credits)}`}
+        </span>
+        {data.rateLimitObservedAt && <span>Observed {shortDateTime(data.rateLimitObservedAt)}</span>}
+        {data.rateLimitReachedType && <span>Reached {data.rateLimitReachedType}</span>}
+      </div>
+    </div>
+  );
+}
+
+function NoLimitSignal({ tool, brand }: { tool: Tool; brand: string }) {
+  return (
+    <div
+      className="flex items-start gap-3"
+      style={{
+        padding: 12,
+        background: "rgba(255,255,255,0.04)",
+        border: "1px solid rgba(255,255,255,0.06)",
+        borderRadius: 10,
+      }}
+    >
+      <div
+        className="flex items-center justify-center"
         style={{
-          padding: 12,
-          background: "rgba(255,255,255,0.04)",
-          border: "1px solid rgba(255,255,255,0.06)",
-          borderRadius: 10,
+          width: 28,
+          height: 28,
+          borderRadius: 8,
+          background: alpha(brand, 0.16),
+          border: `1px solid ${alpha(brand, 0.28)}`,
+          color: brand,
+          flex: "none",
         }}
       >
-        <div className="flex items-center gap-2" style={{ marginBottom: 10 }}>
-          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.55)" }}>
-            reported by latest local Codex session
-          </span>
-          {data.planType && (
-            <span
-              style={{
-                marginLeft: "auto",
-                fontSize: 10,
-                padding: "2px 7px",
-                borderRadius: 999,
-                background: "rgba(255,255,255,0.07)",
-                color: "rgba(255,255,255,0.72)",
-                textTransform: "uppercase",
-              }}
-            >
-              {data.planType}
-            </span>
-          )}
-        </div>
-        {rows.length > 0 && (
-          <div className="grid grid-cols-2 gap-3">
-            {rows.map((row) => (
-              <LimitMeter key={row.label} {...row} brand={brand} />
-            ))}
-          </div>
-        )}
-        <div
-          className="flex flex-wrap items-center gap-x-4 gap-y-1"
-          style={{ marginTop: 10, fontSize: 11, color: "rgba(255,255,255,0.5)" }}
-        >
-          <span>
-            {data.credits == null
-              ? "credit balance unavailable"
-              : `Credit balance ${fmtCredits(data.credits)}`}
-          </span>
-          {data.rateLimitObservedAt && <span>Observed {shortDateTime(data.rateLimitObservedAt)}</span>}
-          {data.rateLimitReachedType && <span>Reached {data.rateLimitReachedType}</span>}
+        <Icons.eye size={14} strokeWidth={2} />
+      </div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>No local limit signal found</div>
+        <div style={{ marginTop: 3, fontSize: 11, color: "rgba(255,255,255,0.52)" }}>
+          {toolLabel(tool)} has not written readable limit data to its local logs yet.
         </div>
       </div>
-    </Section>
+    </div>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        padding: 12,
+        background: "rgba(255,255,255,0.04)",
+        border: "1px solid rgba(255,255,255,0.06)",
+        borderRadius: 10,
+      }}
+    >
+      <div style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", letterSpacing: 0.6, textTransform: "uppercase" }}>
+        {label}
+      </div>
+      <div style={{ marginTop: 4, fontSize: 16, fontWeight: 600, fontFamily: "var(--font-mono)" }}>
+        {value}
+      </div>
+    </div>
   );
 }
 
@@ -296,6 +435,75 @@ function LimitMeter({
       </div>
     </div>
   );
+}
+
+function limitPressure(
+  data: UsageData,
+  tool: Tool,
+  brand: string
+): { label: string; detail: string; color: string } {
+  if (tool !== "codex" || !hasCodexLimitData(data)) {
+    return {
+      label: "No Signal",
+      detail: "Loom is watching local logs for readable limit snapshots.",
+      color: brand,
+    };
+  }
+
+  if (data.rateLimitReachedType) {
+    return {
+      label: "Limited",
+      detail: `Codex reported a reached ${data.rateLimitReachedType} limit.`,
+      color: "rgb(228, 80, 137)",
+    };
+  }
+
+  const peak = [data.rateLimitPrimaryUsedPercent, data.rateLimitSecondaryUsedPercent]
+    .filter((v): v is number => typeof v === "number")
+    .sort((a, b) => b - a)[0];
+
+  if (peak == null) {
+    return {
+      label: "Signal Found",
+      detail: "Limit metadata is present, but usage percentage is unavailable.",
+      color: brand,
+    };
+  }
+  if (peak >= 100) {
+    return {
+      label: "Limited",
+      detail: "One local meter is at or above its recorded ceiling.",
+      color: "rgb(228, 80, 137)",
+    };
+  }
+  if (peak >= 85) {
+    return {
+      label: "Hot",
+      detail: "One limit window is running close to the ceiling.",
+      color: "rgb(242, 99, 46)",
+    };
+  }
+  if (peak >= 60) {
+    return {
+      label: "Warming",
+      detail: "Usage is elevated inside the latest logged window.",
+      color: "rgb(244, 179, 75)",
+    };
+  }
+  return {
+    label: "Calm",
+    detail: "Latest local limit snapshot has comfortable headroom.",
+    color: "rgb(59, 219, 117)",
+  };
+}
+
+function limitRatio(data: UsageData): number {
+  if (data.rateLimitReachedType) return 1;
+  const peak = [data.rateLimitPrimaryUsedPercent, data.rateLimitSecondaryUsedPercent]
+    .filter((v): v is number => typeof v === "number")
+    .sort((a, b) => b - a)[0];
+  if (peak == null) return 0.08;
+  return Math.max(0.08, Math.min(1, peak / 100));
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -655,6 +863,13 @@ function fmt(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
   if (n >= 1_000) return (n / 1_000).toFixed(1) + "k";
   return n.toString();
+}
+
+function alpha(rgb: string, opacity: number): string {
+  const match = rgb.match(/\d+(\.\d+)?/g);
+  if (!match || match.length < 3) return rgb;
+  const [r, g, b] = match;
+  return `rgba(${r}, ${g}, ${b}, ${opacity})`;
 }
 
 function fmtCredits(n: number): string {

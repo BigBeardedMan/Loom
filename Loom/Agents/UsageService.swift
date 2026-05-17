@@ -203,6 +203,19 @@ struct PromptPreview: Hashable, Identifiable {
     var id: String { "\(timestamp.timeIntervalSince1970)-\(text.prefix(20))" }
 }
 
+struct UsageLimitSnapshot: Hashable {
+    let primaryUsedPercent: Double?
+    let primaryWindowMinutes: Int?
+    let primaryResetsAt: Date?
+    let secondaryUsedPercent: Double?
+    let secondaryWindowMinutes: Int?
+    let secondaryResetsAt: Date?
+    let planType: String?
+    let credits: Double?
+    let reachedType: String?
+    let observedAt: Date?
+}
+
 struct CLIToolUsage: Identifiable, Hashable {
     let tool: CLITool
     let isInstalled: Bool
@@ -234,6 +247,8 @@ struct CLIToolUsage: Identifiable, Hashable {
     let hourlyDistribution: [Int]
     /// Total user prompts the CLI received in the current timeframe.
     let promptCount: Int
+    /// Locally logged CLI limit snapshot. Only Codex exposes this today.
+    let limitSnapshot: UsageLimitSnapshot?
 
     var id: String { tool.rawValue }
 
@@ -258,7 +273,8 @@ struct CLIToolUsage: Identifiable, Hashable {
             topTopics: [],
             recentPrompts: [],
             hourlyDistribution: Array(repeating: 0, count: 24),
-            promptCount: 0
+            promptCount: 0,
+            limitSnapshot: nil
         )
     }
 }
@@ -637,7 +653,8 @@ final class UsageService {
             topTopics: topTopics,
             recentPrompts: trimmedRecent,
             hourlyDistribution: hourlyDistribution,
-            promptCount: promptCount
+            promptCount: promptCount,
+            limitSnapshot: nil
         )
     }
 
@@ -971,6 +988,7 @@ final class UsageService {
         var cachedTokens = 0
         var lastActivity: Date?
         var models: Set<String> = []
+        var latestLimitSnapshot: UsageLimitSnapshot?
 
         guard let enumerator = fm.enumerator(
             at: root,
@@ -998,6 +1016,12 @@ final class UsageService {
                 if let model = parseCodexModel(in: text) {
                     models.insert(model)
                 }
+                if let snapshot = parseCodexLatestLimitSnapshot(in: text, fallback: mtime) {
+                    let observedAt = snapshot.observedAt ?? .distantPast
+                    if latestLimitSnapshot?.observedAt.map({ observedAt > $0 }) ?? true {
+                        latestLimitSnapshot = snapshot
+                    }
+                }
             }
         }
 
@@ -1019,7 +1043,8 @@ final class UsageService {
             topTopics: [],
             recentPrompts: [],
             hourlyDistribution: Array(repeating: 0, count: 24),
-            promptCount: 0
+            promptCount: 0,
+            limitSnapshot: latestLimitSnapshot
         )
     }
 
@@ -1063,6 +1088,176 @@ final class UsageService {
         try? NSRegularExpression(pattern: #""model":"([^"]+)""#)
     }()
 
+    private nonisolated static func parseCodexLatestLimitSnapshot(
+        in text: String,
+        fallback: Date
+    ) -> UsageLimitSnapshot? {
+        guard text.contains("rate_limits")
+            || text.contains("used_percent")
+            || text.contains("rate_limit_reached_type")
+            || text.contains(#""credits""#)
+            || text.contains("plan_type") else {
+            return nil
+        }
+
+        var latest: UsageLimitSnapshot?
+        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard rawLine.contains("rate_limits")
+                || rawLine.contains("used_percent")
+                || rawLine.contains("rate_limit_reached_type")
+                || rawLine.contains(#""credits""#)
+                || rawLine.contains("plan_type") else {
+                continue
+            }
+            guard let data = String(rawLine).data(using: .utf8),
+                  let rawJSON = try? JSONSerialization.jsonObject(with: data),
+                  let json = rawJSON as? [String: Any] else {
+                continue
+            }
+            let observedAt = stringValue(json, path: ["timestamp"]).flatMap(parseISO8601) ?? fallback
+            guard var snapshot = parseCodexLimitSnapshot(from: json, observedAt: observedAt) else {
+                continue
+            }
+            snapshot = fillCodexLimitMetadata(snapshot, from: json)
+            if latest?.observedAt.map({ observedAt > $0 }) ?? true {
+                latest = snapshot
+            }
+        }
+        return latest
+    }
+
+    private nonisolated static func parseCodexLimitSnapshot(
+        from root: [String: Any],
+        observedAt: Date
+    ) -> UsageLimitSnapshot? {
+        guard let value = codexRateLimitDictionary(from: root),
+              hasCodexRateLimitFields(value) else {
+            return nil
+        }
+
+        let primary = value["primary"] as? [String: Any]
+        let secondary = value["secondary"] as? [String: Any]
+        return UsageLimitSnapshot(
+            primaryUsedPercent: doubleValue(primary?["used_percent"]),
+            primaryWindowMinutes: intValue(primary?["window_minutes"]),
+            primaryResetsAt: resetDate(primary?["resets_at"]),
+            secondaryUsedPercent: doubleValue(secondary?["used_percent"]),
+            secondaryWindowMinutes: intValue(secondary?["window_minutes"]),
+            secondaryResetsAt: resetDate(secondary?["resets_at"]),
+            planType: stringValue(value["plan_type"]),
+            credits: doubleValue(value["credits"]),
+            reachedType: stringValue(value["rate_limit_reached_type"]),
+            observedAt: observedAt
+        )
+    }
+
+    private nonisolated static func fillCodexLimitMetadata(
+        _ snapshot: UsageLimitSnapshot,
+        from root: [String: Any]
+    ) -> UsageLimitSnapshot {
+        UsageLimitSnapshot(
+            primaryUsedPercent: snapshot.primaryUsedPercent,
+            primaryWindowMinutes: snapshot.primaryWindowMinutes,
+            primaryResetsAt: snapshot.primaryResetsAt,
+            secondaryUsedPercent: snapshot.secondaryUsedPercent,
+            secondaryWindowMinutes: snapshot.secondaryWindowMinutes,
+            secondaryResetsAt: snapshot.secondaryResetsAt,
+            planType: snapshot.planType
+                ?? stringValue(root, path: ["payload", "plan_type"])
+                ?? stringValue(root, path: ["plan_type"]),
+            credits: snapshot.credits
+                ?? doubleValue(root, path: ["payload", "credits"])
+                ?? doubleValue(root, path: ["credits"]),
+            reachedType: snapshot.reachedType
+                ?? stringValue(root, path: ["payload", "rate_limit_reached_type"])
+                ?? stringValue(root, path: ["rate_limit_reached_type"]),
+            observedAt: snapshot.observedAt
+        )
+    }
+
+    private nonisolated static func codexRateLimitDictionary(from root: [String: Any]) -> [String: Any]? {
+        let candidates = [
+            dictValue(root, path: ["payload", "rate_limits"]),
+            dictValue(root, path: ["rate_limits"]),
+            dictValue(root, path: ["payload"]),
+            root
+        ]
+        return candidates.compactMap { $0 }.first(where: hasCodexRateLimitFields)
+    }
+
+    private nonisolated static func hasCodexRateLimitFields(_ value: [String: Any]) -> Bool {
+        value["primary"] != nil
+            || value["secondary"] != nil
+            || doubleValue(value["credits"]) != nil
+            || stringValue(value["plan_type"]) != nil
+            || stringValue(value["rate_limit_reached_type"]) != nil
+    }
+
+    private nonisolated static func dictValue(
+        _ dict: [String: Any],
+        path: [String]
+    ) -> [String: Any]? {
+        var current: Any = dict
+        for key in path {
+            guard let next = (current as? [String: Any])?[key] else { return nil }
+            current = next
+        }
+        return current as? [String: Any]
+    }
+
+    private nonisolated static func stringValue(
+        _ dict: [String: Any],
+        path: [String]
+    ) -> String? {
+        var current: Any = dict
+        for key in path {
+            guard let next = (current as? [String: Any])?[key] else { return nil }
+            current = next
+        }
+        return stringValue(current)
+    }
+
+    private nonisolated static func doubleValue(
+        _ dict: [String: Any],
+        path: [String]
+    ) -> Double? {
+        var current: Any = dict
+        for key in path {
+            guard let next = (current as? [String: Any])?[key] else { return nil }
+            current = next
+        }
+        return doubleValue(current)
+    }
+
+    private nonisolated static func stringValue(_ value: Any?) -> String? {
+        (value as? String)?.nilIfEmpty
+    }
+
+    private nonisolated static func doubleValue(_ value: Any?) -> Double? {
+        if let value = value as? Double { return value }
+        if let value = value as? Int { return Double(value) }
+        if let value = value as? NSNumber { return value.doubleValue }
+        if let value = value as? String { return Double(value) }
+        return nil
+    }
+
+    private nonisolated static func intValue(_ value: Any?) -> Int? {
+        if let value = value as? Int { return value }
+        if let value = value as? NSNumber { return value.intValue }
+        if let value = value as? String { return Int(value) }
+        return nil
+    }
+
+    private nonisolated static func resetDate(_ value: Any?) -> Date? {
+        if let seconds = doubleValue(value) {
+            return Date(timeIntervalSince1970: seconds)
+        }
+        if let string = stringValue(value) {
+            return parseISO8601(string)
+        }
+        return nil
+    }
+
     // MARK: - Gemini
 
     /// Gemini CLI doesn't currently log usage we can read locally — surface
@@ -1089,7 +1284,8 @@ final class UsageService {
             topTopics: [],
             recentPrompts: [],
             hourlyDistribution: Array(repeating: 0, count: 24),
-            promptCount: 0
+            promptCount: 0,
+            limitSnapshot: nil
         )
     }
 
@@ -1098,5 +1294,11 @@ final class UsageService {
     private nonisolated static func parseInt(_ text: NSString, range: NSRange) -> Int {
         guard range.location != NSNotFound else { return 0 }
         return Int(text.substring(with: range)) ?? 0
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }
