@@ -17,7 +17,7 @@
 #   - xcodegen, xcodebuild        (dev tools)
 #   - hdiutil                     (built-in, used to build the .dmg)
 #   - gh CLI authenticated        (gh auth login)
-#   - openssl                     (built-in, used to sign the checksum)
+#   - OpenSSL 3                   (used to sign the checksum)
 #   - LOOM_RELEASE_SIGNING_KEY_PEM and LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64
 #   - clean working tree on loom-testing-edition
 
@@ -27,6 +27,17 @@ PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 DERIVED_BASE="${HOME}/Library/Developer/Xcode/DerivedData"
 RELEASE_DIR="${PROJECT_ROOT}/build/release"
 REPO="BigBeardedMan/Loom"
+OPENSSL_BIN="${LOOM_OPENSSL_BIN:-}"
+
+if [[ -z "$OPENSSL_BIN" ]]; then
+  if [[ -x /opt/homebrew/opt/openssl@3/bin/openssl ]]; then
+    OPENSSL_BIN=/opt/homebrew/opt/openssl@3/bin/openssl
+  elif [[ -x /usr/local/opt/openssl@3/bin/openssl ]]; then
+    OPENSSL_BIN=/usr/local/opt/openssl@3/bin/openssl
+  else
+    OPENSSL_BIN=$(command -v openssl || true)
+  fi
+fi
 
 cd "$PROJECT_ROOT"
 
@@ -67,6 +78,16 @@ fi
 
 if ! gh api user >/dev/null 2>&1; then
   echo "error: gh not authenticated for the active account. run: gh auth login -h github.com" >&2
+  exit 1
+fi
+
+if [[ -z "$OPENSSL_BIN" || ! -x "$OPENSSL_BIN" ]]; then
+  echo "error: OpenSSL 3 is required to sign release metadata. Install with: brew install openssl@3" >&2
+  exit 1
+fi
+
+if ! "$OPENSSL_BIN" list -public-key-algorithms 2>/dev/null | /usr/bin/grep -qi "ED25519"; then
+  echo "error: $OPENSSL_BIN does not support Ed25519. Set LOOM_OPENSSL_BIN to an OpenSSL 3 binary." >&2
   exit 1
 fi
 
@@ -147,7 +168,7 @@ echo "==> sha256: $(awk '{print $1}' "$CHECKSUM_PATH")"
 SIGNATURE_PATH="${CHECKSUM_PATH}.sig"
 KEY_FILE=$(mktemp -t loom-release-key)
 printf '%s' "$LOOM_RELEASE_SIGNING_KEY_PEM" > "$KEY_FILE"
-/usr/bin/openssl pkeyutl -sign -rawin -inkey "$KEY_FILE" -in "$CHECKSUM_PATH" | /usr/bin/base64 > "$SIGNATURE_PATH"
+"$OPENSSL_BIN" pkeyutl -sign -rawin -inkey "$KEY_FILE" -in "$CHECKSUM_PATH" | /usr/bin/base64 | /usr/bin/tr -d '\n' > "$SIGNATURE_PATH"
 rm -f "$KEY_FILE"
 echo "==> signature: $SIGNATURE_PATH"
 
