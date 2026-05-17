@@ -18,7 +18,7 @@
 #   - hdiutil                     (built-in, used to build the .dmg)
 #   - gh CLI authenticated        (gh auth login)
 #   - OpenSSL 3                   (used to sign the checksum)
-#   - LOOM_RELEASE_SIGNING_KEY_PEM and LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64
+#   - Release signing key in env, Keychain, or ~/.loom/release-signing
 #   - clean working tree on loom-testing-edition
 
 set -euo pipefail
@@ -29,6 +29,11 @@ RELEASE_DIR="${PROJECT_ROOT}/build/release"
 REPO="BigBeardedMan/Loom"
 OPENSSL_BIN="${LOOM_OPENSSL_BIN:-}"
 RELEASE_NOTES_SOURCE="${PROJECT_ROOT}/docs/releasing/current-release-notes.md"
+SIGNING_KEYCHAIN_SERVICE="com.chasesims.Loom.release-signing"
+SIGNING_KEYCHAIN_PRIVATE_ACCOUNT="testing-private-pem"
+SIGNING_KEYCHAIN_PUBLIC_ACCOUNT="testing-public-base64"
+SIGNING_KEY_FALLBACK="${HOME}/.loom/release-signing/loom-testing-ed25519.pem"
+SIGNING_PUBLIC_FALLBACK="${HOME}/.loom/release-signing/loom-testing-ed25519-public-base64.txt"
 
 if [[ -z "$OPENSSL_BIN" ]]; then
   if [[ -x /opt/homebrew/opt/openssl@3/bin/openssl ]]; then
@@ -41,6 +46,37 @@ if [[ -z "$OPENSSL_BIN" ]]; then
 fi
 
 cd "$PROJECT_ROOT"
+
+# Release signing is intentionally not committed to the repo. Prefer explicit
+# env vars for CI/manual overrides, then Keychain, then the local bootstrap
+# files used on this Mac. Never print secret values.
+if [[ -z "${LOOM_RELEASE_SIGNING_KEY_PEM:-}" ]]; then
+  if LOOM_RELEASE_SIGNING_KEY_PEM=$(/usr/bin/security find-generic-password \
+      -s "$SIGNING_KEYCHAIN_SERVICE" \
+      -a "$SIGNING_KEYCHAIN_PRIVATE_ACCOUNT" \
+      -w 2>/dev/null) && [[ -n "$LOOM_RELEASE_SIGNING_KEY_PEM" ]]; then
+    export LOOM_RELEASE_SIGNING_KEY_PEM
+    echo "==> loaded release signing private key from Keychain"
+  elif [[ -s "$SIGNING_KEY_FALLBACK" ]]; then
+    LOOM_RELEASE_SIGNING_KEY_PEM=$(<"$SIGNING_KEY_FALLBACK")
+    export LOOM_RELEASE_SIGNING_KEY_PEM
+    echo "==> loaded release signing private key from ~/.loom/release-signing"
+  fi
+fi
+
+if [[ -z "${LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64:-}" ]]; then
+  if LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64=$(/usr/bin/security find-generic-password \
+      -s "$SIGNING_KEYCHAIN_SERVICE" \
+      -a "$SIGNING_KEYCHAIN_PUBLIC_ACCOUNT" \
+      -w 2>/dev/null) && [[ -n "$LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64" ]]; then
+    export LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64
+    echo "==> loaded release signing public key from Keychain"
+  elif [[ -s "$SIGNING_PUBLIC_FALLBACK" ]]; then
+    LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64=$(<"$SIGNING_PUBLIC_FALLBACK")
+    export LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64
+    echo "==> loaded release signing public key from ~/.loom/release-signing"
+  fi
+fi
 
 # Sanity check the branch. release.sh ships from main; this one only ships
 # from loom-testing-edition. Mixing the two has bitten us before.
