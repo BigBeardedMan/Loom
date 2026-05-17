@@ -30,7 +30,9 @@ Bump `MARKETING_VERSION` in `project.yml` before each release. `release-testing.
 ```bash
 git checkout loom-testing-edition
 git pull origin loom-testing-edition
-# Bump MARKETING_VERSION in project.yml, commit, then:
+# Bump MARKETING_VERSION in project.yml.
+# Update docs/releasing/current-release-notes.md.
+# Commit, then:
 bin/release-testing.sh
 ```
 
@@ -40,7 +42,7 @@ The script:
 2. Runs `xcodegen` and `xcodebuild` with that version. The Mac app's `CFBundleShortVersionString` lands at the same value.
 3. Packages `LoomTestingEdition-<version>.dmg` with a `.sha256` sidecar.
 4. Tags the commit `testing-<version>` and pushes.
-5. Creates a GitHub release marked as **pre-release** (so the stable app's `/releases/latest` query never sees it).
+5. Creates or updates a GitHub release marked as **pre-release** with `docs/releasing/current-release-notes.md` in the release body (so the stable app's `/releases/latest` query never sees it).
 6. Windows CI picks the tag up, builds NSIS installers for x64 + arm64 with `LOOM_BUILD_CODE=<version>` injected at compile time, and appends them to the same release.
 
 `/releases/latest` keeps pointing at the most recent `v*` main build. Testing users see updates through the dedicated `testing-*` query.

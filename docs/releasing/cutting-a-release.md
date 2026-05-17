@@ -1,6 +1,8 @@
-# Cutting a release
+# Cutting a Testing Edition release
 
-Loom's release script is `bin/release.sh`. It bumps nothing for you — bump `MARKETING_VERSION` in `project.yml` first, commit, then run the script.
+Testing Edition's release script is `bin/release-testing.sh`. It bumps
+nothing for you: bump `MARKETING_VERSION` in `project.yml`, update
+`docs/releasing/current-release-notes.md`, commit, then run the script.
 
 ## Prereqs
 
@@ -12,33 +14,37 @@ Loom's release script is `bin/release.sh`. It bumps nothing for you — bump `MA
 ## The flow
 
 ```bash
-# 1. Bump MARKETING_VERSION (and CURRENT_PROJECT_VERSION) in project.yml.
-# 2. Commit + push.
-bin/release.sh                 # run from the repo root
+# 1. Bump MARKETING_VERSION in project.yml.
+# 2. Update docs/releasing/current-release-notes.md.
+# 3. Commit + push.
+bin/release-testing.sh         # run from the repo root on loom-testing-edition
 ```
 
 What the script does:
 
-1. **Reads version** — `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` from `project.yml`.
-2. **Pre-flight** — verifies `gh` is authed (via `gh api user`, not `gh auth status` which trips on stale background accounts), the local tag doesn't already exist, and the GitHub release doesn't already exist.
+1. **Reads version** — `MARKETING_VERSION` from `project.yml`.
+2. **Pre-flight** — verifies the branch is `loom-testing-edition`, `gh` is authed (via `gh api user`, not `gh auth status` which trips on stale background accounts), the working tree is clean, the local tag doesn't already exist, and whether the GitHub pre-release already exists.
 3. **Regenerates the Xcode project** — `xcodegen generate`.
-4. **Builds Release** — `xcodebuild -project Loom.xcodeproj -scheme Loom -configuration Release build`.
-5. **Locates the built `.app`** — searches `~/Library/Developer/Xcode/DerivedData/.../Build/Products/Release/Loom.app`.
-6. **Packages the DMG** — copies `Loom.app` and an `/Applications` alias into a staging temp dir, runs `hdiutil create -format UDZO`, names the file `Loom-<version>.dmg`.
-7. **Tags and pushes** — `git tag -a vX.Y.Z -m "Loom <version> (<build>)"`, `git push origin vX.Y.Z`.
-8. **Creates the GitHub release** — `gh release create vX.Y.Z <dmg> -t "Loom <version>" -F notes.md`.
+4. **Builds Release** — `xcodebuild -project LoomTestingEdition.xcodeproj -scheme LoomTestingEdition -configuration Release build`.
+5. **Locates the built `.app`** — searches `~/Library/Developer/Xcode/DerivedData/.../Build/Products/Release/Loom Testing Edition.app`.
+6. **Packages the DMG** — copies `Loom Testing Edition.app` and an `/Applications` alias into a staging temp dir, runs `hdiutil create -format UDZO`, names the file `LoomTestingEdition-<version>.dmg`.
+7. **Tags and pushes** — `git tag -a testing-X.Y.Z -m "Loom Testing Edition <version>"`, `git push origin testing-X.Y.Z`.
+8. **Creates or updates the GitHub pre-release** — writes notes from `docs/releasing/current-release-notes.md`, then attaches the DMG, checksum, and signature.
 
-The release notes are boilerplate (install steps + auto-update note). If you want a real changelog, edit the heredoc in `bin/release.sh` or let `gh release edit` rewrite it after.
+The Testing Edition update pill sees the release only after the
+`testing-<version>` GitHub pre-release and assets exist. A branch push alone is
+not enough.
 
 ## Post-release
 
-Every running Loom on every machine picks the new build up via the [auto-update](../updates/auto-update.md) path within 60 seconds.
+Every running Testing Edition install picks the new build up through the
+Testing Edition update pill after the pre-release is published.
 
 ## What can go wrong
 
-- **`error: tag vX.Y.Z already exists locally`** — you forgot to bump `MARKETING_VERSION`. Bump it, commit, retry.
-- **`error: built Release/Loom.app not found under DerivedData`** — `xcodebuild` failed silently. Re-run with `-quiet` removed from the script to see the actual compile errors.
-- **`gh release create` 422** — the release already exists on GitHub. Bump version, retry.
+- **`error: tag testing-X.Y.Z already exists locally`** — you forgot to bump `MARKETING_VERSION`. Bump it, commit, retry.
+- **`error: built Release/Loom Testing Edition.app not found under DerivedData`** — `xcodebuild` failed silently. Re-run with `-quiet` removed from the script to see the actual compile errors.
+- **Windows CI created the release first** — the script refreshes the release notes and appends the Mac DMG assets.
 
 ## Why ad-hoc signing?
 

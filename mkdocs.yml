@@ -94,6 +94,7 @@ nav:
       - updates/auto-update.md
       - updates/manual-check.md
   - Releasing:
+      - releasing/current-release-notes.md
       - releasing/cutting-a-release.md
       - releasing/project-yml.md
   - Architecture:

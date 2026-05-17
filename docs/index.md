@@ -15,6 +15,7 @@ Loom is a personal, single-user tool. No subscription model, hosted control plan
 - New here? Read [Install](getting-started/install.md), then [First run](getting-started/first-run.md).
 - Want to wire up your local model? See [Local LLMs](agents/local-llms.md).
 - Cutting a build? See [Cutting a release](releasing/cutting-a-release.md).
+- Publishing a Testing Edition update? Keep [Current release notes](releasing/current-release-notes.md) accurate before tagging.
 
 ## What's in Loom
 

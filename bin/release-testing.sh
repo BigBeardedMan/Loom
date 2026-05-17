@@ -28,6 +28,7 @@ DERIVED_BASE="${HOME}/Library/Developer/Xcode/DerivedData"
 RELEASE_DIR="${PROJECT_ROOT}/build/release"
 REPO="BigBeardedMan/Loom"
 OPENSSL_BIN="${LOOM_OPENSSL_BIN:-}"
+RELEASE_NOTES_SOURCE="${PROJECT_ROOT}/docs/releasing/current-release-notes.md"
 
 if [[ -z "$OPENSSL_BIN" ]]; then
   if [[ -x /opt/homebrew/opt/openssl@3/bin/openssl ]]; then
@@ -103,6 +104,11 @@ fi
 
 if git rev-parse --verify "$TAG" >/dev/null 2>&1; then
   echo "error: tag $TAG already exists locally. Bump MARKETING_VERSION in project.yml." >&2
+  exit 1
+fi
+
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "error: working tree has uncommitted tracked changes; commit before releasing" >&2
   exit 1
 fi
 
@@ -187,6 +193,22 @@ Loom Testing Edition \`${VERSION}\`
 Pre-release channel. Installs alongside the main Loom build with its own
 bundle ID, data folder, and Keychain service.
 
+EOF
+
+if [[ -f "$RELEASE_NOTES_SOURCE" ]]; then
+  cat "$RELEASE_NOTES_SOURCE" >> "$NOTES_FILE"
+  printf '\n' >> "$NOTES_FILE"
+else
+  cat >>"$NOTES_FILE" <<EOF
+## Changes
+
+- See the commit history for this testing release.
+
+EOF
+fi
+
+cat >>"$NOTES_FILE" <<EOF
+
 ## Install
 1. Download \`${DMG_NAME}\` (Mac) or \`LoomTestingEdition_${VERSION}_<arch>-setup.exe\` (Windows) below.
 2. Open it and drag **Loom Testing Edition** into your Applications folder.
@@ -194,6 +216,13 @@ bundle ID, data folder, and Keychain service.
 EOF
 
 if [[ "$REUSE_EXISTING_RELEASE" -eq 1 ]]; then
+  echo "==> gh release edit $TAG (refresh release notes)"
+  gh release edit "$TAG" \
+    -R "$REPO" \
+    -t "Loom Testing Edition ${VERSION}" \
+    -F "$NOTES_FILE" \
+    --prerelease
+
   echo "==> gh release upload $TAG (append to existing pre-release)"
   gh release upload "$TAG" "$DMG_PATH" "$CHECKSUM_PATH" "$SIGNATURE_PATH" \
     -R "$REPO" \

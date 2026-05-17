@@ -1195,7 +1195,7 @@ Three CLIs are recognized by name today: Claude Code, Codex, Gemini.
 | CLI | Source |
 | --- | ------ |
 | Claude Code | `~/.claude/projects/<slug>/<id>.jsonl` (line by line) |
-| Codex | `~/.codex/sessions/.../<rollout>.jsonl` (cumulative `total_token_usage` event) |
+| Codex | `~/.codex/sessions/.../<rollout>.jsonl` (line by line) |
 | Gemini | Stub. The Gemini CLI does not expose usage we can read locally yet. |
 
 For Claude Code, every JSONL session file is scanned line by line for
@@ -1209,6 +1209,16 @@ prompt lines. This drives:
 - Top topics across user prompts (filtered against a hand-curated stopword
   list).
 - Recent prompts (newest first, capped for display).
+
+For Codex, every rollout JSONL file is scanned line by line for session
+metadata, working directory, model, user prompts, and `token_count` events.
+Codex reports cumulative `total_token_usage` values per rollout, so Loom uses
+the latest total in each session, then maps it into the selected timeframe by
+the event timestamp. This drives the same chart and list surfaces as Claude:
+per-bucket activity, token mix, model and project slices, top topics, recent
+prompts, and hour-of-day heatmap. When Codex writes rate-limit snapshots,
+the Codex dashboard also shows primary and secondary limit meters, reset
+times, plan type, credit balance, and the latest observed timestamp.
 
 ### Timeframes
 
@@ -1249,6 +1259,8 @@ Each tab opens a single-CLI dashboard tinted with that CLI's brand color
 - Top projects, top models, top topics.
 - An hourly distribution.
 - Recent prompts (clickable to expand).
+- Codex only: locally logged primary/secondary rate-limit meters and reset
+  times when Codex records that data.
 
 CLIs that are not installed render an "installed but no data" placeholder
 so the tab still works as a feature-discovery surface.
@@ -1258,7 +1270,8 @@ so the tab still works as a feature-discovery surface.
 The Anthropic console's quota and billing dashboards are the source of
 truth for paid usage. Loom's dashboard is purely a local-disk read of CLI
 session logs. It does not call the Anthropic API or the OpenAI API to look
-up live quotas.
+up live quotas. Codex limit meters are the latest values Codex already wrote
+locally, not a live billing-console lookup.
 
 ### Privacy
 
@@ -1742,7 +1755,7 @@ Adjacent precautions:
 | ---- | ----------------- |
 | `~/.claude/tasks/<session-id>/<task-id>.json` | Live agent tasks polling |
 | `~/.claude/projects/<slug>/<id>.jsonl` | Usage dashboard (Claude Code totals, per-bucket, per-model, per-project) |
-| `~/.codex/sessions/.../<rollout>.jsonl` | Usage dashboard (Codex `total_token_usage`) |
+| `~/.codex/sessions/.../<rollout>.jsonl` | Usage dashboard (Codex totals, per-bucket activity, per-model/per-project rollups, prompts, and locally logged rate-limit snapshots) |
 | `~/.gemini/...` | Existence check for the Gemini installed flag |
 | The workspace's folder URL | Editor file tree root, terminal `cwd`, agent `cwd` |
 
@@ -1830,14 +1843,16 @@ defaults read com.chasesims.Loom
 
 ---
 
-## 17. Releasing a New Build
+## 17. Releasing a Testing Edition Build
 
-Loom's release script is `bin/release.sh`. Run from the repo root:
+Testing Edition's release script is `bin/release-testing.sh`. Run from the
+repo root on the `loom-testing-edition` branch:
 
 ```bash
-# 1. Bump MARKETING_VERSION (and CURRENT_PROJECT_VERSION) in project.yml.
-# 2. Commit + push.
-bin/release.sh
+# 1. Bump MARKETING_VERSION in project.yml.
+# 2. Update docs/releasing/current-release-notes.md.
+# 3. Commit + push.
+bin/release-testing.sh
 ```
 
 ### Prereqs
@@ -1850,36 +1865,38 @@ bin/release.sh
 
 ### What the script does
 
-1. Reads version from `project.yml` (`MARKETING_VERSION` and
-   `CURRENT_PROJECT_VERSION`).
-2. Pre-flight: verify `gh` is authed (via `gh api user`), the local tag
-   does not already exist, and the GitHub release does not already exist.
+1. Reads `MARKETING_VERSION` from `project.yml`.
+2. Pre-flight: verify the branch is `loom-testing-edition`, `gh` is authed
+   (via `gh api user`), the working tree is clean, the local tag does not
+   already exist, and whether the GitHub pre-release already exists.
 3. Regenerate the Xcode project: `xcodegen generate`.
 4. Build Release: `xcodebuild ... -configuration Release build`.
-5. Locate the built `.app` under DerivedData.
+5. Locate the built `Loom Testing Edition.app` under DerivedData.
 6. Stage `.app` and an `/Applications` alias in a temp dir; strip xattrs.
 7. Package the DMG via `hdiutil create -format UDZO`, named
-   `Loom-<version>.dmg`.
+   `LoomTestingEdition-<version>.dmg`.
 8. Compute SHA-256 of the DMG; write a `.sha256` sidecar file.
-9. Tag and push: `git tag -a v<version> -m "Loom <version> (<build>)"`,
-   `git push origin v<version>`.
-10. Create the GitHub release via `gh release create` with both the DMG
-    and the `.sha256` sidecar attached.
+9. Tag and push: `git tag -a testing-<version> -m "Loom Testing Edition <version>"`,
+   `git push origin testing-<version>`.
+10. Create or update the GitHub pre-release with the release notes from
+    `docs/releasing/current-release-notes.md`, plus the DMG, `.sha256`
+    sidecar, and `.sha256.sig` signature attached.
 
 ### Post-release
 
-Every running Loom on every machine picks the new build up via the
-[auto-update](#121-auto-update) path within 60 seconds.
+Every running Testing Edition install sees the new build through the Testing
+Edition update pill after the `testing-<version>` pre-release and assets are
+published.
 
 ### What can go wrong
 
-- "tag vX.Y.Z already exists locally": you forgot to bump
+- "tag testing-X.Y.Z already exists locally": you forgot to bump
   `MARKETING_VERSION`. Bump it, commit, retry.
-- "built Release/Loom.app not found under DerivedData": `xcodebuild` failed
-  silently. Re-run with `-quiet` removed from the script to see the actual
-  compile errors.
-- `gh release create` 422: the release already exists on GitHub. Bump
-  version, retry.
+- "built Release/Loom Testing Edition.app not found under DerivedData":
+  `xcodebuild` failed silently. Re-run with `-quiet` removed from the script
+  to see the actual compile errors.
+- If Windows CI created the pre-release first, `release-testing.sh` refreshes
+  the release notes and appends the Mac DMG assets.
 - Local codesign fails: see [Building from Source](#18-building-from-source)
   for the local-codesign cert setup.
 
