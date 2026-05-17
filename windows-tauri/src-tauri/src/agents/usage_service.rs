@@ -6,6 +6,7 @@ use chrono::{DateTime, Datelike, Duration, Local, TimeZone, Timelike, Utc};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::Serialize;
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Read;
@@ -118,13 +119,19 @@ impl Timeframe {
                         .unwrap()
                         .and_hms_opt(0, 0, 0)
                         .unwrap();
-                    let start = Local.from_local_datetime(&start_naive).single().unwrap_or(now);
+                    let start = Local
+                        .from_local_datetime(&start_naive)
+                        .single()
+                        .unwrap_or(now);
                     let (ny, nm) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
                     let end_naive = chrono::NaiveDate::from_ymd_opt(ny, nm as u32, 1)
                         .unwrap()
                         .and_hms_opt(0, 0, 0)
                         .unwrap();
-                    let end = Local.from_local_datetime(&end_naive).single().unwrap_or(now);
+                    let end = Local
+                        .from_local_datetime(&end_naive)
+                        .single()
+                        .unwrap_or(now);
                     out.push(BucketBoundary {
                         start,
                         end,
@@ -212,6 +219,16 @@ pub struct CliToolUsage {
     pub recent_prompts: Vec<PromptPreview>,
     pub hourly_distribution: Vec<i64>,
     pub prompt_count: i64,
+    pub rate_limit_primary_used_percent: Option<f64>,
+    pub rate_limit_primary_window_minutes: Option<i64>,
+    pub rate_limit_primary_resets_at: Option<String>,
+    pub rate_limit_secondary_used_percent: Option<f64>,
+    pub rate_limit_secondary_window_minutes: Option<i64>,
+    pub rate_limit_secondary_resets_at: Option<String>,
+    pub plan_type: Option<String>,
+    pub credits: Option<f64>,
+    pub rate_limit_reached_type: Option<String>,
+    pub rate_limit_observed_at: Option<String>,
 }
 
 impl CliToolUsage {
@@ -235,6 +252,16 @@ impl CliToolUsage {
             recent_prompts: vec![],
             hourly_distribution: vec![0; 24],
             prompt_count: 0,
+            rate_limit_primary_used_percent: None,
+            rate_limit_primary_window_minutes: None,
+            rate_limit_primary_resets_at: None,
+            rate_limit_secondary_used_percent: None,
+            rate_limit_secondary_window_minutes: None,
+            rate_limit_secondary_resets_at: None,
+            plan_type: None,
+            credits: None,
+            rate_limit_reached_type: None,
+            rate_limit_observed_at: None,
         }
     }
 }
@@ -242,17 +269,116 @@ impl CliToolUsage {
 // Stopwords copied verbatim from Loom/Agents/UsageService.swift lines 878-895.
 static STOPWORDS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     [
-        "this", "that", "with", "have", "from", "your", "into", "about", "where", "when", "what",
-        "would", "could", "should", "there", "their", "they", "them", "then", "than", "also",
-        "just", "like", "want", "need", "make", "made", "more", "some", "very", "well", "going",
-        "still", "thing", "things", "really", "think", "back", "down", "much", "many", "most",
-        "good", "right", "wrong", "okay", "sure", "yeah", "actually", "claude", "code", "please",
-        "thanks", "thank", "hello", "look", "looks", "show", "shows", "let", "let's", "doesn",
-        "didn", "won", "haven", "isn", "aren", "wasn", "weren", "the", "and", "but", "for", "are",
-        "was", "were", "been", "being", "does", "did", "use", "used", "uses", "using", "get",
-        "got", "see", "saw", "seen", "way", "out", "off", "now", "yes", "say", "said", "tell",
-        "told", "give", "given", "currently", "current", "needs", "needed", "must", "might",
-        "since", "before", "after", "while",
+        "this",
+        "that",
+        "with",
+        "have",
+        "from",
+        "your",
+        "into",
+        "about",
+        "where",
+        "when",
+        "what",
+        "would",
+        "could",
+        "should",
+        "there",
+        "their",
+        "they",
+        "them",
+        "then",
+        "than",
+        "also",
+        "just",
+        "like",
+        "want",
+        "need",
+        "make",
+        "made",
+        "more",
+        "some",
+        "very",
+        "well",
+        "going",
+        "still",
+        "thing",
+        "things",
+        "really",
+        "think",
+        "back",
+        "down",
+        "much",
+        "many",
+        "most",
+        "good",
+        "right",
+        "wrong",
+        "okay",
+        "sure",
+        "yeah",
+        "actually",
+        "claude",
+        "code",
+        "please",
+        "thanks",
+        "thank",
+        "hello",
+        "look",
+        "looks",
+        "show",
+        "shows",
+        "let",
+        "let's",
+        "doesn",
+        "didn",
+        "won",
+        "haven",
+        "isn",
+        "aren",
+        "wasn",
+        "weren",
+        "the",
+        "and",
+        "but",
+        "for",
+        "are",
+        "was",
+        "were",
+        "been",
+        "being",
+        "does",
+        "did",
+        "use",
+        "used",
+        "uses",
+        "using",
+        "get",
+        "got",
+        "see",
+        "saw",
+        "seen",
+        "way",
+        "out",
+        "off",
+        "now",
+        "yes",
+        "say",
+        "said",
+        "tell",
+        "told",
+        "give",
+        "given",
+        "currently",
+        "current",
+        "needs",
+        "needed",
+        "must",
+        "might",
+        "since",
+        "before",
+        "after",
+        "while",
     ]
     .into_iter()
     .collect()
@@ -269,12 +395,6 @@ static CLAUDE_PROMPT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#""role":"user","content":"((?:[^"\\]|\\.)*)""#).unwrap());
 
 static CLAUDE_TS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#""timestamp":"([^"]+)""#).unwrap());
-
-static CODEX_TOTALS_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#""total_token_usage":\{"input_tokens":(\d+),"cached_input_tokens":(\d+),"output_tokens":(\d+)"#).unwrap()
-});
-
-static CODEX_MODEL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#""model":"([^"]+)""#).unwrap());
 
 fn parse_iso8601(s: &str) -> Option<DateTime<Local>> {
     DateTime::parse_from_rfc3339(s)
@@ -324,7 +444,13 @@ fn friendly_project_name(raw: &str) -> String {
     if segments.is_empty() {
         return raw.to_string();
     }
-    let tail = segments.iter().rev().take(2).rev().copied().collect::<Vec<_>>();
+    let tail = segments
+        .iter()
+        .rev()
+        .take(2)
+        .rev()
+        .copied()
+        .collect::<Vec<_>>();
     tail.join("/")
 }
 
@@ -333,7 +459,7 @@ fn extract_keywords(text: &str) -> Vec<String> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut out: Vec<String> = Vec::new();
     let mut current = String::new();
-    let mut push = |cur: &mut String, seen: &mut HashSet<String>, out: &mut Vec<String>| {
+    let push = |cur: &mut String, seen: &mut HashSet<String>, out: &mut Vec<String>| {
         if cur.is_empty() {
             return;
         }
@@ -368,11 +494,7 @@ fn file_mtime(path: &Path) -> Option<DateTime<Local>> {
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_secs() as i64;
-    Some(
-        Utc.timestamp_opt(secs, 0)
-            .single()?
-            .with_timezone(&Local),
-    )
+    Some(Utc.timestamp_opt(secs, 0).single()?.with_timezone(&Local))
 }
 
 fn read_text(path: &Path) -> Option<String> {
@@ -436,7 +558,9 @@ fn read_claude_usage(
             if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
                 continue;
             }
-            let Some(mtime) = file_mtime(&path) else { continue };
+            let Some(mtime) = file_mtime(&path) else {
+                continue;
+            };
             sessions_total += 1;
             if mtime >= start_of_today {
                 sessions_today += 1;
@@ -459,7 +583,9 @@ fn read_claude_usage(
                     .or_insert(mtime);
             }
 
-            let Some(text) = read_text(&path) else { continue };
+            let Some(text) = read_text(&path) else {
+                continue;
+            };
             parse_claude_file(
                 &text,
                 mtime,
@@ -561,6 +687,16 @@ fn read_claude_usage(
         recent_prompts: recent,
         hourly_distribution: hourly,
         prompt_count,
+        rate_limit_primary_used_percent: None,
+        rate_limit_primary_window_minutes: None,
+        rate_limit_primary_resets_at: None,
+        rate_limit_secondary_used_percent: None,
+        rate_limit_secondary_window_minutes: None,
+        rate_limit_secondary_resets_at: None,
+        plan_type: None,
+        credits: None,
+        rate_limit_reached_type: None,
+        rate_limit_observed_at: None,
     }
 }
 
@@ -652,10 +788,267 @@ fn parse_claude_file(
     }
 }
 
+#[derive(Debug, Clone, Default)]
+struct CodexTokenTotals {
+    input_tokens: i64,
+    cached_tokens: i64,
+    output_tokens: i64,
+}
+
+impl CodexTokenTotals {
+    fn total(&self) -> i64 {
+        self.input_tokens + self.cached_tokens + self.output_tokens
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CodexRateLimitSnapshot {
+    observed_at: DateTime<Local>,
+    primary_used_percent: Option<f64>,
+    primary_window_minutes: Option<i64>,
+    primary_resets_at: Option<String>,
+    secondary_used_percent: Option<f64>,
+    secondary_window_minutes: Option<i64>,
+    secondary_resets_at: Option<String>,
+    plan_type: Option<String>,
+    credits: Option<f64>,
+    rate_limit_reached_type: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct CodexPrompt {
+    text: String,
+    timestamp: DateTime<Local>,
+}
+
+fn value_as_i64(v: &Value) -> Option<i64> {
+    v.as_i64()
+        .or_else(|| v.as_u64().and_then(|n| i64::try_from(n).ok()))
+        .or_else(|| v.as_f64().map(|n| n as i64))
+        .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
+}
+
+fn value_as_f64(v: &Value) -> Option<f64> {
+    v.as_f64()
+        .or_else(|| v.as_i64().map(|n| n as f64))
+        .or_else(|| v.as_u64().map(|n| n as f64))
+        .or_else(|| v.as_str().and_then(|s| s.parse::<f64>().ok()))
+}
+
+fn json_i64(v: &Value, pointer: &str) -> Option<i64> {
+    v.pointer(pointer).and_then(value_as_i64)
+}
+
+fn json_f64(v: &Value, pointer: &str) -> Option<f64> {
+    v.pointer(pointer).and_then(value_as_f64)
+}
+
+fn json_string(v: &Value, pointer: &str) -> Option<String> {
+    v.pointer(pointer)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+fn json_timestamp(v: &Value) -> Option<DateTime<Local>> {
+    json_string(v, "/timestamp").and_then(|s| parse_iso8601(&s))
+}
+
+fn json_timestamp_from(v: &Value, pointer: &str) -> Option<DateTime<Local>> {
+    json_string(v, pointer).and_then(|s| parse_iso8601(&s))
+}
+
+fn value_as_reset_time(v: &Value) -> Option<String> {
+    if let Some(secs) = value_as_i64(v) {
+        return Utc
+            .timestamp_opt(secs, 0)
+            .single()
+            .map(|d| d.with_timezone(&Local).to_rfc3339());
+    }
+    let s = v.as_str()?;
+    parse_iso8601(s).map(|d| d.to_rfc3339())
+}
+
+fn json_reset_time(v: &Value, pointer: &str) -> Option<String> {
+    v.pointer(pointer).and_then(value_as_reset_time)
+}
+
+fn codex_project_display_name(path: &Path) -> String {
+    path.file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| path.to_string_lossy().to_string())
+}
+
+fn is_codex_token_count(value: &Value) -> bool {
+    value.get("type").and_then(|v| v.as_str()) == Some("token_count")
+        || value.pointer("/payload/type").and_then(|v| v.as_str()) == Some("token_count")
+}
+
+fn codex_total_usage_value(value: &Value) -> Option<&Value> {
+    value
+        .pointer("/payload/info/total_token_usage")
+        .or_else(|| value.pointer("/payload/total_token_usage"))
+        .or_else(|| value.pointer("/info/total_token_usage"))
+        .or_else(|| value.pointer("/total_token_usage"))
+}
+
+fn has_codex_rate_limit_fields(value: &Value) -> bool {
+    value.pointer("/primary").is_some()
+        || value.pointer("/secondary").is_some()
+        || json_f64(value, "/credits").is_some()
+        || json_string(value, "/plan_type").is_some()
+        || json_string(value, "/rate_limit_reached_type").is_some()
+}
+
+fn codex_rate_limits_value(value: &Value) -> Option<&Value> {
+    [
+        value.pointer("/payload/rate_limits"),
+        value.pointer("/rate_limits"),
+        value.get("payload"),
+        Some(value),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|candidate| has_codex_rate_limit_fields(candidate))
+}
+
+fn parse_codex_totals(value: &Value) -> Option<CodexTokenTotals> {
+    let input = json_i64(value, "/input_tokens").unwrap_or(0);
+    let cached = json_i64(value, "/cached_input_tokens")
+        .or_else(|| json_i64(value, "/cache_read_input_tokens"))
+        .or_else(|| json_i64(value, "/cached_tokens"))
+        .unwrap_or(0);
+    let output = json_i64(value, "/output_tokens").unwrap_or(0);
+    let reported_total = json_i64(value, "/total_tokens");
+
+    if input == 0 && cached == 0 && output == 0 && reported_total.unwrap_or(0) == 0 {
+        return None;
+    }
+
+    // Codex/OpenAI reports cached tokens as a subset of input_tokens. Loom's
+    // shared usage UI displays input + cached + output, so store non-cached
+    // input here when total_tokens confirms that relationship.
+    let normalized_input = if reported_total == Some(input + output) && cached <= input {
+        input - cached
+    } else {
+        input
+    };
+
+    Some(CodexTokenTotals {
+        input_tokens: normalized_input,
+        cached_tokens: cached,
+        output_tokens: output,
+    })
+}
+
+fn parse_codex_rate_limit(
+    value: &Value,
+    observed_at: DateTime<Local>,
+) -> Option<CodexRateLimitSnapshot> {
+    if !has_codex_rate_limit_fields(value) {
+        return None;
+    }
+
+    Some(CodexRateLimitSnapshot {
+        observed_at,
+        primary_used_percent: json_f64(value, "/primary/used_percent"),
+        primary_window_minutes: json_i64(value, "/primary/window_minutes"),
+        primary_resets_at: json_reset_time(value, "/primary/resets_at"),
+        secondary_used_percent: json_f64(value, "/secondary/used_percent"),
+        secondary_window_minutes: json_i64(value, "/secondary/window_minutes"),
+        secondary_resets_at: json_reset_time(value, "/secondary/resets_at"),
+        plan_type: json_string(value, "/plan_type"),
+        credits: json_f64(value, "/credits"),
+        rate_limit_reached_type: json_string(value, "/rate_limit_reached_type"),
+    })
+}
+
+fn fill_codex_rate_limit_metadata(snapshot: &mut CodexRateLimitSnapshot, value: &Value) {
+    if snapshot.plan_type.is_none() {
+        snapshot.plan_type =
+            json_string(value, "/payload/plan_type").or_else(|| json_string(value, "/plan_type"));
+    }
+    if snapshot.credits.is_none() {
+        snapshot.credits =
+            json_f64(value, "/payload/credits").or_else(|| json_f64(value, "/credits"));
+    }
+    if snapshot.rate_limit_reached_type.is_none() {
+        snapshot.rate_limit_reached_type = json_string(value, "/payload/rate_limit_reached_type")
+            .or_else(|| json_string(value, "/rate_limit_reached_type"));
+    }
+}
+
+fn collect_codex_text(value: &Value, parts: &mut Vec<String>) {
+    match value {
+        Value::String(s) => {
+            if !s.trim().is_empty() {
+                parts.push(s.trim().to_string());
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_codex_text(item, parts);
+            }
+        }
+        Value::Object(map) => {
+            if let Some(text) = map.get("text").and_then(|v| v.as_str()) {
+                if !text.trim().is_empty() {
+                    parts.push(text.trim().to_string());
+                    return;
+                }
+            }
+            if let Some(content) = map.get("content") {
+                collect_codex_text(content, parts);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn extract_codex_prompt(value: &Value) -> Option<String> {
+    let payload = value.get("payload")?;
+    let top_type = value.get("type").and_then(|v| v.as_str());
+    let payload_type = payload.get("type").and_then(|v| v.as_str());
+
+    if top_type == Some("event_msg") && payload_type == Some("user_message") {
+        if let Some(message) = payload.get("message").and_then(|v| v.as_str()) {
+            let cleaned = message.trim();
+            if !cleaned.is_empty() {
+                return Some(cleaned.to_string());
+            }
+        }
+        if let Some(text_elements) = payload.get("text_elements") {
+            let mut parts = Vec::new();
+            collect_codex_text(text_elements, &mut parts);
+            if !parts.is_empty() {
+                return Some(parts.join("\n"));
+            }
+        }
+    }
+
+    if top_type == Some("response_item")
+        && payload_type == Some("message")
+        && payload.get("role").and_then(|v| v.as_str()) == Some("user")
+    {
+        let mut parts = Vec::new();
+        if let Some(content) = payload.get("content") {
+            collect_codex_text(content, &mut parts);
+        }
+        if !parts.is_empty() {
+            return Some(parts.join("\n"));
+        }
+    }
+
+    None
+}
+
 fn read_codex_usage(
     root: &Path,
     live_cutoff: DateTime<Local>,
     start_of_today: DateTime<Local>,
+    boundaries: &[BucketBoundary],
+    window_start: DateTime<Local>,
 ) -> CliToolUsage {
     if !root.exists() {
         return CliToolUsage::unavailable(CliTool::Codex);
@@ -669,38 +1062,247 @@ fn read_codex_usage(
     let mut last_activity: Option<DateTime<Local>> = None;
     let mut models: HashSet<String> = HashSet::new();
 
+    let mut bucket_tokens: Vec<i64> = vec![0; boundaries.len()];
+    let mut hourly: Vec<i64> = vec![0; 24];
+    let mut model_tokens: HashMap<String, i64> = HashMap::new();
+    let mut project_tokens: HashMap<PathBuf, i64> = HashMap::new();
+    let mut project_sessions: HashMap<PathBuf, i64> = HashMap::new();
+    let mut project_last: HashMap<PathBuf, DateTime<Local>> = HashMap::new();
+    let mut topic_counts: HashMap<String, i64> = HashMap::new();
+    let mut prompt_count: i64 = 0;
+    let mut recent: Vec<PromptPreview> = Vec::new();
+    let mut latest_rate_limit: Option<CodexRateLimitSnapshot> = None;
+
     walk_jsonl(root, &mut |path| {
-        let Some(mtime) = file_mtime(path) else { return };
+        let Some(mtime) = file_mtime(path) else {
+            return;
+        };
+        let Some(text) = read_text(path) else { return };
+
+        let mut session_started_at: Option<DateTime<Local>> = None;
+        let mut session_activity = mtime;
+        let mut session_project: Option<PathBuf> = None;
+        let mut session_model: Option<String> = None;
+        let mut session_totals: Option<CodexTokenTotals> = None;
+        let mut session_totals_at: Option<DateTime<Local>> = None;
+        let mut session_prompts: Vec<CodexPrompt> = Vec::new();
+        let mut seen_prompts: HashSet<String> = HashSet::new();
+
+        for line in text.lines() {
+            let Ok(value) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            let ts = json_timestamp(&value).unwrap_or(mtime);
+            if ts > session_activity {
+                session_activity = ts;
+            }
+
+            if value.get("type").and_then(|v| v.as_str()) == Some("session_meta") {
+                if let Some(meta_ts) = json_timestamp_from(&value, "/payload/timestamp")
+                    .or_else(|| json_timestamp(&value))
+                {
+                    session_started_at = Some(meta_ts);
+                }
+                if let Some(cwd) = json_string(&value, "/payload/cwd") {
+                    session_project = Some(PathBuf::from(cwd));
+                }
+            }
+
+            if value.get("type").and_then(|v| v.as_str()) == Some("turn_context") {
+                if session_project.is_none() {
+                    if let Some(cwd) = json_string(&value, "/payload/cwd") {
+                        session_project = Some(PathBuf::from(cwd));
+                    }
+                }
+                if let Some(model) = json_string(&value, "/payload/model") {
+                    models.insert(model.clone());
+                    session_model = Some(model);
+                }
+            }
+
+            if is_codex_token_count(&value) {
+                if let Some(total_value) = codex_total_usage_value(&value) {
+                    if let Some(totals) = parse_codex_totals(total_value) {
+                        session_totals = Some(totals);
+                        session_totals_at = Some(ts);
+                    }
+                }
+                if let Some(rate_value) = codex_rate_limits_value(&value) {
+                    if let Some(mut snapshot) = parse_codex_rate_limit(rate_value, ts) {
+                        fill_codex_rate_limit_metadata(&mut snapshot, &value);
+                        if latest_rate_limit
+                            .as_ref()
+                            .map_or(true, |current| snapshot.observed_at > current.observed_at)
+                        {
+                            latest_rate_limit = Some(snapshot);
+                        }
+                    }
+                }
+            }
+
+            if let Some(prompt) = extract_codex_prompt(&value) {
+                let cleaned = prompt.replace('\n', " ").trim().to_string();
+                if cleaned.is_empty() {
+                    continue;
+                }
+                let key = format!("{}|{}", ts.to_rfc3339(), cleaned);
+                if seen_prompts.insert(key) {
+                    session_prompts.push(CodexPrompt {
+                        text: cleaned,
+                        timestamp: ts,
+                    });
+                }
+            }
+        }
+
         sessions_total += 1;
-        if mtime >= start_of_today {
+        let session_started = session_started_at.unwrap_or(mtime);
+        if session_started >= start_of_today {
             sessions_today += 1;
         }
         if mtime >= live_cutoff {
             active_sessions += 1;
         }
-        if last_activity.map_or(true, |la| mtime > la) {
-            last_activity = Some(mtime);
+        if last_activity.map_or(true, |la| session_activity > la) {
+            last_activity = Some(session_activity);
         }
-        if let Some(text) = read_text(path) {
-            let mut last_i: i64 = 0;
-            let mut last_c: i64 = 0;
-            let mut last_o: i64 = 0;
-            for caps in CODEX_TOTALS_RE.captures_iter(&text) {
-                last_i = caps[1].parse().unwrap_or(0);
-                last_c = caps[2].parse().unwrap_or(0);
-                last_o = caps[3].parse().unwrap_or(0);
+
+        let project_path = session_project.unwrap_or_else(|| path.to_path_buf());
+        if session_activity >= window_start {
+            *project_sessions.entry(project_path.clone()).or_insert(0) += 1;
+            project_last
+                .entry(project_path.clone())
+                .and_modify(|d| {
+                    if session_activity > *d {
+                        *d = session_activity;
+                    }
+                })
+                .or_insert(session_activity);
+        }
+
+        let project_name = codex_project_display_name(&project_path);
+        for prompt in session_prompts {
+            if prompt.timestamp < window_start {
+                continue;
             }
-            input_tokens += last_i;
-            cached_tokens += last_c;
-            output_tokens += last_o;
-            if let Some(mc) = CODEX_MODEL_RE.captures(&text) {
-                models.insert(mc[1].to_string());
+            prompt_count += 1;
+            for kw in extract_keywords(&prompt.text) {
+                *topic_counts.entry(kw).or_insert(0) += 1;
+            }
+            let preview: String = prompt.text.chars().take(140).collect();
+            recent.push(PromptPreview {
+                text: preview,
+                timestamp: prompt.timestamp.to_rfc3339(),
+                project: project_name.clone(),
+            });
+        }
+
+        let Some(totals) = session_totals else { return };
+        let total_tokens = totals.total();
+        input_tokens += totals.input_tokens;
+        cached_tokens += totals.cached_tokens;
+        output_tokens += totals.output_tokens;
+
+        if let Some(model) = session_model {
+            *model_tokens.entry(model).or_insert(0) += total_tokens;
+        }
+
+        let token_ts = session_totals_at.unwrap_or(session_activity);
+        if token_ts >= window_start && total_tokens > 0 {
+            *project_tokens.entry(project_path).or_insert(0) += total_tokens;
+            if let Some(idx) = bucket_index(token_ts, boundaries) {
+                bucket_tokens[idx] += total_tokens;
+            }
+            let h = token_ts.hour() as usize;
+            if h < 24 {
+                hourly[h] += total_tokens;
             }
         }
     });
 
+    let chart_buckets: Vec<UsageBucket> = boundaries
+        .iter()
+        .zip(bucket_tokens.iter())
+        .map(|(b, t)| UsageBucket {
+            start: b.start.to_rfc3339(),
+            end: b.end.to_rfc3339(),
+            tokens: *t,
+            label: b.label.clone(),
+        })
+        .collect();
+
+    let mut top_projects: Vec<ProjectUsage> = project_sessions
+        .iter()
+        .filter_map(|(p, sessions)| {
+            let last = project_last.get(p)?;
+            Some(ProjectUsage {
+                display_name: codex_project_display_name(p),
+                path: p.to_string_lossy().to_string(),
+                sessions: *sessions,
+                last_activity: last.to_rfc3339(),
+            })
+        })
+        .collect();
+    top_projects.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+    top_projects.truncate(5);
+
+    let mut tokens_by_model: Vec<ModelUsage> = model_tokens
+        .into_iter()
+        .map(|(model, tokens)| ModelUsage { model, tokens })
+        .collect();
+    tokens_by_model.sort_by(|a, b| b.tokens.cmp(&a.tokens));
+
+    let mut tokens_by_project: Vec<ProjectTokenSlice> = project_tokens
+        .into_iter()
+        .map(|(p, tokens)| ProjectTokenSlice {
+            display_name: codex_project_display_name(&p),
+            path: p.to_string_lossy().to_string(),
+            tokens,
+        })
+        .collect();
+    tokens_by_project.sort_by(|a, b| b.tokens.cmp(&a.tokens));
+
+    let mut top_topics: Vec<PromptTopic> = topic_counts
+        .into_iter()
+        .filter(|(_, c)| *c >= 2)
+        .map(|(keyword, count)| PromptTopic { keyword, count })
+        .collect();
+    top_topics.sort_by(|a, b| b.count.cmp(&a.count));
+    top_topics.truncate(12);
+
+    recent.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    recent.truncate(8);
+
     let mut models_sorted: Vec<String> = models.into_iter().collect();
     models_sorted.sort();
+
+    let (
+        rate_limit_primary_used_percent,
+        rate_limit_primary_window_minutes,
+        rate_limit_primary_resets_at,
+        rate_limit_secondary_used_percent,
+        rate_limit_secondary_window_minutes,
+        rate_limit_secondary_resets_at,
+        plan_type,
+        credits,
+        rate_limit_reached_type,
+        rate_limit_observed_at,
+    ) = if let Some(snapshot) = latest_rate_limit {
+        (
+            snapshot.primary_used_percent,
+            snapshot.primary_window_minutes,
+            snapshot.primary_resets_at,
+            snapshot.secondary_used_percent,
+            snapshot.secondary_window_minutes,
+            snapshot.secondary_resets_at,
+            snapshot.plan_type,
+            snapshot.credits,
+            snapshot.rate_limit_reached_type,
+            Some(snapshot.observed_at.to_rfc3339()),
+        )
+    } else {
+        (None, None, None, None, None, None, None, None, None, None)
+    };
 
     CliToolUsage {
         tool: CliTool::Codex.as_str().to_string(),
@@ -713,14 +1315,24 @@ fn read_codex_usage(
         cached_tokens,
         last_activity: last_activity.map(|d| d.to_rfc3339()),
         models: models_sorted,
-        chart_buckets: vec![],
-        top_projects: vec![],
-        tokens_by_model: vec![],
-        tokens_by_project: vec![],
-        top_topics: vec![],
-        recent_prompts: vec![],
-        hourly_distribution: vec![0; 24],
-        prompt_count: 0,
+        chart_buckets,
+        top_projects,
+        tokens_by_model,
+        tokens_by_project,
+        top_topics,
+        recent_prompts: recent,
+        hourly_distribution: hourly,
+        prompt_count,
+        rate_limit_primary_used_percent,
+        rate_limit_primary_window_minutes,
+        rate_limit_primary_resets_at,
+        rate_limit_secondary_used_percent,
+        rate_limit_secondary_window_minutes,
+        rate_limit_secondary_resets_at,
+        plan_type,
+        credits,
+        rate_limit_reached_type,
+        rate_limit_observed_at,
     }
 }
 
@@ -766,11 +1378,23 @@ pub fn usage_read(tool: String, timeframe: String) -> Result<CliToolUsage, Strin
     Ok(match tool {
         CliTool::Claude => {
             let root = h.join(".claude").join("projects");
-            read_claude_usage(&root, live_cutoff, start_of_today, &boundaries, window_start)
+            read_claude_usage(
+                &root,
+                live_cutoff,
+                start_of_today,
+                &boundaries,
+                window_start,
+            )
         }
         CliTool::Codex => {
             let root = h.join(".codex").join("sessions");
-            read_codex_usage(&root, live_cutoff, start_of_today)
+            read_codex_usage(
+                &root,
+                live_cutoff,
+                start_of_today,
+                &boundaries,
+                window_start,
+            )
         }
         CliTool::Gemini => {
             let root = h.join(".gemini");

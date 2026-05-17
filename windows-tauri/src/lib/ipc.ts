@@ -418,6 +418,16 @@ export type CliToolUsage = {
   recentPrompts: PromptPreview[];
   hourlyDistribution: number[];
   promptCount: number;
+  rateLimitPrimaryUsedPercent?: number | null;
+  rateLimitPrimaryWindowMinutes?: number | null;
+  rateLimitPrimaryResetsAt?: string | null;
+  rateLimitSecondaryUsedPercent?: number | null;
+  rateLimitSecondaryWindowMinutes?: number | null;
+  rateLimitSecondaryResetsAt?: string | null;
+  planType?: string | null;
+  credits?: number | null;
+  rateLimitReachedType?: string | null;
+  rateLimitObservedAt?: string | null;
 };
 
 export type LiveAgentTask = {

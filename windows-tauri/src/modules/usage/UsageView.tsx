@@ -14,6 +14,7 @@ import { useApp } from "../../lib/store";
 const TIMEFRAMES: Timeframe[] = ["day", "week", "month", "year"];
 
 type Props = { tool: Tool };
+type UsageData = NonNullable<ReturnType<typeof useUsage>["data"]>;
 
 export function UsageView({ tool }: Props) {
   const timeframe = useApp((s) => s.usageTimeframe);
@@ -114,6 +115,9 @@ export function UsageView({ tool }: Props) {
         {data && data.isInstalled && (
           <>
             <StatGrid data={data} />
+            {tool === "codex" && hasCodexLimitData(data) && (
+              <CodexLimits data={data} brand={brand} />
+            )}
             {data.chartBuckets.length > 0 && (
               <Section title="Activity">
                 <BucketBars buckets={data.chartBuckets} brand={brand} />
@@ -130,7 +134,7 @@ export function UsageView({ tool }: Props) {
   );
 }
 
-function StatGrid({ data }: { data: ReturnType<typeof useUsage>["data"] & {} }) {
+function StatGrid({ data }: { data: UsageData }) {
   const stats: Array<[string, string]> = [
     ["Sessions today", String(data.sessionsToday)],
     ["Sessions total", String(data.sessionsTotal)],
@@ -159,6 +163,137 @@ function StatGrid({ data }: { data: ReturnType<typeof useUsage>["data"] & {} }) 
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+function hasCodexLimitData(data: UsageData): boolean {
+  return (
+    data.rateLimitObservedAt != null ||
+    data.rateLimitPrimaryUsedPercent != null ||
+    data.rateLimitPrimaryWindowMinutes != null ||
+    data.rateLimitPrimaryResetsAt != null ||
+    data.rateLimitSecondaryUsedPercent != null ||
+    data.rateLimitSecondaryWindowMinutes != null ||
+    data.rateLimitSecondaryResetsAt != null ||
+    data.planType != null ||
+    data.credits != null ||
+    data.rateLimitReachedType != null
+  );
+}
+
+function CodexLimits({ data, brand }: { data: UsageData; brand: string }) {
+  const rows = [
+    {
+      label: "Primary",
+      used: data.rateLimitPrimaryUsedPercent,
+      window: data.rateLimitPrimaryWindowMinutes,
+      resetsAt: data.rateLimitPrimaryResetsAt,
+    },
+    {
+      label: "Secondary",
+      used: data.rateLimitSecondaryUsedPercent,
+      window: data.rateLimitSecondaryWindowMinutes,
+      resetsAt: data.rateLimitSecondaryResetsAt,
+    },
+  ].filter((row) => row.used != null || row.window != null || row.resetsAt != null);
+
+  return (
+    <Section title="Codex limits">
+      <div
+        style={{
+          padding: 12,
+          background: "rgba(255,255,255,0.04)",
+          border: "1px solid rgba(255,255,255,0.06)",
+          borderRadius: 10,
+        }}
+      >
+        <div className="flex items-center gap-2" style={{ marginBottom: 10 }}>
+          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.55)" }}>
+            reported by latest local Codex session
+          </span>
+          {data.planType && (
+            <span
+              style={{
+                marginLeft: "auto",
+                fontSize: 10,
+                padding: "2px 7px",
+                borderRadius: 999,
+                background: "rgba(255,255,255,0.07)",
+                color: "rgba(255,255,255,0.72)",
+                textTransform: "uppercase",
+              }}
+            >
+              {data.planType}
+            </span>
+          )}
+        </div>
+        {rows.length > 0 && (
+          <div className="grid grid-cols-2 gap-3">
+            {rows.map((row) => (
+              <LimitMeter key={row.label} {...row} brand={brand} />
+            ))}
+          </div>
+        )}
+        <div
+          className="flex flex-wrap items-center gap-x-4 gap-y-1"
+          style={{ marginTop: 10, fontSize: 11, color: "rgba(255,255,255,0.5)" }}
+        >
+          <span>
+            {data.credits == null
+              ? "credit balance unavailable"
+              : `Credit balance ${fmtCredits(data.credits)}`}
+          </span>
+          {data.rateLimitObservedAt && <span>Observed {shortDateTime(data.rateLimitObservedAt)}</span>}
+          {data.rateLimitReachedType && <span>Reached {data.rateLimitReachedType}</span>}
+        </div>
+      </div>
+    </Section>
+  );
+}
+
+function LimitMeter({
+  label,
+  used,
+  window,
+  resetsAt,
+  brand,
+}: {
+  label: string;
+  used?: number | null;
+  window?: number | null;
+  resetsAt?: string | null;
+  brand: string;
+}) {
+  const width = used == null ? 0 : Math.max(0, Math.min(100, used));
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div className="flex items-center gap-2">
+        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.75)", fontWeight: 600 }}>
+          {label}
+        </span>
+        <span style={{ marginLeft: "auto", fontSize: 11, color: "rgba(255,255,255,0.55)", fontFamily: "var(--font-mono)" }}>
+          {used == null ? "Unknown" : fmtPercent(used)}
+        </span>
+      </div>
+      <div
+        style={{
+          height: 5,
+          marginTop: 6,
+          borderRadius: 999,
+          background: "rgba(255,255,255,0.08)",
+          overflow: "hidden",
+        }}
+      >
+        <div style={{ width: `${width}%`, height: "100%", background: brand }} />
+      </div>
+      <div
+        className="flex items-center gap-2"
+        style={{ marginTop: 5, fontSize: 10, color: "rgba(255,255,255,0.42)" }}
+      >
+        <span>{window == null ? "Window unknown" : formatWindow(window)}</span>
+        {resetsAt && <span style={{ marginLeft: "auto" }}>resets {shortDateTime(resetsAt)}</span>}
+      </div>
     </div>
   );
 }
@@ -237,7 +372,7 @@ function DonutsRow({
   data,
   brand,
 }: {
-  data: ReturnType<typeof useUsage>["data"] & {};
+  data: UsageData;
   brand: string;
 }) {
   const tokenMix = [
@@ -404,7 +539,7 @@ function HourlyHeatmap({ hours, brand }: { hours: number[]; brand: string }) {
   );
 }
 
-function PromptsAndTopics({ data }: { data: ReturnType<typeof useUsage>["data"] & {} }) {
+function PromptsAndTopics({ data }: { data: UsageData }) {
   if (data.recentPrompts.length === 0 && data.topTopics.length === 0) return null;
   return (
     <div className="grid grid-cols-2 gap-3" style={{ marginBottom: 18 }}>
@@ -470,7 +605,7 @@ function PromptsAndTopics({ data }: { data: ReturnType<typeof useUsage>["data"] 
   );
 }
 
-function ProjectsList({ data }: { data: ReturnType<typeof useUsage>["data"] & {} }) {
+function ProjectsList({ data }: { data: UsageData }) {
   if (data.topProjects.length === 0) return null;
   return (
     <Section title="Top projects">
@@ -520,6 +655,33 @@ function fmt(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
   if (n >= 1_000) return (n / 1_000).toFixed(1) + "k";
   return n.toString();
+}
+
+function fmtCredits(n: number): string {
+  return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+function fmtPercent(n: number): string {
+  const rounded = Math.round(n);
+  const value = Math.abs(n - rounded) < 0.05 ? String(rounded) : n.toFixed(1);
+  return `${value}%`;
+}
+
+function formatWindow(minutes: number): string {
+  if (minutes >= 1440 && minutes % 1440 === 0) return `${minutes / 1440}d window`;
+  if (minutes >= 60 && minutes % 60 === 0) return `${minutes / 60}h window`;
+  return `${minutes}m window`;
+}
+
+function shortDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "unknown";
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function shortAgo(iso: string): string {
