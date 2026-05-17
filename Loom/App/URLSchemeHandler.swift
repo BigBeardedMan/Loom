@@ -4,21 +4,20 @@ import os
 private let urlLog = Logger(subsystem: "com.chasesims.Loom", category: "url-scheme")
 
 extension Notification.Name {
-    /// Posted when a `loom://run?prompt=…` URL is opened. Userinfo carries
-    /// `prompt`, `workspace` (optional), and `agent` (optional). The active
-    /// agent pane subscribes and dispatches the run through the orchestrator.
+    /// Posted when a `loom://run?prompt=...` URL is opened. Userinfo carries
+    /// `prompt` and `agent` (optional). The active agent pane turns it into a
+    /// pending request and asks the user before dispatching it.
     static let loomURLAgentRun = Notification.Name("loom.url.agentRun")
 }
 
 /// Minimal URL handler for the `loom://` scheme. Today only `loom://run`
-/// matters — it kicks off an agent run in the active workspace.
+/// matters. It never executes directly; the agent pane must confirm first.
 ///
 /// URL shape:
-///   `loom://run?prompt=<encoded>&workspace=<encoded>&agent=<encoded>`
+///   `loom://run?prompt=<encoded>&agent=<encoded>`
 enum URLSchemeHandler {
     struct AgentRunRequest: Sendable {
         let prompt: String
-        let workspacePath: String?
         let agentID: String?
     }
 
@@ -36,7 +35,6 @@ enum URLSchemeHandler {
                     object: nil,
                     userInfo: [
                         "prompt": request.prompt,
-                        "workspace": request.workspacePath ?? "",
                         "agent": request.agentID ?? ""
                     ]
                 )
@@ -56,13 +54,13 @@ enum URLSchemeHandler {
             urlLog.error("loom://run missing prompt query item")
             return nil
         }
-        let workspace = items.first(where: { $0.name == "workspace" })?.value?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if items.contains(where: { $0.name == "workspace" }) {
+            urlLog.info("Ignoring workspace query item in loom://run")
+        }
         let agent = items.first(where: { $0.name == "agent" })?.value?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return AgentRunRequest(
             prompt: prompt,
-            workspacePath: (workspace?.isEmpty ?? true) ? nil : workspace,
             agentID: (agent?.isEmpty ?? true) ? nil : agent
         )
     }

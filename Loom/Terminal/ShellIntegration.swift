@@ -87,6 +87,30 @@ enum ShellIntegration {
       print -r -- "\\"$s\\""
     }
 
+    __loom_should_skip_history() {
+      local cmd="$1"
+      local lower="${cmd:l}"
+      case "$lower" in
+        gh\\ auth*|npm\\ token*|ssh-add*|aws\\ configure*|docker\\ login*|gcloud\\ auth*|az\\ login*|security\\ find-generic-password*|security\\ add-generic-password*|pass\\ *)
+          return 0
+          ;;
+      esac
+      if [[ "$cmd" =~ '(^|[;&|[:space:]])(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)[A-Za-z0-9_]*=' ]]; then
+        return 0
+      fi
+      if [[ "$lower" == *"--password"* || "$lower" == *"--token"* || "$lower" == *"--api-key"* || "$lower" == *"authorization: bearer"* ]]; then
+        return 0
+      fi
+      return 1
+    }
+
+    __loom_redact_command() {
+      print -r -- "$1" | /usr/bin/sed -E \\
+        -e 's/(authorization:[[:space:]]*bearer[[:space:]]+)[^[:space:]]+/\\1[REDACTED]/Ig' \\
+        -e 's/(--(api-key|token|password|secret)(=|[[:space:]]+))[^[:space:]]+/\\1[REDACTED]/Ig' \\
+        -e 's/((api[_-]?key|token|secret|password|passwd|credential)[[:space:]]*[:=][[:space:]]*)[^[:space:]"'"'"'`]+/\\1[REDACTED]/Ig'
+    }
+
     # Loom-internal: wrap a single command so its stdout+stderr is also
     # tee'd to a per-command file under output/. Loom's submit() API
     # invokes this for programmatic sends so the cards can show output;
@@ -115,7 +139,13 @@ enum ShellIntegration {
       local exit_code=$?
       if [[ -n "$__loom_cmd" ]]; then
         local end_ts=$(/bin/date +%s)
-        local cmd_json=$(__loom_json_escape "$__loom_cmd")
+        if __loom_should_skip_history "$__loom_cmd"; then
+          unset __loom_cmd __loom_cmd_start
+          __loom_last_capture_path=""
+          return
+        fi
+        local safe_cmd=$(__loom_redact_command "$__loom_cmd")
+        local cmd_json=$(__loom_json_escape "$safe_cmd")
         local cwd_json=$(__loom_json_escape "$PWD")
         local sess_json=$(__loom_json_escape "${LOOM_SESSION_ID:-unknown}")
         local output_field=""

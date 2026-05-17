@@ -35,6 +35,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.developer-tools</string>
+	<key>LoomReleaseSignaturePublicKeyBase64</key>
+	<string>$(LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64)</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 BigBeardedMan</string>
 </dict>

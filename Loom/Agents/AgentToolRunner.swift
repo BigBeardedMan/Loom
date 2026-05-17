@@ -1,5 +1,26 @@
 import Foundation
 
+struct AgentToolApprovalRequest: Identifiable, Hashable, Sendable {
+    enum Action: String, Sendable {
+        case writeFile
+        case editFile
+        case runBash
+
+        var label: String {
+            switch self {
+            case .writeFile: return "Write file"
+            case .editFile:  return "Edit file"
+            case .runBash:   return "Run bash"
+            }
+        }
+    }
+
+    let id: UUID = UUID()
+    let action: Action
+    let target: String
+    let preview: String
+}
+
 /// Executes the side-effecting tool calls the agent orchestrator routes to it:
 /// file reads, file edits, and bash. Tool call inputs are validated against
 /// the workspace folder so a runaway agent can't read or write outside the
@@ -14,16 +35,31 @@ struct AgentToolRunner: Sendable {
     /// of executing. Default off — bash on a local model is dicey enough that
     /// we want the user to opt in via Settings.
     let allowBash: Bool
+    let approvalHandler: (@MainActor @Sendable (AgentToolApprovalRequest) async -> Bool)?
+
+    init(
+        workspaceRoot: URL?,
+        allowBash: Bool,
+        approvalHandler: (@MainActor @Sendable (AgentToolApprovalRequest) async -> Bool)? = nil
+    ) {
+        self.workspaceRoot = workspaceRoot
+        self.allowBash = allowBash
+        self.approvalHandler = approvalHandler
+    }
 
     enum ToolError: Error, LocalizedError {
         case unknownTool(String)
         case missingArgument(String)
         case decoding(String)
         case outsideWorkspace(String)
+        case noWorkspace
+        case sensitivePath(String)
+        case approvalDenied(String)
         case bashDisabled
         case bashTimeout
         case fileNotFound(String)
         case stringNotFound
+        case ambiguousString(Int)
 
         var errorDescription: String? {
             switch self {
@@ -31,10 +67,14 @@ struct AgentToolRunner: Sendable {
             case .missingArgument(let key):  return "Missing argument: \(key)"
             case .decoding(let why):         return "Bad arguments: \(why)"
             case .outsideWorkspace(let p):   return "Path is outside the workspace: \(p)"
+            case .noWorkspace:               return "Agent tools require a workspace folder."
+            case .sensitivePath(let p):       return "Agent tools cannot access sensitive file paths: \(p)"
+            case .approvalDenied(let action): return "\(action) was denied by the user."
             case .bashDisabled:              return "Bash tool disabled. Enable it in Settings → Agent."
             case .bashTimeout:               return "Bash command timed out"
             case .fileNotFound(let p):       return "File not found: \(p)"
             case .stringNotFound:            return "Could not find old_string in file"
+            case .ambiguousString(let n):     return "old_string matched \(n) occurrences; edit_file requires exactly one match."
             }
         }
     }
@@ -147,25 +187,32 @@ struct AgentToolRunner: Sendable {
     private func readFile(input: Data) async throws -> String {
         struct Args: Decodable { let path: String }
         let args = try decode(Args.self, from: input)
-        let url = try resolve(args.path)
+        let url = try resolveExisting(args.path)
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw ToolError.fileNotFound(args.path)
         }
         let text = try String(contentsOf: url, encoding: .utf8)
+        let redacted = SecretRedactor.redact(text)
         // Cap the read so an accidental binary read doesn't eat the context.
-        if text.count > 32_000 {
-            let cap = text.index(text.startIndex, offsetBy: 32_000)
-            return String(text[..<cap]) + "\n\n…(truncated at 32000 chars)"
+        if redacted.count > 32_000 {
+            let cap = redacted.index(redacted.startIndex, offsetBy: 32_000)
+            return String(redacted[..<cap]) + "\n\n…(truncated at 32000 chars)"
         }
-        return text
+        return redacted
     }
 
     private func writeFile(input: Data) async throws -> String {
         struct Args: Decodable { let path: String; let content: String }
         let args = try decode(Args.self, from: input)
-        let url = try resolve(args.path)
+        let url = try resolveForWrite(args.path)
+        try await requireApproval(
+            action: .writeFile,
+            target: args.path,
+            preview: "\(args.content.count) bytes"
+        )
         let dir = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try validateCanonicalURL(url, originalPath: args.path, mustExist: false)
         try args.content.write(to: url, atomically: true, encoding: .utf8)
         return "Wrote \(args.content.count) bytes to \(args.path)"
     }
@@ -173,15 +220,30 @@ struct AgentToolRunner: Sendable {
     private func editFile(input: Data) async throws -> String {
         struct Args: Decodable { let path: String; let old_string: String; let new_string: String }
         let args = try decode(Args.self, from: input)
-        let url = try resolve(args.path)
+        let url = try resolveExisting(args.path)
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw ToolError.fileNotFound(args.path)
         }
-        var text = try String(contentsOf: url, encoding: .utf8)
-        guard text.contains(args.old_string) else {
+        guard !args.old_string.isEmpty else {
             throw ToolError.stringNotFound
         }
-        text = text.replacingOccurrences(of: args.old_string, with: args.new_string)
+        var text = try String(contentsOf: url, encoding: .utf8)
+        let matches = text.components(separatedBy: args.old_string).count - 1
+        guard matches > 0 else {
+            throw ToolError.stringNotFound
+        }
+        guard matches == 1 else {
+            throw ToolError.ambiguousString(matches)
+        }
+        try await requireApproval(
+            action: .editFile,
+            target: args.path,
+            preview: SecretRedactor.redact(String(args.old_string.prefix(240)))
+        )
+        guard let range = text.range(of: args.old_string) else {
+            throw ToolError.stringNotFound
+        }
+        text.replaceSubrange(range, with: args.new_string)
         try text.write(to: url, atomically: true, encoding: .utf8)
         return "Replaced 1 occurrence in \(args.path)"
     }
@@ -189,7 +251,7 @@ struct AgentToolRunner: Sendable {
     private func listDir(input: Data) async throws -> String {
         struct Args: Decodable { let path: String }
         let args = try decode(Args.self, from: input)
-        let url = try resolve(args.path)
+        let url = try resolveExisting(args.path)
         let entries = try FileManager.default.contentsOfDirectory(atPath: url.path)
         return entries.sorted().joined(separator: "\n")
     }
@@ -202,7 +264,12 @@ struct AgentToolRunner: Sendable {
         }
         let args = try decode(Args.self, from: input)
         let timeout = max(1, min(args.timeout_seconds ?? 30, 300))
-        let workingDir = workspaceRoot?.path ?? FileManager.default.homeDirectoryForCurrentUser.path
+        let workingDir = try canonicalWorkspaceRoot().path
+        try await requireApproval(
+            action: .runBash,
+            target: workingDir,
+            preview: SecretRedactor.redact(args.command)
+        )
 
         return try await Task.detached(priority: .userInitiated) {
             let process = Process()
@@ -224,9 +291,9 @@ struct AgentToolRunner: Sendable {
             }
 
             let data = outPipe.fileHandleForReading.readDataToEndOfFile()
-            let raw = String(decoding: data, as: UTF8.self)
+            let raw = SecretRedactor.redact(String(decoding: data, as: UTF8.self))
             let exit = process.terminationStatus
-            let header = "$ \(args.command)\n[exit \(exit)]\n"
+            let header = "$ \(SecretRedactor.redact(args.command))\n[exit \(exit)]\n"
             if raw.count > 16_000 {
                 let cap = raw.index(raw.startIndex, offsetBy: 16_000)
                 return header + String(raw[..<cap]) + "\n…(truncated)"
@@ -237,23 +304,133 @@ struct AgentToolRunner: Sendable {
 
     // MARK: - Helpers
 
-    private func resolve(_ relativePath: String) throws -> URL {
-        guard let root = workspaceRoot else {
-            // No workspace bound: fall back to the user's home directory but
-            // still refuse paths that would escape it.
-            let home = FileManager.default.homeDirectoryForCurrentUser
-            let target = home.appendingPathComponent(relativePath).standardizedFileURL
-            guard target.path.hasPrefix(home.standardizedFileURL.path) else {
-                throw ToolError.outsideWorkspace(relativePath)
-            }
-            return target
+    private func requireApproval(
+        action: AgentToolApprovalRequest.Action,
+        target: String,
+        preview: String
+    ) async throws {
+        guard let approvalHandler else {
+            throw ToolError.approvalDenied(action.label)
         }
-        let canonical = root.standardizedFileURL
-        let target = canonical.appendingPathComponent(relativePath).standardizedFileURL
-        guard target.path == canonical.path || target.path.hasPrefix(canonical.path + "/") else {
+        let request = AgentToolApprovalRequest(
+            action: action,
+            target: target,
+            preview: SecretRedactor.redact(preview)
+        )
+        let approved = await approvalHandler(request)
+        if !approved {
+            throw ToolError.approvalDenied(action.label)
+        }
+    }
+
+    private func resolveExisting(_ relativePath: String) throws -> URL {
+        let target = try workspaceTarget(relativePath)
+        guard FileManager.default.fileExists(atPath: target.path) else {
+            throw ToolError.fileNotFound(relativePath)
+        }
+        return try validateCanonicalURL(target, originalPath: relativePath, mustExist: true)
+    }
+
+    private func resolveForWrite(_ relativePath: String) throws -> URL {
+        let target = try workspaceTarget(relativePath)
+        let parent = target.deletingLastPathComponent()
+        try validateCanonicalURL(parent, originalPath: relativePath, mustExist: false)
+        return target
+    }
+
+    @discardableResult
+    private func validateCanonicalURL(
+        _ url: URL,
+        originalPath: String,
+        mustExist: Bool
+    ) throws -> URL {
+        let root = try canonicalWorkspaceRoot()
+        let candidate: URL
+        if mustExist || FileManager.default.fileExists(atPath: url.path) {
+            candidate = url.resolvingSymlinksInPath().standardizedFileURL
+        } else {
+            candidate = try canonicalizeMissingPath(url)
+        }
+        guard isWithin(candidate, root: root) else {
+            throw ToolError.outsideWorkspace(originalPath)
+        }
+        if isSensitivePath(originalPath) || isSensitivePath(candidate.path) {
+            throw ToolError.sensitivePath(originalPath)
+        }
+        return candidate
+    }
+
+    private func workspaceTarget(_ relativePath: String) throws -> URL {
+        let trimmed = relativePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              !trimmed.hasPrefix("/"),
+              !trimmed.hasPrefix("~"),
+              !trimmed.split(separator: "/").contains(where: { $0 == ".." }) else {
             throw ToolError.outsideWorkspace(relativePath)
         }
-        return target
+        if isSensitivePath(trimmed) {
+            throw ToolError.sensitivePath(relativePath)
+        }
+        return try canonicalWorkspaceRoot()
+            .appendingPathComponent(trimmed)
+            .standardizedFileURL
+    }
+
+    private func canonicalWorkspaceRoot() throws -> URL {
+        guard let root = workspaceRoot else {
+            throw ToolError.noWorkspace
+        }
+        let canonical = root.resolvingSymlinksInPath().standardizedFileURL
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: canonical.path, isDirectory: &isDir),
+              isDir.boolValue else {
+            throw ToolError.noWorkspace
+        }
+        return canonical
+    }
+
+    private func canonicalizeMissingPath(_ url: URL) throws -> URL {
+        let fm = FileManager.default
+        var ancestor = url.deletingLastPathComponent()
+        var missing: [String] = [url.lastPathComponent]
+        while !fm.fileExists(atPath: ancestor.path) {
+            missing.append(ancestor.lastPathComponent)
+            let next = ancestor.deletingLastPathComponent()
+            if next.path == ancestor.path {
+                throw ToolError.outsideWorkspace(url.path)
+            }
+            ancestor = next
+        }
+        var canonical = ancestor.resolvingSymlinksInPath().standardizedFileURL
+        for component in missing.reversed() {
+            canonical.appendPathComponent(component)
+        }
+        return canonical.standardizedFileURL
+    }
+
+    private func isWithin(_ target: URL, root: URL) -> Bool {
+        target.path == root.path || target.path.hasPrefix(root.path + "/")
+    }
+
+    private func isSensitivePath(_ path: String) -> Bool {
+        let lowered = path.lowercased()
+        let parts = lowered.split(separator: "/").map(String.init)
+        let name = parts.last ?? lowered
+
+        if name == ".env" || name.hasPrefix(".env.") { return true }
+        if [".npmrc", ".pypirc", ".netrc", ".git-credentials"].contains(name) { return true }
+        if ["id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"].contains(name) { return true }
+        if ["pem", "p12", "pfx", "key"].contains(URL(fileURLWithPath: name).pathExtension.lowercased()) { return true }
+        if parts.contains(".ssh") || parts.contains(".gnupg") || parts.contains(".aws") || parts.contains(".kube") {
+            return true
+        }
+        if lowered.contains("keychain") || lowered.contains("credential") || lowered.contains("private_key") {
+            return true
+        }
+        if parts.contains("application support") && lowered.contains("loom") {
+            return true
+        }
+        return false
     }
 
     private func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {

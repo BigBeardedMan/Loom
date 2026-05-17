@@ -51,6 +51,7 @@ targets:
         CFBundleDisplayName: "Loom Testing Edition"
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LoomReleaseSignaturePublicKeyBase64: $(LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64)
         NSHumanReadableCopyright: "© 2026 BigBeardedMan"
         CFBundleURLTypes:
           - CFBundleTypeRole: Editor

@@ -265,6 +265,7 @@ export const ipc = {
 
   shell: {
     installIntegration: () => invoke<string>("shell_integration_install"),
+    open: (target: string) => invoke<void>("shell_open", { target }),
   },
 
   commandHistory: {

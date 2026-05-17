@@ -430,7 +430,10 @@ struct WorkspaceView: View {
         case .tasks:
             KanbanPaneView()
         case .agent:
-            AgentPaneView(cwd: selectedWorkspace?.folderURL)
+            AgentPaneView(
+                cwd: selectedWorkspace?.folderURL,
+                handlesExternalRuns: block.id == layout.blocks.first(where: { $0.kind == .agent })?.id
+            )
         case .notes:
             NotesPaneView(workspaceID: layout.selectedWorkspaceID)
         case .preview:

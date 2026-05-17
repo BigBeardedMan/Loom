@@ -3,6 +3,7 @@
 // Replaces the tauri-plugin-updater flow (left registered but unused).
 
 use futures_util::StreamExt;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
@@ -69,7 +70,7 @@ fn windows_native_arch() -> Option<String> {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct GhAsset {
     name: String,
     browser_download_url: String,
@@ -116,7 +117,10 @@ pub async fn update_check() -> Result<Option<UpdateInfo>, String> {
         return Err(format!("GitHub API: HTTP {}", resp.status()));
     }
     let releases: Vec<GhRelease> = resp.json().await.map_err(|e| e.to_string())?;
-    let release = match releases.into_iter().find(|r| r.tag_name.starts_with(TESTING_TAG_PREFIX)) {
+    let release = match releases
+        .into_iter()
+        .find(|r| r.tag_name.starts_with(TESTING_TAG_PREFIX))
+    {
         Some(r) => r,
         None => return Ok(None),
     };
@@ -135,12 +139,29 @@ pub async fn update_check() -> Result<Option<UpdateInfo>, String> {
     let token = arch_token(&arch);
     let asset = release
         .assets
-        .into_iter()
-        .find(|a| a.name.contains(&format!("_{}-setup.exe", token)));
+        .iter()
+        .find(|a| is_valid_installer_name(&a.name, token))
+        .cloned();
     let asset = match asset {
         Some(a) => a,
         None => return Ok(None),
     };
+    if !is_valid_release_asset_url(&asset.browser_download_url, &asset.name) {
+        return Err(format!(
+            "unexpected installer URL: {}",
+            asset.browser_download_url
+        ));
+    }
+    let sig_name = format!("{}.sig", asset.name);
+    let has_signature = release
+        .assets
+        .iter()
+        .any(|a| a.name == sig_name && a.size > 0);
+    if !has_signature {
+        return Err(format!(
+            "installer asset is missing non-empty signature: {sig_name}"
+        ));
+    }
 
     Ok(Some(UpdateInfo {
         version: latest_ver,
@@ -161,26 +182,149 @@ fn staging_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+fn canonical_staging_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    std::fs::canonicalize(staging_dir(app)?).map_err(|e| e.to_string())
+}
+
+fn staged_marker_path(installer: &PathBuf) -> PathBuf {
+    installer.with_extension("exe.staged")
+}
+
+fn is_valid_installer_name(name: &str, token: &str) -> bool {
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return false;
+    }
+    let Ok(re) = Regex::new(
+        r"(?i)^Loom(TestingEdition| Testing Edition)[A-Za-z0-9._ -]*_(x64|arm64)-setup\.exe$",
+    ) else {
+        return false;
+    };
+    re.is_match(name)
+        && name
+            .to_ascii_lowercase()
+            .contains(&format!("_{token}-setup.exe"))
+}
+
+fn is_valid_release_asset_url(asset_url: &str, asset_name: &str) -> bool {
+    let Ok(url) = url::Url::parse(asset_url) else {
+        return false;
+    };
+    if url.scheme() != "https" || url.host_str() != Some("github.com") {
+        return false;
+    }
+    let path = url.path();
+    let encoded_name = asset_name.replace(' ', "%20");
+    path.starts_with("/BigBeardedMan/Loom/releases/download/testing-")
+        && (path.ends_with(&format!("/{asset_name}"))
+            || path.ends_with(&format!("/{encoded_name}")))
+}
+
+fn ensure_staged_installer(app: &AppHandle, installer_path: &str) -> Result<PathBuf, String> {
+    let staging = canonical_staging_dir(app)?;
+    let path = PathBuf::from(installer_path);
+    let canonical = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;
+    let inside = {
+        #[cfg(windows)]
+        {
+            let path_s = canonical.to_string_lossy().to_ascii_lowercase();
+            let root_s = staging.to_string_lossy().to_ascii_lowercase();
+            path_s == root_s || path_s.starts_with(&(root_s + "\\"))
+        }
+        #[cfg(not(windows))]
+        {
+            canonical.starts_with(&staging)
+        }
+    };
+    if !inside {
+        return Err(format!(
+            "installer is outside staging: {}",
+            canonical.display()
+        ));
+    }
+    let name = canonical
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .ok_or_else(|| "installer has no file name".to_string())?;
+    let arch = if name.to_ascii_lowercase().contains("_arm64-setup.exe") {
+        "arm64"
+    } else {
+        "x64"
+    };
+    if !is_valid_installer_name(&name, arch) {
+        return Err(format!("unexpected installer name: {name}"));
+    }
+    let marker = staged_marker_path(&canonical);
+    if !marker.exists() {
+        return Err("installer was not staged by Loom".into());
+    }
+    Ok(canonical)
+}
+
 #[tauri::command]
 pub async fn update_download_and_stage(
     app: AppHandle,
     asset_url: String,
     asset_name: String,
 ) -> Result<String, String> {
+    if !is_valid_installer_name(&asset_name, arch_token(&update_get_arch())) {
+        return Err(format!("unexpected installer name: {asset_name}"));
+    }
+    if !is_valid_release_asset_url(&asset_url, &asset_name) {
+        return Err(format!("unexpected installer URL: {asset_url}"));
+    }
     let staging = staging_dir(&app)?;
     let target = staging.join(&asset_name);
+    let canonical_staging = canonical_staging_dir(&app)?;
+    let canonical_parent = std::fs::canonicalize(
+        target
+            .parent()
+            .ok_or_else(|| "installer path has no parent".to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    if canonical_parent != canonical_staging {
+        return Err("installer target escaped staging".into());
+    }
+    if target.exists() {
+        fs::remove_file(&target).map_err(|e| e.to_string())?;
+    }
+    let marker = staged_marker_path(&target);
+    if marker.exists() {
+        fs::remove_file(&marker).map_err(|e| e.to_string())?;
+    }
 
     let client = reqwest::Client::builder()
         .user_agent(format!("LoomTestingEdition/{}", env!("LOOM_BUILD_CODE")))
         .build()
         .map_err(|e| e.to_string())?;
-    let resp = client.get(&asset_url).send().await.map_err(|e| e.to_string())?;
+    let sig_url = format!("{asset_url}.sig");
+    let sig_resp = client
+        .get(&sig_url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !sig_resp.status().is_success() {
+        return Err(format!("signature download: HTTP {}", sig_resp.status()));
+    }
+    let sig = sig_resp.bytes().await.map_err(|e| e.to_string())?;
+    if sig.is_empty() {
+        return Err("installer signature is empty".into());
+    }
+
+    let resp = client
+        .get(&asset_url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("download: HTTP {}", resp.status()));
     }
     let total = resp.content_length().unwrap_or(0);
 
-    let mut file = fs::File::create(&target).map_err(|e| e.to_string())?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target)
+        .map_err(|e| e.to_string())?;
     let mut downloaded: u64 = 0;
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
@@ -190,6 +334,7 @@ pub async fn update_download_and_stage(
         let _ = app.emit("update/progress", UpdateProgress { downloaded, total });
     }
     file.flush().map_err(|e| e.to_string())?;
+    fs::write(&marker, sig).map_err(|e| e.to_string())?;
     Ok(target.to_string_lossy().to_string())
 }
 
@@ -199,10 +344,7 @@ pub fn update_run_installer(
     installer_path: String,
     exit_app: bool,
 ) -> Result<(), String> {
-    let path = PathBuf::from(&installer_path);
-    if !path.exists() {
-        return Err(format!("installer missing: {}", installer_path));
-    }
+    let path = ensure_staged_installer(&app, &installer_path)?;
 
     // Goal: one-click in-place update. Spawn a detached helper that
     // (1) waits for this Loom.exe to exit so NSIS can overwrite the binary,
@@ -218,13 +360,17 @@ pub fn update_run_installer(
     // non-zero exit code (most often UAC denied or AV quarantined).
     #[cfg(windows)]
     {
-        let exe = std::env::current_exe()
-            .map_err(|e| format!("current_exe: {e}"))?;
+        let installer_path = path.to_string_lossy().to_string();
+        let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
         let exe_path = exe.to_string_lossy().to_string();
         let parent_pid = std::process::id();
 
         let temp = std::env::temp_dir();
-        let batch_path = temp.join(format!("loom-update-{}.bat", parent_pid));
+        let batch_path = temp.join(format!(
+            "loom-update-{}-{}.bat",
+            parent_pid,
+            uuid::Uuid::new_v4()
+        ));
 
         let script = format!(
             "@echo off\r\n\
@@ -260,7 +406,17 @@ echo done >> \"%LOGFILE%\"\r\n\
             exe = exe_path.replace('"', ""),
         );
 
-        fs::write(&batch_path, script).map_err(|e| format!("write helper: {e}"))?;
+        {
+            let mut helper = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&batch_path)
+                .map_err(|e| format!("write helper: {e}"))?;
+            helper
+                .write_all(script.as_bytes())
+                .map_err(|e| format!("write helper: {e}"))?;
+            helper.flush().map_err(|e| format!("write helper: {e}"))?;
+        }
 
         use std::os::windows::process::CommandExt;
         // CREATE_NO_WINDOW gives cmd a hidden console (the black boxes the

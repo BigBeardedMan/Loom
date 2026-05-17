@@ -118,7 +118,7 @@ final class CommandHistoryService {
                 ended: Date(timeIntervalSince1970: TimeInterval(payload.ended)),
                 exitCode: payload.exit,
                 cwd: payload.cwd,
-                command: payload.command,
+                command: SecretRedactor.redact(payload.command),
                 sessionID: payload.session,
                 outputPath: payload.output
             ))
@@ -151,11 +151,12 @@ final class CommandHistoryService {
             return "(output file missing)"
         }
         if data.count <= maxBytes {
-            return String(data: data, encoding: .utf8) ?? "(non-UTF8 output)"
+            let text = String(data: data, encoding: .utf8) ?? "(non-UTF8 output)"
+            return SecretRedactor.redact(text)
         }
         let truncated = data.prefix(maxBytes)
         let prefix = String(data: truncated, encoding: .utf8) ?? "(non-UTF8 output)"
         let dropped = data.count - maxBytes
-        return prefix + "\n\n... (\(dropped) more bytes truncated)"
+        return SecretRedactor.redact(prefix) + "\n\n... (\(dropped) more bytes truncated)"
     }
 }

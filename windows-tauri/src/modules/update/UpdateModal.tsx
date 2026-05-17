@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { ipc, on, type UpdateInfo } from "../../lib/ipc";
 import { Icons } from "../../lib/icons";
 
@@ -164,7 +163,7 @@ export function UpdateModal({ info, onClose }: Props) {
                 Close
               </button>
               <button
-                onClick={() => openExternal(info.releaseNotesUrl).catch(() => {})}
+                onClick={() => ipc.shell.open(info.releaseNotesUrl).catch(() => {})}
                 style={{
                   padding: "6px 14px",
                   fontSize: 12,

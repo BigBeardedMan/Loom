@@ -37,6 +37,8 @@ struct AgentPaneView: View {
     @State private var pendingProposals: [ItemProposal]?
     @State private var orchestrator: AgentOrchestrator?
     @State private var orchestratorTask: Task<Void, Never>?
+    @State private var pendingURLRun: PendingURLRun?
+    @State private var pendingToolApproval: PendingToolApproval?
 
     /// Persisted across panes: when on, local-HTTP providers run through
     /// `AgentOrchestrator` (multi-turn loop, tool calls, task list) instead
@@ -46,9 +48,23 @@ struct AgentPaneView: View {
     @AppStorage("loom.agent.allowBash") private var allowBash: Bool = false
 
     private let cwd: URL?
+    private let handlesExternalRuns: Bool
 
-    init(cwd: URL? = nil) {
+    init(cwd: URL? = nil, handlesExternalRuns: Bool = true) {
         self.cwd = cwd
+        self.handlesExternalRuns = handlesExternalRuns
+    }
+
+    private struct PendingURLRun: Identifiable {
+        let id = UUID()
+        let prompt: String
+        let agentID: String?
+    }
+
+    private struct PendingToolApproval: Identifiable {
+        let request: AgentToolApprovalRequest
+        let continuation: CheckedContinuation<Bool, Never>
+        var id: UUID { request.id }
     }
 
     private var selectedAgent: AgentDescriptor {
@@ -104,31 +120,59 @@ struct AgentPaneView: View {
         .onReceive(NotificationCenter.default.publisher(for: .loomURLAgentRun)) { note in
             handleAgentRunNotification(note)
         }
+        .sheet(item: $pendingURLRun) { request in
+            URLRunConfirmationSheet(
+                prompt: request.prompt,
+                agentLabel: agentLabel(for: request.agentID),
+                onCancel: { pendingURLRun = nil },
+                onRun: { confirmURLRun(request) }
+            )
+        }
+        .sheet(item: $pendingToolApproval) { pending in
+            ToolApprovalSheet(
+                request: pending.request,
+                onDecision: { approve in resolveToolApproval(approve) }
+            )
+            .interactiveDismissDisabled()
+        }
     }
 
     /// Triggered by `loom://run?...` URLs forwarded through `URLSchemeHandler`.
-    /// Switches to the requested agent (if any), turns Agent Mode on for HTTP
-    /// providers, and sends the prompt. Multiple agent panes may exist; the
-    /// notification fires in all of them but `send()` no-ops when already
-    /// busy, so only one will actually start.
+    /// Captures a pending request and asks the user before sending. Multiple
+    /// agent panes may exist, so WorkspaceView marks one visible pane as the
+    /// external-run handler for the active workspace.
     private func handleAgentRunNotification(_ note: Notification) {
+        guard handlesExternalRuns else { return }
         guard let info = note.userInfo,
               let prompt = info["prompt"] as? String,
               !prompt.isEmpty,
               !isWaiting else { return }
 
-        if let agentID = info["agent"] as? String,
-           !agentID.isEmpty,
+        let agentID = (info["agent"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        pendingURLRun = PendingURLRun(
+            prompt: prompt,
+            agentID: (agentID?.isEmpty ?? true) ? nil : agentID
+        )
+    }
+
+    private func confirmURLRun(_ request: PendingURLRun) {
+        if let agentID = request.agentID,
            registry.agents.contains(where: { $0.id == agentID }) {
             registry.selectedAgentID = agentID
         }
 
-        if selectedAgent.vendor.isLocalHTTP {
-            agentMode = true
-        }
-
-        draft = prompt
+        pendingURLRun = nil
+        draft = request.prompt
         send()
+    }
+
+    private func agentLabel(for id: String?) -> String {
+        guard let id,
+              let agent = registry.agents.first(where: { $0.id == id }) else {
+            return pickerRowLabel(for: selectedAgent)
+        }
+        return pickerRowLabel(for: agent)
     }
 
     private var header: some View {
@@ -457,6 +501,23 @@ struct AgentPaneView: View {
         !isWaiting && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    @MainActor
+    private func requestToolApproval(_ request: AgentToolApprovalRequest) async -> Bool {
+        guard pendingToolApproval == nil else { return false }
+        return await withCheckedContinuation { continuation in
+            pendingToolApproval = PendingToolApproval(
+                request: request,
+                continuation: continuation
+            )
+        }
+    }
+
+    private func resolveToolApproval(_ approved: Bool) {
+        guard let pending = pendingToolApproval else { return }
+        pendingToolApproval = nil
+        pending.continuation.resume(returning: approved)
+    }
+
     private func cancelInflight() {
         cliProvider.cancel()
         streamTask?.cancel()
@@ -466,6 +527,7 @@ struct AgentPaneView: View {
         orchestrator?.cancel()
         streaming.cancel()
         pendingProposals = nil
+        resolveToolApproval(false)
         isWaiting = false
     }
 
@@ -521,7 +583,10 @@ struct AgentPaneView: View {
         let workspaceURL = cwd ?? URL(fileURLWithPath: workspace.folderPath, isDirectory: true)
         let runner = AgentToolRunner(
             workspaceRoot: workspace.folderPath.isEmpty ? nil : workspaceURL,
-            allowBash: allowBash
+            allowBash: allowBash,
+            approvalHandler: { request in
+                await requestToolApproval(request)
+            }
         )
         let runtime = AgentOrchestrator(provider: provider, toolRunner: runner, source: agentSource)
         orchestrator = runtime
@@ -551,11 +616,11 @@ struct AgentPaneView: View {
         case .taskListUpdated:
             break
         case .toolStarted(let name, let arguments):
-            let preview = String(arguments.prefix(120))
+            let preview = String(SecretRedactor.redact(arguments).prefix(120))
             streaming.append("\n[tool] \(name) \(preview)\n")
         case .toolFinished(let record):
             let prefix = record.succeeded ? "[ok]" : "[ERR]"
-            let preview = String(record.result.prefix(400))
+            let preview = String(SecretRedactor.redact(record.result).prefix(400))
             streaming.append("\(prefix) \(record.name): \(preview)\n")
         case .completed(let finalText):
             _ = streaming.finish()
@@ -815,6 +880,118 @@ struct AgentPaneView: View {
             }
         }
         return history
+    }
+}
+
+private struct URLRunConfirmationSheet: View {
+    let prompt: String
+    let agentLabel: String
+    let onCancel: () -> Void
+    let onRun: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: "link.badge.plus")
+                    .foregroundStyle(Color(red: 0.95, green: 0.39, blue: 0.18))
+                Text("Confirm Agent Run")
+                    .font(.system(size: 15, weight: .semibold))
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Agent")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text(agentLabel)
+                    .font(.system(size: 12, design: .monospaced))
+                    .textSelection(.enabled)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Prompt")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                ScrollView {
+                    Text(prompt)
+                        .font(.system(size: 12))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(minHeight: 120, maxHeight: 220)
+                .padding(10)
+                .background(Color.white.opacity(0.05))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Run", action: onRun)
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(20)
+        .frame(width: 460)
+    }
+}
+
+private struct ToolApprovalSheet: View {
+    let request: AgentToolApprovalRequest
+    let onDecision: (Bool) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: iconName)
+                    .foregroundStyle(.orange)
+                Text("Approve Tool Call")
+                    .font(.system(size: 15, weight: .semibold))
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(request.action.label)
+                    .font(.system(size: 12, weight: .semibold))
+                Text(request.target)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+
+            if !request.preview.isEmpty {
+                ScrollView {
+                    Text(request.preview)
+                        .font(.system(size: 11, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(minHeight: 80, maxHeight: 180)
+                .padding(10)
+                .background(Color.white.opacity(0.05))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+
+            HStack {
+                Spacer()
+                Button("Deny") { onDecision(false) }
+                    .keyboardShortcut(.cancelAction)
+                Button("Allow Once") { onDecision(true) }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(20)
+        .frame(width: 460)
+    }
+
+    private var iconName: String {
+        switch request.action {
+        case .writeFile, .editFile:
+            return "doc.badge.gearshape"
+        case .runBash:
+            return "terminal"
+        }
     }
 }
 

@@ -1098,20 +1098,21 @@ private struct AgentSettings: View {
     #!/usr/bin/env bash
     # Loom terminal helper. Triggers an agent run inside the Loom macOS app.
     # Usage: loom "your prompt here"
-    #        loom --workspace /path/to/project "your prompt"
+    #        loom --agent AGENT_ID "your prompt"
     set -e
 
-    workspace="$PWD"
     prompt=""
+    agent=""
 
     while [ $# -gt 0 ]; do
         case "$1" in
             --workspace)
-                workspace="$2"; shift 2 ;;
+                echo "warning: --workspace is ignored by this Loom build" >&2
+                shift 2 ;;
             --agent)
                 agent="$2"; shift 2 ;;
             -h|--help)
-                echo "Usage: loom [--workspace DIR] [--agent ID] \\"prompt\\""; exit 0 ;;
+                echo "Usage: loom [--agent ID] \\"prompt\\""; exit 0 ;;
             *)
                 if [ -z "$prompt" ]; then prompt="$1"; else prompt="$prompt $1"; fi
                 shift ;;
@@ -1123,12 +1124,12 @@ private struct AgentSettings: View {
     fi
 
     if [ -z "$prompt" ]; then
-        echo "Usage: loom [--workspace DIR] [--agent ID] \\"prompt\\"" >&2
+        echo "Usage: loom [--agent ID] \\"prompt\\"" >&2
         exit 1
     fi
 
     enc() { python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$1"; }
-    url="loom://run?prompt=$(enc "$prompt")&workspace=$(enc "$workspace")"
+    url="loom://run?prompt=$(enc "$prompt")"
     [ -n "$agent" ] && url="$url&agent=$(enc "$agent")"
     /usr/bin/open "$url"
     """

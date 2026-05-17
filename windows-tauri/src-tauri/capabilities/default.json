@@ -13,7 +13,6 @@
     "core:path:default",
 
     "shell:default",
-    "shell:allow-open",
 
     "dialog:default",
     "dialog:allow-open",
@@ -23,8 +22,6 @@
     "dialog:allow-confirm",
 
     "fs:default",
-    "fs:allow-home-read-recursive",
-    "fs:allow-home-write-recursive",
     "fs:allow-appdata-read-recursive",
     "fs:allow-appdata-write-recursive",
     "fs:allow-appconfig-read-recursive",

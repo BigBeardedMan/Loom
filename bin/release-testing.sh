@@ -17,6 +17,8 @@
 #   - xcodegen, xcodebuild        (dev tools)
 #   - hdiutil                     (built-in, used to build the .dmg)
 #   - gh CLI authenticated        (gh auth login)
+#   - openssl                     (built-in, used to sign the checksum)
+#   - LOOM_RELEASE_SIGNING_KEY_PEM and LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64
 #   - clean working tree on loom-testing-edition
 
 set -euo pipefail
@@ -68,6 +70,16 @@ if ! gh api user >/dev/null 2>&1; then
   exit 1
 fi
 
+if [[ -z "${LOOM_RELEASE_SIGNING_KEY_PEM:-}" ]]; then
+  echo "error: LOOM_RELEASE_SIGNING_KEY_PEM is required to sign the .sha256 sidecar" >&2
+  exit 1
+fi
+
+if [[ -z "${LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64:-}" ]]; then
+  echo "error: LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64 is required for the embedded updater trust key" >&2
+  exit 1
+fi
+
 if git rev-parse --verify "$TAG" >/dev/null 2>&1; then
   echo "error: tag $TAG already exists locally. Bump MARKETING_VERSION in project.yml." >&2
   exit 1
@@ -92,6 +104,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
     -configuration Release \
     -quiet \
     "MARKETING_VERSION=${VERSION}" \
+    "LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64=${LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64}" \
     build
 
 BUILT=$(find "$DERIVED_BASE" -maxdepth 6 -type d -name "Loom Testing Edition.app" -path "*/Build/Products/Release/*" -print -quit)
@@ -131,6 +144,13 @@ CHECKSUM_PATH="${DMG_PATH}.sha256"
 ( cd "$RELEASE_DIR" && /usr/bin/shasum -a 256 "$DMG_NAME" > "$(basename "$CHECKSUM_PATH")" )
 echo "==> sha256: $(awk '{print $1}' "$CHECKSUM_PATH")"
 
+SIGNATURE_PATH="${CHECKSUM_PATH}.sig"
+KEY_FILE=$(mktemp -t loom-release-key)
+printf '%s' "$LOOM_RELEASE_SIGNING_KEY_PEM" > "$KEY_FILE"
+/usr/bin/openssl pkeyutl -sign -rawin -inkey "$KEY_FILE" -in "$CHECKSUM_PATH" | /usr/bin/base64 > "$SIGNATURE_PATH"
+rm -f "$KEY_FILE"
+echo "==> signature: $SIGNATURE_PATH"
+
 # --- Tag + push -------------------------------------------------------------
 
 echo "==> git tag $TAG"
@@ -154,12 +174,12 @@ EOF
 
 if [[ "$REUSE_EXISTING_RELEASE" -eq 1 ]]; then
   echo "==> gh release upload $TAG (append to existing pre-release)"
-  gh release upload "$TAG" "$DMG_PATH" "$CHECKSUM_PATH" \
+  gh release upload "$TAG" "$DMG_PATH" "$CHECKSUM_PATH" "$SIGNATURE_PATH" \
     -R "$REPO" \
     --clobber
 else
   echo "==> gh release create $TAG (pre-release)"
-  gh release create "$TAG" "$DMG_PATH" "$CHECKSUM_PATH" \
+  gh release create "$TAG" "$DMG_PATH" "$CHECKSUM_PATH" "$SIGNATURE_PATH" \
     -R "$REPO" \
     -t "Loom Testing Edition ${VERSION}" \
     --prerelease \

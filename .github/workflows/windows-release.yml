@@ -11,10 +11,12 @@ on:
         required: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -32,7 +34,7 @@ jobs:
         working-directory: windows-tauri
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Derive build code
         id: build_code
@@ -44,21 +46,29 @@ jobs:
           else
             CODE="${GITHUB_REF_NAME#testing-}"
           fi
+          if [[ ! "$CODE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "build code must be MAJOR.MINOR.PATCH semver, got '$CODE'" >&2
+            exit 1
+          fi
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" && "${GITHUB_REF_NAME}" != "testing-${CODE}" ]]; then
+            echo "tag '${GITHUB_REF_NAME}' does not match build code '${CODE}'" >&2
+            exit 1
+          fi
           echo "value=$CODE" >> "$GITHUB_OUTPUT"
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
         with:
           version: 11
           run_install: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22"
           cache: "pnpm"
           cache-dependency-path: windows-tauri/pnpm-lock.yaml
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
           targets: ${{ matrix.target }}
 
@@ -82,7 +92,22 @@ jobs:
           LOOM_BUILD_CODE: ${{ steps.build_code.outputs.value }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: pnpm tauri build --target ${{ matrix.target }}
+          TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" || -z "${TAURI_UPDATER_PUBLIC_KEY:-}" ]]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY and TAURI_UPDATER_PUBLIC_KEY are required" >&2
+            exit 1
+          fi
+          node -e '
+            const fs = require("fs");
+            const path = "src-tauri/tauri.conf.json";
+            const json = JSON.parse(fs.readFileSync(path, "utf8"));
+            json.plugins.updater.pubkey = process.env.TAURI_UPDATER_PUBLIC_KEY;
+            fs.writeFileSync(path, JSON.stringify(json, null, 2) + "\n");
+          '
+          pnpm tauri build --target ${{ matrix.target }}
 
       - name: Stage artifacts
         shell: pwsh
@@ -96,7 +121,7 @@ jobs:
             ForEach-Object { Copy-Item $_.FullName -Destination $out }
           Get-ChildItem $out
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: loom-testing-windows-${{ matrix.artifact_suffix }}
           path: windows-tauri/release-artifacts/*
@@ -106,9 +131,11 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/testing-')
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           path: dist
       - name: Build latest-windows-testing.json
@@ -116,8 +143,20 @@ jobs:
         run: |
           set -euo pipefail
           BUILD_CODE="${GITHUB_REF_NAME#testing-}"
+          if [[ ! "$BUILD_CODE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "bad testing tag: ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
           NSIS_X64=$(find dist -name "*x64-setup.exe" | head -n1)
           NSIS_ARM=$(find dist -name "*arm64-setup.exe" | head -n1)
+          SIG_X64="${NSIS_X64}.sig"
+          SIG_ARM="${NSIS_ARM}.sig"
+          test -s "$NSIS_X64"
+          test -s "$NSIS_ARM"
+          test -s "$SIG_X64"
+          test -s "$SIG_ARM"
+          SIG_X64_BODY=$(tr -d '\r\n' < "$SIG_X64")
+          SIG_ARM_BODY=$(tr -d '\r\n' < "$SIG_ARM")
           NOTES="Loom Testing Edition ${BUILD_CODE}"
           cat > latest-windows-testing.json <<EOF
           {
@@ -126,11 +165,11 @@ jobs:
             "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
             "platforms": {
               "windows-x86_64": {
-                "signature": "",
+                "signature": "${SIG_X64_BODY}",
                 "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/$(basename "$NSIS_X64")"
               },
               "windows-aarch64": {
-                "signature": "",
+                "signature": "${SIG_ARM_BODY}",
                 "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/$(basename "$NSIS_ARM")"
               }
             }
@@ -138,7 +177,7 @@ jobs:
           EOF
           mv latest-windows-testing.json dist/
       - name: Publish pre-release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           files: dist/**/*
           prerelease: true

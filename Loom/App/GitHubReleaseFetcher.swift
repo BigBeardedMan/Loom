@@ -42,6 +42,11 @@ enum GitHubReleaseFetcher {
             let expected = (dmg.name + ".sha256").lowercased()
             return assets.first { $0.name.lowercased() == expected }
         }
+
+        func signatureAsset(for checksum: Asset) -> Asset? {
+            let expected = (checksum.name + ".sig").lowercased()
+            return assets.first { $0.name.lowercased() == expected }
+        }
     }
 
     struct Asset {
@@ -55,9 +60,12 @@ enum GitHubReleaseFetcher {
         case malformedPayload
         case missingAsset
         case missingChecksum
+        case missingSignature
+        case signatureMismatch
         case checksumMismatch(expected: String, actual: String)
         case mountFailed(String)
         case copyFailed(String)
+        case invalidBundle(String)
 
         var errorDescription: String? {
             switch self {
@@ -65,9 +73,12 @@ enum GitHubReleaseFetcher {
             case .malformedPayload:              return "GitHub release payload was malformed."
             case .missingAsset:                  return "Release is missing the Loom.app bundle."
             case .missingChecksum:               return "Release is missing the .sha256 checksum sidecar — refusing to install."
+            case .missingSignature:              return "Release is missing a valid .sha256.sig signature — refusing to install."
+            case .signatureMismatch:             return "Release signature verification failed — refusing to install."
             case .checksumMismatch(let e, let a): return "DMG checksum mismatch (expected \(e.prefix(12))…, got \(a.prefix(12))…) — refusing to install."
             case .mountFailed(let s):            return "Failed to mount DMG: \(s)"
             case .copyFailed(let s):             return "Failed to copy bundle: \(s)"
+            case .invalidBundle(let s):           return "Downloaded app bundle failed validation: \(s)"
             }
         }
     }
@@ -180,7 +191,12 @@ enum GitHubReleaseFetcher {
         guard let checksumAsset = release.checksumAsset(for: dmgAsset) else {
             throw FetcherError.missingChecksum
         }
-        let expectedHex = try await fetchExpectedChecksum(at: checksumAsset.url)
+        guard let signatureAsset = release.signatureAsset(for: checksumAsset) else {
+            throw FetcherError.missingSignature
+        }
+        let checksumBody = try await fetchChecksumBody(at: checksumAsset.url)
+        try await verifySignature(signatureURL: signatureAsset.url, signedData: checksumBody)
+        let expectedHex = try parseExpectedChecksum(from: checksumBody)
         let actualHex = try sha256Hex(of: tempURL)
         guard expectedHex.caseInsensitiveCompare(actualHex) == .orderedSame else {
             throw FetcherError.checksumMismatch(expected: expectedHex, actual: actualHex)
@@ -225,6 +241,7 @@ enum GitHubReleaseFetcher {
         guard FileManager.default.fileExists(atPath: mountedApp.path) else {
             throw FetcherError.missingAsset
         }
+        try validateBundle(at: mountedApp, expectedVersion: release.versionTag)
 
         // 5. Replace the staged bundle.
         let stagedApp = stagingRoot.appendingPathComponent("Loom Testing Edition.app")
@@ -232,6 +249,7 @@ enum GitHubReleaseFetcher {
             try FileManager.default.removeItem(at: stagedApp)
         }
         try FileManager.default.copyItem(at: mountedApp, to: stagedApp)
+        try validateBundle(at: stagedApp, expectedVersion: release.versionTag)
 
         // Strip iCloud xattrs on the staged copy so the in-app swap doesn't
         // trip iCloud "uploading…" rename behavior. We deliberately do NOT
@@ -272,12 +290,66 @@ enum GitHubReleaseFetcher {
         try manifestData.write(to: manifestURL, options: .atomic)
     }
 
+    private static func validateBundle(at appURL: URL, expectedVersion: String) throws {
+        guard appURL.lastPathComponent == "Loom Testing Edition.app" else {
+            throw FetcherError.invalidBundle("unexpected app name \(appURL.lastPathComponent)")
+        }
+        let infoURL = appURL.appendingPathComponent("Contents/Info.plist")
+        guard let data = try? Data(contentsOf: infoURL),
+              let info = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else {
+            throw FetcherError.invalidBundle("missing Info.plist")
+        }
+        guard info["CFBundleIdentifier"] as? String == "com.chasesims.LoomTestingEdition" else {
+            throw FetcherError.invalidBundle("wrong bundle identifier")
+        }
+        guard info["CFBundleName"] as? String == "Loom Testing Edition",
+              info["CFBundleDisplayName"] as? String == "Loom Testing Edition" else {
+            throw FetcherError.invalidBundle("wrong display name")
+        }
+        guard info["CFBundleExecutable"] as? String == "Loom Testing Edition" else {
+            throw FetcherError.invalidBundle("wrong executable name")
+        }
+        let executable = appURL
+            .appendingPathComponent("Contents/MacOS", isDirectory: true)
+            .appendingPathComponent("Loom Testing Edition")
+        guard FileManager.default.isExecutableFile(atPath: executable.path) else {
+            throw FetcherError.invalidBundle("missing executable")
+        }
+        guard info["CFBundleShortVersionString"] as? String == expectedVersion else {
+            throw FetcherError.invalidBundle("version does not match release tag")
+        }
+    }
+
     // MARK: - Checksum helpers
+
+    private static var releaseSignaturePublicKeyBase64: String {
+        Bundle.main.object(forInfoDictionaryKey: "LoomReleaseSignaturePublicKeyBase64") as? String ?? ""
+    }
+
+    private static func verifySignature(signatureURL: URL, signedData: Data) async throws {
+        guard let publicKey = Data(base64Encoded: releaseSignaturePublicKeyBase64),
+              !publicKey.isEmpty else {
+            throw FetcherError.missingSignature
+        }
+        var request = URLRequest(url: signatureURL)
+        request.timeoutInterval = 30
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw FetcherError.badStatus(http.statusCode)
+        }
+        let body = String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let signature = Data(base64Encoded: body) ?? data
+        let key = try Curve25519.Signing.PublicKey(rawRepresentation: publicKey)
+        guard key.isValidSignature(signature, for: signedData) else {
+            throw FetcherError.signatureMismatch
+        }
+    }
 
     /// Fetches the published `.sha256` sidecar and extracts the hex digest.
     /// `shasum` / `sha256sum` output is "<hex>  <filename>"; we accept either
     /// the full line or just the hex (some publishers emit only the digest).
-    private static func fetchExpectedChecksum(at url: URL) async throws -> String {
+    private static func fetchChecksumBody(at url: URL) async throws -> Data {
         var request = URLRequest(url: url)
         // 8.0.18: 30s (was 10s). See note on fetchLatest above.
         request.timeoutInterval = 30
@@ -285,6 +357,10 @@ enum GitHubReleaseFetcher {
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw FetcherError.badStatus(http.statusCode)
         }
+        return data
+    }
+
+    private static func parseExpectedChecksum(from data: Data) throws -> String {
         let body = String(decoding: data, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         // Take the first whitespace-separated token; either "<hex>" alone

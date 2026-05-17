@@ -15,7 +15,33 @@ impl From<keyring::Error> for KeychainError {
 }
 
 fn entry(service: &str, account: &str) -> Result<Entry, KeychainError> {
+    validate_service(service)?;
+    validate_account(account)?;
     Entry::new(service, account).map_err(Into::into)
+}
+
+fn validate_service(service: &str) -> Result<(), KeychainError> {
+    match service {
+        "loom.anthropic" | "loom.endpoint" => Ok(()),
+        _ => Err(KeychainError {
+            message: format!("keychain service is not Loom-owned: {service}"),
+        }),
+    }
+}
+
+fn validate_account(account: &str) -> Result<(), KeychainError> {
+    let valid = !account.trim().is_empty()
+        && account.len() <= 128
+        && account
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if valid {
+        Ok(())
+    } else {
+        Err(KeychainError {
+            message: "keychain account is invalid".into(),
+        })
+    }
 }
 
 #[tauri::command]
@@ -28,12 +54,10 @@ pub fn keychain_get(service: String, account: String) -> Result<Option<String>, 
 }
 
 #[tauri::command]
-pub fn keychain_set(
-    service: String,
-    account: String,
-    value: String,
-) -> Result<(), KeychainError> {
-    entry(&service, &account)?.set_password(&value).map_err(Into::into)
+pub fn keychain_set(service: String, account: String, value: String) -> Result<(), KeychainError> {
+    entry(&service, &account)?
+        .set_password(&value)
+        .map_err(Into::into)
 }
 
 #[tauri::command]
