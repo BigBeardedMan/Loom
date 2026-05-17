@@ -110,16 +110,30 @@ jobs:
           pnpm tauri build --target ${{ matrix.target }}
 
       - name: Stage artifacts
-        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        shell: bash
         run: |
-          $out = "release-artifacts"
-          New-Item -ItemType Directory -Force -Path $out | Out-Null
-          $bundle = "src-tauri/target/${{ matrix.target }}/release/bundle"
-          Get-ChildItem -Path "$bundle/nsis" -Filter *.exe -ErrorAction SilentlyContinue |
-            ForEach-Object { Copy-Item $_.FullName -Destination $out }
-          Get-ChildItem -Path "$bundle/nsis" -Filter *.sig -ErrorAction SilentlyContinue |
-            ForEach-Object { Copy-Item $_.FullName -Destination $out }
-          Get-ChildItem $out
+          set -euo pipefail
+          out="release-artifacts"
+          rm -rf "$out"
+          mkdir -p "$out"
+
+          bundle="src-tauri/target/${{ matrix.target }}/release/bundle/nsis"
+          shopt -s nullglob
+          installers=("$bundle"/*-setup.exe)
+          if (( ${#installers[@]} != 1 )); then
+            echo "expected exactly one NSIS setup installer in $bundle, found ${#installers[@]}" >&2
+            printf 'found: %s\n' "${installers[@]}" >&2
+            exit 1
+          fi
+
+          installer_name="$(basename "${installers[0]}")"
+          cp "${installers[0]}" "$out/$installer_name"
+          pnpm tauri signer sign -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" "$out/$installer_name"
+          test -s "$out/$installer_name.sig"
+          find "$out" -maxdepth 1 -type f -print
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -147,14 +161,17 @@ jobs:
             echo "bad testing tag: ${GITHUB_REF_NAME}" >&2
             exit 1
           fi
+          find dist -maxdepth 3 -type f -print
           NSIS_X64=$(find dist -name "*x64-setup.exe" | head -n1)
           NSIS_ARM=$(find dist -name "*arm64-setup.exe" | head -n1)
           SIG_X64="${NSIS_X64}.sig"
           SIG_ARM="${NSIS_ARM}.sig"
-          test -s "$NSIS_X64"
-          test -s "$NSIS_ARM"
-          test -s "$SIG_X64"
-          test -s "$SIG_ARM"
+          for file in "$NSIS_X64" "$NSIS_ARM" "$SIG_X64" "$SIG_ARM"; do
+            if [[ ! -s "$file" ]]; then
+              echo "missing required Windows release artifact: ${file:-<empty match>}" >&2
+              exit 1
+            fi
+          done
           SIG_X64_BODY=$(tr -d '\r\n' < "$SIG_X64")
           SIG_ARM_BODY=$(tr -d '\r\n' < "$SIG_ARM")
           NOTES="Loom Testing Edition ${BUILD_CODE}"
