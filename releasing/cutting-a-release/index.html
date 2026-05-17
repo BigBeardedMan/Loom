@@ -13,7 +13,7 @@
         <link rel="canonical" href="https://bigbeardedman.github.io/Loom/releasing/cutting-a-release/">
       
       
-        <link rel="prev" href="../../updates/manual-check/">
+        <link rel="prev" href="../current-release-notes/">
       
       
         <link rel="next" href="../project-yml/">
@@ -1608,6 +1608,8 @@
       
         
       
+        
+      
     
     
     
@@ -1652,6 +1654,34 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../current-release-notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Current release notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -2211,8 +2241,9 @@
 </ul>
 <h2 id="the-flow">The flow<a class="headerlink" href="#the-flow" title="Permanent link">&para;</a></h2>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># 1. Bump MARKETING_VERSION (and CURRENT_PROJECT_VERSION) in project.yml.</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># 2. Commit + push.</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>bin/release.sh<span class="w">                 </span><span class="c1"># run from the repo root</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># 2. Update docs/releasing/current-release-notes.md.</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="c1"># 3. Commit + push.</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>bin/release.sh<span class="w">                 </span><span class="c1"># run from the repo root</span>
 </span></code></pre></div>
 <p>What the script does:</p>
 <ol>
@@ -2223,9 +2254,9 @@
 <li><strong>Locates the built <code>.app</code></strong> — searches <code>~/Library/Developer/Xcode/DerivedData/.../Build/Products/Release/Loom.app</code>.</li>
 <li><strong>Packages the DMG</strong> — copies <code>Loom.app</code> and an <code>/Applications</code> alias into a staging temp dir, runs <code>hdiutil create -format UDZO</code>, names the file <code>Loom-&lt;version&gt;.dmg</code>.</li>
 <li><strong>Tags and pushes</strong> — <code>git tag -a vX.Y.Z -m "Loom &lt;version&gt; (&lt;build&gt;)"</code>, <code>git push origin vX.Y.Z</code>.</li>
-<li><strong>Creates the GitHub release</strong> — <code>gh release create vX.Y.Z &lt;dmg&gt; -t "Loom &lt;version&gt;" -F notes.md</code>.</li>
+<li><strong>Creates or updates the GitHub release</strong> — writes the notes from <code>docs/releasing/current-release-notes.md</code>, then attaches the DMG, checksum, and signature.</li>
 </ol>
-<p>The release notes are boilerplate (install steps + auto-update note). If you want a real changelog, edit the heredoc in <code>bin/release.sh</code> or let <code>gh release edit</code> rewrite it after.</p>
+<p>The release notes include <code>docs/releasing/current-release-notes.md</code> plus install and auto-update instructions. Keep that file focused on the update you are about to tag; it is the changelog section that appears on the GitHub release.</p>
 <h2 id="post-release">Post-release<a class="headerlink" href="#post-release" title="Permanent link">&para;</a></h2>
 <p>Every running Loom on every machine picks the new build up via the <a href="../../updates/auto-update/">auto-update</a> path within 60 seconds.</p>
 <h2 id="what-can-go-wrong">What can go wrong<a class="headerlink" href="#what-can-go-wrong" title="Permanent link">&para;</a></h2>

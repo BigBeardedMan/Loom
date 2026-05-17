@@ -3853,6 +3853,8 @@
       
         
       
+        
+      
     
     
     
@@ -3899,6 +3901,34 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../releasing/current-release-notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Current release notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -7535,9 +7565,11 @@ mirrors its in-progress task list in real time.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>~/.claude/tasks/&lt;session-id&gt;/&lt;task-id&gt;.json
 </span></code></pre></div>
 <p>Each JSON file describes one task: id, subject, description, activeForm,
-status. Loom polls this directory every 2 seconds via
-<code>LiveAgentTasksService</code> (off-main-thread JSON decode) and surfaces the
-active tasks grouped by session id.</p>
+status. Loom polls every 2 seconds via <code>LiveAgentTasksService</code>
+(off-main-thread JSON decode) and surfaces active tasks grouped by
+product, model, and session id. Codex model names come from the rollout's
+latest <code>turn_context</code>; Claude model names come from the matching
+<code>~/.claude/projects/.../&lt;session-id&gt;.jsonl</code> when available.</p>
 <h3 id="task-statuses">Task statuses<a class="headerlink" href="#task-statuses" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -7575,7 +7607,8 @@ descending.</p>
 <p>In a Prompt workspace's Tasks pane, live agent tasks appear in their own
 section above the kanban columns:</p>
 <ul>
-<li>Header: <strong>Live . <session-id-prefix></strong> (e.g. <code>Live . 33280421</code>).</li>
+<li>Header: <strong><product> . <model> . <session-id-prefix></strong> (for example,
+  <code>Codex . gpt-5.5 . 019e34ad</code>).</li>
 <li>One row per task, with a status badge.</li>
 <li>Click a task to expand and read its full description and <code>activeForm</code>.</li>
 </ul>
@@ -7631,15 +7664,17 @@ sessions. Loom deliberately ignores those mtimes when computing
 "is this session active" so long-completed sessions do not look alive
 forever. Only <code>.json</code> task-file mtimes count.</p>
 <h3 id="privacy">Privacy<a class="headerlink" href="#privacy" title="Permanent link">&para;</a></h3>
-<p>Loom only reads files under <code>~/.claude/tasks/</code>. Nothing leaves your
-machine. The polling service uses standard <code>FileManager</code> calls and does not
-watch via FSEvents (which would require a separate privacy entitlement).</p>
+<p>Loom only reads files under <code>~/.claude/tasks/</code>, <code>~/.claude/projects/</code>, and
+<code>~/.codex/sessions/</code>. Nothing leaves your machine. The polling service uses
+standard <code>FileManager</code> calls and does not watch via FSEvents (which would
+require a separate privacy entitlement).</p>
 <h3 id="clearing">Clearing<a class="headerlink" href="#clearing" title="Permanent link">&para;</a></h3>
-<p>The trash icon next to a session's header deletes that session's <code>.json</code>
-files. Live CLI sessions will rewrite them on the next turn, so this only
-"sticks" for crashed or zombie sessions.</p>
-<p>The "Clear all" button in the pane header opens a confirmation, then deletes
-every visible session's task files.</p>
+<p>Every session header carries a × icon, and the trash icon in the pane
+header runs "Clear all". Claude sessions delete task JSON files. Codex
+sessions are hidden by a local dismissal timestamp keyed by product, model,
+and session id, because their rollout JSONL also contains conversation
+history. Active log-backed sessions reappear after their next event; stuck
+sessions stay cleared.</p>
 <hr />
 <h2 id="9-task-handoff">9. Task Handoff<a class="headerlink" href="#9-task-handoff" title="Permanent link">&para;</a></h2>
 <p>Kanban cards can carry the next action (a prompt or a shell command) and
@@ -7713,7 +7748,7 @@ sidebar to dismiss. Each tab tints to its CLI's brand color when active.</p>
 </tr>
 <tr>
 <td>Codex</td>
-<td><code>~/.codex/sessions/.../&lt;rollout&gt;.jsonl</code> (cumulative <code>total_token_usage</code> event)</td>
+<td><code>~/.codex/sessions/.../&lt;rollout&gt;.jsonl</code> (line by line)</td>
 </tr>
 <tr>
 <td>Gemini</td>
@@ -7733,6 +7768,15 @@ prompt lines. This drives:</p>
   list).</li>
 <li>Recent prompts (newest first, capped for display).</li>
 </ul>
+<p>For Codex, every rollout JSONL file is scanned line by line for session
+metadata, working directory, model, user prompts, and <code>token_count</code> events.
+Codex reports cumulative <code>total_token_usage</code> values per rollout, so Loom uses
+the latest total in each session, then maps it into the selected timeframe by
+the event timestamp. This drives the same chart and list surfaces as Claude:
+per-bucket activity, token mix, model and project slices, top topics, recent
+prompts, and hour-of-day heatmap. When Codex writes rate-limit snapshots,
+the Codex dashboard also shows primary and secondary limit meters, reset
+times, plan type, credit balance, and the latest observed timestamp.</p>
 <h3 id="timeframes">Timeframes<a class="headerlink" href="#timeframes" title="Permanent link">&para;</a></h3>
 <p>Pick a timeframe at the top of the dashboard:</p>
 <table>
@@ -7791,6 +7835,8 @@ prompt lines. This drives:</p>
 <li>Top projects, top models, top topics.</li>
 <li>An hourly distribution.</li>
 <li>Recent prompts (clickable to expand).</li>
+<li>Codex only: locally logged primary/secondary rate-limit meters and reset
+  times when Codex records that data.</li>
 </ul>
 <p>CLIs that are not installed render an "installed but no data" placeholder
 so the tab still works as a feature-discovery surface.</p>
@@ -7798,7 +7844,8 @@ so the tab still works as a feature-discovery surface.</p>
 <p>The Anthropic console's quota and billing dashboards are the source of
 truth for paid usage. Loom's dashboard is purely a local-disk read of CLI
 session logs. It does not call the Anthropic API or the OpenAI API to look
-up live quotas.</p>
+up live quotas. Codex limit meters are the latest values Codex already wrote
+locally, not a live billing-console lookup.</p>
 <h3 id="privacy_1">Privacy<a class="headerlink" href="#privacy_1" title="Permanent link">&para;</a></h3>
 <p>Same model as the live agent tasks reader. Loom only reads
 <code>~/.claude/projects/</code>, <code>~/.codex/sessions/</code>, and <code>~/.gemini/</code>. Nothing
@@ -8447,7 +8494,7 @@ The security model is built around four ideas:</p>
 </tr>
 <tr>
 <td><code>~/.codex/sessions/.../&lt;rollout&gt;.jsonl</code></td>
-<td>Usage dashboard (Codex <code>total_token_usage</code>)</td>
+<td>Usage dashboard (Codex totals, per-bucket activity, per-model/per-project rollups, prompts, and locally logged rate-limit snapshots)</td>
 </tr>
 <tr>
 <td><code>~/.gemini/...</code></td>
@@ -8597,8 +8644,9 @@ item; deleting an endpoint deletes its item.</p>
 <h2 id="17-releasing-a-new-build">17. Releasing a New Build<a class="headerlink" href="#17-releasing-a-new-build" title="Permanent link">&para;</a></h2>
 <p>Loom's release script is <code>bin/release.sh</code>. Run from the repo root:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># 1. Bump MARKETING_VERSION (and CURRENT_PROJECT_VERSION) in project.yml.</span>
-</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="c1"># 2. Commit + push.</span>
-</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>bin/release.sh
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="c1"># 2. Update docs/releasing/current-release-notes.md.</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="c1"># 3. Commit + push.</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>bin/release.sh
 </span></code></pre></div>
 <h3 id="prereqs">Prereqs<a class="headerlink" href="#prereqs" title="Permanent link">&para;</a></h3>
 <ul>
@@ -8623,8 +8671,9 @@ item; deleting an endpoint deletes its item.</p>
 <li>Compute SHA-256 of the DMG; write a <code>.sha256</code> sidecar file.</li>
 <li>Tag and push: <code>git tag -a v&lt;version&gt; -m "Loom &lt;version&gt; (&lt;build&gt;)"</code>,
    <code>git push origin v&lt;version&gt;</code>.</li>
-<li>Create the GitHub release via <code>gh release create</code> with both the DMG
-    and the <code>.sha256</code> sidecar attached.</li>
+<li>Create or update the GitHub release with the release notes from
+    <code>docs/releasing/current-release-notes.md</code>, plus the DMG, <code>.sha256</code>
+    sidecar, and <code>.sha256.sig</code> signature attached.</li>
 </ol>
 <h3 id="post-release">Post-release<a class="headerlink" href="#post-release" title="Permanent link">&para;</a></h3>
 <p>Every running Loom on every machine picks the new build up via the
