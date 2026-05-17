@@ -1422,7 +1422,7 @@ the latest total in each session, then maps it into the selected timeframe by
 the event timestamp. This drives the same chart and list surfaces as Claude:
 per-bucket activity, token mix, model and project slices, top topics, recent
 prompts, and hour-of-day heatmap. When Codex writes rate-limit snapshots,
-the dedicated Limits view shows primary and secondary limit meters, reset
+the Codex dashboard also shows primary and secondary limit meters, reset
 times, plan type, credit balance, and the latest observed timestamp.
 
 ### Timeframes
@@ -1437,10 +1437,6 @@ Pick a timeframe at the top of the dashboard:
 | Year | 12 monthly buckets | Last 365 days (rolling) |
 
 Switching timeframe triggers a full snapshot recompute.
-
-The **Limits** button sits beside the timeframe buttons. It switches the
-same Claude, Codex, or Gemini dashboard into a local limit-signal view
-without changing the selected timeframe.
 
 ### Refresh cadence
 
@@ -1468,10 +1464,8 @@ Each tab opens a single-CLI dashboard tinted with that CLI's brand color
 - Top projects, top models, top topics.
 - An hourly distribution.
 - Recent prompts (clickable to expand).
-- A separate Limits view. Codex shows locally logged primary/secondary
-  rate-limit meters and reset times when Codex records that data. Claude
-  and Gemini show an honest no-local-signal state until their CLIs expose
-  readable local limit logs.
+- Codex only: locally logged primary/secondary rate-limit meters and reset
+  times when Codex records that data.
 
 CLIs that are not installed render an "installed but no data" placeholder
 so the tab still works as a feature-discovery surface.
@@ -1482,8 +1476,7 @@ The Anthropic console's quota and billing dashboards are the source of
 truth for paid usage. Loom's dashboard is purely a local-disk read of CLI
 session logs. It does not call the Anthropic API or the OpenAI API to look
 up live quotas. Codex limit meters are the latest values Codex already wrote
-locally, not a live billing-console lookup. Claude and Gemini Limits do not
-invent quota numbers when their local logs do not expose them.
+locally, not a live billing-console lookup.
 
 ### Privacy
 
