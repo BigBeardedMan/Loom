@@ -26,7 +26,7 @@ REPO="BigBeardedMan/Loom"
 OPENSSL_BIN="${LOOM_OPENSSL_BIN:-}"
 RELEASE_NOTES_SOURCE="${PROJECT_ROOT}/docs/releasing/current-release-notes.md"
 SIGNING_KEYCHAIN_SERVICE="com.chasesims.Loom.release-signing"
-SIGNING_KEYCHAIN_PRIVATE_ACCOUNT="production-private-pem"
+SIGNING_KEYCHAIN_PRIVATE_ACCOUNT="production-private-pem-base64"
 SIGNING_KEYCHAIN_PUBLIC_ACCOUNT="production-public-base64"
 SIGNING_KEY_FALLBACK="${HOME}/.loom/release-signing/loom-production-ed25519.pem"
 SIGNING_PUBLIC_FALLBACK="${HOME}/.loom/release-signing/loom-production-ed25519-public-base64.txt"
@@ -47,10 +47,11 @@ cd "$PROJECT_ROOT"
 # env vars for CI/manual overrides, then Keychain, then the local bootstrap
 # files used on this Mac. Never print secret values.
 if [[ -z "${LOOM_RELEASE_SIGNING_KEY_PEM:-}" ]]; then
-  if LOOM_RELEASE_SIGNING_KEY_PEM=$(/usr/bin/security find-generic-password \
+  if encoded_private_key=$(/usr/bin/security find-generic-password \
       -s "$SIGNING_KEYCHAIN_SERVICE" \
       -a "$SIGNING_KEYCHAIN_PRIVATE_ACCOUNT" \
-      -w 2>/dev/null) && [[ -n "$LOOM_RELEASE_SIGNING_KEY_PEM" ]]; then
+      -w 2>/dev/null) && [[ -n "$encoded_private_key" ]]; then
+    LOOM_RELEASE_SIGNING_KEY_PEM=$(printf '%s' "$encoded_private_key" | /usr/bin/base64 -D)
     export LOOM_RELEASE_SIGNING_KEY_PEM
     echo "==> loaded release signing private key from Keychain"
   elif [[ -s "$SIGNING_KEY_FALLBACK" ]]; then
