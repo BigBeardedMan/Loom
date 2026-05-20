@@ -1160,6 +1160,10 @@ private struct AgentSettings: View {
     @AppStorage("loom.lmstudio.plannerModel") private var lmStudioPlannerModel: String = ""
     @AppStorage("loom.lmstudio.coderModel") private var lmStudioCoderModel: String = ""
     @AppStorage("loom.lmstudio.routingEnabled") private var lmStudioRoutingEnabled: Bool = false
+    @AppStorage("loom.lmstudio.workbenchEnabled") private var lmStudioWorkbenchEnabled: Bool = true
+    @AppStorage("loom.lmstudio.autoPrepare") private var lmStudioAutoPrepare: Bool = true
+    @AppStorage("loom.agent.autoVerify") private var autoVerify: Bool = true
+    @AppStorage("loom.agent.previewSnapshots") private var previewSnapshots: Bool = false
     @State private var helperStatus: HelperStatus = .unknown
     @State private var helperError: String?
 
@@ -1208,9 +1212,29 @@ private struct AgentSettings: View {
                 Text("After file-editing runs, Loom adds a Review changes block with changed files, tool issues, and a git diff summary when available.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                Toggle("Auto-run verification after edits", isOn: $autoVerify)
+                Text("Runs read-only git checks and an inferred test/build command when the local agent changes files.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Check Preview pane URL during verification", isOn: $previewSnapshots)
+                Text("When a Preview pane exists, verification also checks the preview URL and records its HTTP status.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("LM Studio Runtime") {
+                Toggle("Use Agent Workbench for LM Studio", isOn: $lmStudioWorkbenchEnabled)
+                Text("Shows the LM Studio run as a cockpit with plan, tool timeline, changed files, and verification results.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Auto-prepare stopped LM Studio server", isOn: $lmStudioAutoPrepare)
+                Text("When the LM Studio pane opens and the server is stopped, Loom can start the daemon and load the selected model for agent work.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 Toggle("Auto-scale loaded model context", isOn: $lmStudioAutoScale)
                 Stepper(value: $lmStudioMaxContext, in: 4_096...131_072, step: 4_096) {
                     Text("Context target: \(lmStudioMaxContext.formatted())")

@@ -26,6 +26,7 @@ struct AgentMessage: Identifiable, Hashable {
 struct AgentPaneView: View {
     @Environment(AgentRegistry.self) private var registry
     @Environment(LocalEndpointStore.self) private var endpoints
+    @Environment(LMStudioRuntimeService.self) private var lmStudioRuntime
     @Environment(WorkspaceContext.self) private var workspace
     @Environment(WorkspaceLayout.self) private var layout
     @State private var cliProvider = CLIAgentProvider()
@@ -44,7 +45,13 @@ struct AgentPaneView: View {
     @State private var pendingRunReview: String?
     @State private var compactionCount: Int = 0
     @State private var showRenameSession: Bool = false
+    @State private var showSessionBrowser: Bool = false
     @State private var renameDraft: String = ""
+    @State private var workbenchEvents: [AgentWorkbenchEvent] = []
+    @State private var workbenchTasks: [LiveAgentTask] = []
+    @State private var changedFiles: [String] = []
+    @State private var verificationResults: [AgentVerificationResult] = []
+    @State private var isRunningVerification: Bool = false
 
     /// Persisted across panes: when on, local-HTTP providers run through
     /// `AgentOrchestrator` (multi-turn loop, tool calls, task list) instead
@@ -59,6 +66,10 @@ struct AgentPaneView: View {
     @AppStorage("loom.lmstudio.coderModel") private var lmStudioCoderModel: String = ""
     @AppStorage("loom.lmstudio.autoScale") private var lmStudioAutoScale: Bool = true
     @AppStorage("loom.lmstudio.maxContext") private var lmStudioMaxContext: Int = 65_536
+    @AppStorage("loom.lmstudio.workbenchEnabled") private var lmStudioWorkbenchEnabled: Bool = true
+    @AppStorage("loom.lmstudio.autoPrepare") private var lmStudioAutoPrepare: Bool = true
+    @AppStorage("loom.agent.autoVerify") private var autoVerifyAgentRuns: Bool = true
+    @AppStorage("loom.agent.previewSnapshots") private var previewSnapshots: Bool = false
 
     private let cwd: URL?
     private let handlesExternalRuns: Bool
@@ -117,47 +128,15 @@ struct AgentPaneView: View {
         "\(sessionWorkspaceKey)|\(selectedAgent.id)"
     }
 
+    private var showsLMStudioWorkbench: Bool {
+        selectedAgent.vendor == .lmstudio && effectiveAgentMode && lmStudioWorkbenchEnabled
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        if messages.isEmpty && !isWaiting {
-                            placeholder
-                                .padding(.top, 40)
-                        }
-                        ForEach($messages) { $msg in
-                            messageBubble($msg)
-                                .id(msg.id)
-                        }
-                        StreamingBubble(state: streaming, label: assistantLabel)
-                            .id("__streaming__")
-                        if let error {
-                            errorBanner(error).id("err")
-                        }
-                    }
-                    .padding(12)
-                }
-                .onChange(of: messages.last?.id) { _, last in
-                    guard let last else { return }
-                    // No animation while a stream is in flight — token-by-token
-                    // animations chain and stutter. Snap on commit.
-                    if isWaiting {
-                        proxy.scrollTo(last, anchor: .bottom)
-                    } else {
-                        withAnimation(.easeOut(duration: 0.15)) {
-                            proxy.scrollTo(last, anchor: .bottom)
-                        }
-                    }
-                }
-                .onChange(of: streaming.isActive) { _, active in
-                    if active {
-                        proxy.scrollTo("__streaming__", anchor: .bottom)
-                    }
-                }
-            }
+            conversationArea
 
             Divider().overlay(Color.white.opacity(0.10))
             if selectedAgent.vendor == .lmstudio {
@@ -198,8 +177,85 @@ struct AgentPaneView: View {
                 }
             )
         }
+        .sheet(isPresented: $showSessionBrowser) {
+            LMStudioSessionBrowserSheet(
+                loomSessions: sessionStore.summaries,
+                cliSessions: sessionStore.cliSessions,
+                onResumeLoom: { summary in
+                    resumeLMStudioSession(summary)
+                    showSessionBrowser = false
+                },
+                onResumeCLI: { summary in
+                    resumeLMStudioCLISession(summary)
+                    showSessionBrowser = false
+                },
+                onDeleteLoom: { summary in
+                    sessionStore.delete(
+                        summary,
+                        workspaceKey: sessionWorkspaceKey,
+                        workspacePath: sessionWorkspacePath
+                    )
+                },
+                onClose: { showSessionBrowser = false }
+            )
+        }
         .task(id: sessionScopeKey) {
             sessionStore.load(workspaceKey: sessionWorkspaceKey, workspacePath: sessionWorkspacePath)
+            await refreshLMStudioRuntimeIfNeeded()
+            if selectedAgent.vendor == .lmstudio,
+               lmStudioAutoPrepare,
+               lmStudioRuntime.serverState == .stopped {
+                await prepareLMStudioForAgentWork()
+            }
+        }
+    }
+
+    private var conversationArea: some View {
+        HStack(spacing: 0) {
+            transcriptScroll
+            if showsLMStudioWorkbench {
+                Divider().overlay(Color.white.opacity(0.10))
+                lmStudioWorkbenchPanel
+                    .frame(width: 340)
+            }
+        }
+    }
+
+    private var transcriptScroll: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    if messages.isEmpty && !isWaiting {
+                        placeholder
+                            .padding(.top, 40)
+                    }
+                    ForEach($messages) { $msg in
+                        messageBubble($msg)
+                            .id(msg.id)
+                    }
+                    StreamingBubble(state: streaming, label: assistantLabel)
+                        .id("__streaming__")
+                    if let error {
+                        errorBanner(error).id("err")
+                    }
+                }
+                .padding(12)
+            }
+            .onChange(of: messages.last?.id) { _, last in
+                guard let last else { return }
+                if isWaiting {
+                    proxy.scrollTo(last, anchor: .bottom)
+                } else {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        proxy.scrollTo(last, anchor: .bottom)
+                    }
+                }
+            }
+            .onChange(of: streaming.isActive) { _, active in
+                if active {
+                    proxy.scrollTo("__streaming__", anchor: .bottom)
+                }
+            }
         }
     }
 
@@ -358,6 +414,11 @@ struct AgentPaneView: View {
                 startNewLMStudioSession()
             } label: {
                 Label("New Session", systemImage: "plus")
+            }
+            Button {
+                showSessionBrowser = true
+            } label: {
+                Label("Browse Sessions", systemImage: "rectangle.stack")
             }
 
             if !messages.isEmpty {
@@ -712,6 +773,241 @@ struct AgentPaneView: View {
         return bits.joined(separator: " · ")
     }
 
+    private var lmStudioWorkbenchPanel: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                runtimeCard
+                if !workbenchTasks.isEmpty {
+                    workbenchSection("Plan", systemImage: "checklist") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(workbenchTasks) { task in
+                                HStack(alignment: .top, spacing: 6) {
+                                    Image(systemName: taskIcon(task.status))
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundStyle(taskColor(task.status))
+                                        .frame(width: 14)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(task.subject)
+                                            .font(.system(size: 11, weight: .semibold))
+                                            .lineLimit(2)
+                                        if !task.activeForm.isEmpty, task.activeForm != task.subject {
+                                            Text(task.activeForm)
+                                                .font(.system(size: 10))
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(2)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if !changedFiles.isEmpty {
+                    workbenchSection("Changed Files", systemImage: "doc.badge.gearshape") {
+                        VStack(alignment: .leading, spacing: 5) {
+                            ForEach(changedFiles.prefix(12), id: \.self) { path in
+                                Text(path)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                        }
+                    }
+                }
+
+                workbenchSection("Verification", systemImage: "checkmark.seal") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Button {
+                                Task { await runVerificationFromWorkbench(force: true) }
+                            } label: {
+                                Label(isRunningVerification ? "Running" : "Run", systemImage: "play.fill")
+                            }
+                            .controlSize(.small)
+                            .disabled(isRunningVerification || changedFiles.isEmpty)
+                            Spacer()
+                            Text(autoVerifyAgentRuns ? "Auto" : "Manual")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(autoVerifyAgentRuns ? .green : .secondary)
+                        }
+
+                        if verificationResults.isEmpty {
+                            Text(changedFiles.isEmpty ? "No edits to verify yet." : "Verification has not run yet.")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(verificationResults) { result in
+                                verificationRow(result)
+                            }
+                        }
+                    }
+                }
+
+                workbenchSection("Timeline", systemImage: "list.bullet.rectangle") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if workbenchEvents.isEmpty {
+                            Text("Agent activity appears here during the run.")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(workbenchEvents.prefix(24)) { event in
+                                workbenchEventRow(event)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(12)
+        }
+        .background(Color.black.opacity(0.18))
+    }
+
+    private var runtimeCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "cpu")
+                    .foregroundStyle(Color(red: 0.62, green: 0.40, blue: 0.95))
+                Text("LM Studio")
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Label(lmStudioRuntime.serverState.label, systemImage: runtimeStatusIcon)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(runtimeStatusColor)
+            }
+
+            if let model = lmStudioRuntime.recommendedModel {
+                Text(model.id)
+                    .font(.system(size: 10, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if !model.detail.isEmpty {
+                    Text(model.detail)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            } else {
+                Text(runtimeEmptyStateText)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+
+            if let error = lmStudioRuntime.lastError {
+                Text(error)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.orange)
+                    .lineLimit(3)
+            }
+
+            HStack(spacing: 8) {
+                Button {
+                    Task { await refreshLMStudioRuntimeIfNeeded() }
+                } label: {
+                    Label(lmStudioRuntime.isRefreshing ? "Checking" : "Refresh", systemImage: "arrow.clockwise")
+                }
+                .controlSize(.small)
+                .disabled(lmStudioRuntime.isRefreshing || lmStudioRuntime.isPreparing)
+
+                Button {
+                    Task { await prepareLMStudioForAgentWork() }
+                } label: {
+                    Label(lmStudioRuntime.isPreparing ? "Preparing" : "Prepare", systemImage: "wand.and.stars")
+                }
+                .controlSize(.small)
+                .buttonStyle(.borderedProminent)
+                .disabled(lmStudioRuntime.isPreparing)
+            }
+        }
+        .padding(10)
+        .background(Color.white.opacity(0.05))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func workbenchSection<Content: View>(
+        _ title: String,
+        systemImage: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text(title)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            content()
+        }
+        .padding(10)
+        .background(Color.white.opacity(0.035))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.white.opacity(0.07), lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func workbenchEventRow(_ event: AgentWorkbenchEvent) -> some View {
+        HStack(alignment: .top, spacing: 7) {
+            Image(systemName: event.systemImage)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(eventColor(event.status))
+                .frame(width: 14)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(event.title)
+                        .font(.system(size: 10, weight: .semibold))
+                        .lineLimit(1)
+                    Text(event.status.label)
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(eventColor(event.status))
+                }
+                if !event.detail.isEmpty {
+                    Text(event.detail)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                }
+            }
+        }
+    }
+
+    private func verificationRow(_ result: AgentVerificationResult) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: result.succeeded ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(result.succeeded ? .green : .red)
+                Text(result.title)
+                    .font(.system(size: 10, weight: .semibold))
+                Spacer()
+                Text(String(format: "%.1fs", result.duration))
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+            }
+            if let command = result.command {
+                Text(command)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Text(result.output.isEmpty ? "(no output)" : result.output)
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(5)
+                .textSelection(.enabled)
+        }
+    }
+
     private var permissionModePicker: some View {
         Menu {
             ForEach(AgentPermissionMode.allCases) { mode in
@@ -747,7 +1043,10 @@ struct AgentPaneView: View {
             workspaceName: workspace.workspaceName.isEmpty ? "Workspace" : workspace.workspaceName,
             workspacePath: sessionWorkspacePath,
             modelLabel: selectedAgent.model ?? selectedAgent.displayName,
-            compactedCount: compactionCount
+            compactedCount: compactionCount,
+            finalStatus: latestRunStatus,
+            changedFiles: changedFiles,
+            verificationSummary: verificationResults.isEmpty ? nil : verificationSummary(verificationResults)
         )
     }
 
@@ -845,6 +1144,202 @@ struct AgentPaneView: View {
         return found.prefix(3).joined(separator: ", ") + " +\(found.count - 3)"
     }
 
+    private var runtimeStatusIcon: String {
+        switch lmStudioRuntime.serverState {
+        case .unknown:    return "circle.dotted"
+        case .missingCLI: return "exclamationmark.triangle"
+        case .stopped:    return "circle"
+        case .running:    return "circle.fill"
+        }
+    }
+
+    private var runtimeStatusColor: Color {
+        switch lmStudioRuntime.serverState {
+        case .running:    return .green
+        case .missingCLI: return .orange
+        case .stopped:    return .secondary
+        case .unknown:    return .secondary
+        }
+    }
+
+    private var runtimeEmptyStateText: String {
+        switch lmStudioRuntime.serverState {
+        case .missingCLI:
+            return "`lms` is missing. Open LM Studio once and enable the CLI."
+        case .stopped:
+            return "Server is stopped. Prepare can start the daemon and load a model."
+        case .running:
+            return "Server is running, but no models were found."
+        case .unknown:
+            return "Runtime has not been checked yet."
+        }
+    }
+
+    private var latestRunStatus: String? {
+        if isWaiting { return "running" }
+        if verificationResults.contains(where: { !$0.succeeded }) { return "needs_attention" }
+        if !verificationResults.isEmpty { return "verified" }
+        if !changedFiles.isEmpty { return "edited" }
+        return nil
+    }
+
+    private func taskIcon(_ status: LiveAgentTaskStatus) -> String {
+        switch status {
+        case .pending:    return "circle"
+        case .inProgress: return "arrow.triangle.2.circlepath"
+        case .completed:  return "checkmark.circle.fill"
+        case .cancelled:  return "minus.circle"
+        case .deleted:    return "trash"
+        }
+    }
+
+    private func taskColor(_ status: LiveAgentTaskStatus) -> Color {
+        switch status {
+        case .pending:    return .secondary
+        case .inProgress: return .blue
+        case .completed:  return .green
+        case .cancelled:  return .orange
+        case .deleted:    return .red
+        }
+    }
+
+    private func eventColor(_ status: AgentWorkbenchEvent.Status) -> Color {
+        switch status {
+        case .running:   return .blue
+        case .succeeded: return .green
+        case .failed:    return .red
+        case .info:      return .secondary
+        }
+    }
+
+    private func toolIcon(_ name: String) -> String {
+        switch name {
+        case "read_file":        return "doc.text"
+        case "write_file":       return "square.and.pencil"
+        case "edit_file":        return "pencil.line"
+        case "list_dir":         return "folder"
+        case "run_bash", "run_test": return "terminal"
+        case "git_status", "git_diff": return "arrow.triangle.branch"
+        case "preview_snapshot": return "globe"
+        case "update_tasks":     return "checklist"
+        default:                 return "wrench.adjustable"
+        }
+    }
+
+    private func refreshLMStudioRuntimeIfNeeded() async {
+        guard selectedAgent.vendor == .lmstudio else { return }
+        await lmStudioRuntime.refresh(
+            baseURL: selectedLMStudioEndpointURL(),
+            selectedModel: selectedAgent.model
+        )
+    }
+
+    private func prepareLMStudioForAgentWork() async {
+        guard selectedAgent.vendor == .lmstudio else { return }
+        let model = await lmStudioRuntime.prepareForAgentWork(
+            baseURL: selectedLMStudioEndpointURL(),
+            preferredModel: selectedAgent.model,
+            contextTarget: lmStudioMaxContext,
+            autoScale: lmStudioAutoScale
+        )
+        appendWorkbenchEvent(
+            title: model == nil ? "Prepare failed" : "Prepared LM Studio",
+            detail: model ?? (lmStudioRuntime.lastError ?? "Unknown error"),
+            status: model == nil ? .failed : .succeeded,
+            systemImage: model == nil ? "exclamationmark.triangle" : "wand.and.stars"
+        )
+        await registry.refresh(localEndpoints: endpoints.endpoints)
+        if let model,
+           let endpointID = selectedAgent.endpointID {
+            let targetID = "lmstudio:\(endpointID.uuidString):\(model)"
+            if registry.agents.contains(where: { $0.id == targetID }) {
+                registry.selectedAgentID = targetID
+            }
+        }
+    }
+
+    private func resetWorkbenchForRun() {
+        workbenchEvents = []
+        workbenchTasks = []
+        changedFiles = []
+        verificationResults = []
+        isRunningVerification = false
+    }
+
+    private func appendWorkbenchEvent(
+        title: String,
+        detail: String,
+        status: AgentWorkbenchEvent.Status,
+        systemImage: String
+    ) {
+        workbenchEvents.insert(AgentWorkbenchEvent(
+            title: title,
+            detail: detail,
+            status: status,
+            systemImage: systemImage
+        ), at: 0)
+    }
+
+    private func recordChangedFile(from record: AgentOrchestrator.ToolCallRecord) {
+        guard record.succeeded,
+              record.name == "write_file" || record.name == "edit_file",
+              let data = record.arguments.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let path = dict["path"] as? String,
+              !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !changedFiles.contains(path) else {
+            return
+        }
+        changedFiles.append(path)
+    }
+
+    private func runVerificationFromWorkbench(force: Bool) async {
+        guard force || autoVerifyAgentRuns else { return }
+        guard !isRunningVerification, !changedFiles.isEmpty else { return }
+        isRunningVerification = true
+        appendWorkbenchEvent(
+            title: "Verification started",
+            detail: "\(changedFiles.count) changed file\(changedFiles.count == 1 ? "" : "s")",
+            status: .running,
+            systemImage: "checkmark.seal"
+        )
+        let workspaceURL = cwd ?? (workspace.folderPath.isEmpty ? nil : URL(fileURLWithPath: workspace.folderPath, isDirectory: true))
+        let results = await AgentVerificationService.run(
+            workspaceRoot: workspaceURL,
+            changedFiles: changedFiles,
+            previewURL: previewSnapshots ? activePreviewURL() : nil
+        )
+        verificationResults = results
+        isRunningVerification = false
+        let failed = results.filter { !$0.succeeded }
+        appendWorkbenchEvent(
+            title: failed.isEmpty ? "Verification passed" : "Verification needs attention",
+            detail: results.isEmpty ? "No verification jobs were available." : "\(results.count) job\(results.count == 1 ? "" : "s"), \(failed.count) failed",
+            status: failed.isEmpty ? .succeeded : .failed,
+            systemImage: failed.isEmpty ? "checkmark.seal.fill" : "xmark.seal"
+        )
+        if !results.isEmpty {
+            let summary = verificationSummary(results)
+            messages.append(AgentMessage(role: .system, text: summary))
+            persistLMStudioSession()
+        }
+    }
+
+    private func verificationSummary(_ results: [AgentVerificationResult]) -> String {
+        var lines = ["### Verification results"]
+        for result in results {
+            lines.append("- \(result.succeeded ? "PASS" : "FAIL") \(result.title)\(result.command.map { " (`\($0)`)" } ?? "")")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func activePreviewURL() -> URL? {
+        guard let raw = layout.blocks.first(where: { $0.kind == .preview })?.effectivePreviewURL else {
+            return nil
+        }
+        return URL(string: raw)
+    }
+
     private var canSend: Bool {
         !isWaiting && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -885,6 +1380,9 @@ struct AgentPaneView: View {
         guard !prompt.isEmpty, !isWaiting else { return }
         draft = ""
         error = nil
+        if selectedAgent.vendor == .lmstudio {
+            resetWorkbenchForRun()
+        }
         let userMsg = AgentMessage(role: .user, text: prompt)
         messages.append(userMsg)
         streaming.begin()
@@ -963,23 +1461,60 @@ struct AgentPaneView: View {
             if index > 1 {
                 streaming.append("\n\n— turn \(index) —\n")
             }
+            appendWorkbenchEvent(
+                title: "Turn \(index)",
+                detail: index == 1 ? "Agent run started." : "Continuing with tool results.",
+                status: .running,
+                systemImage: "arrow.triangle.2.circlepath"
+            )
         case .turnFinished:
             break
-        case .taskListUpdated:
-            break
+        case .taskListUpdated(let tasks):
+            workbenchTasks = tasks
+            appendWorkbenchEvent(
+                title: "Plan updated",
+                detail: "\(tasks.count) task\(tasks.count == 1 ? "" : "s")",
+                status: .info,
+                systemImage: "checklist"
+            )
         case .toolStarted(let name, let arguments):
             let preview = String(SecretRedactor.redact(arguments).prefix(120))
             streaming.append("\n[tool] \(name) \(preview)\n")
+            appendWorkbenchEvent(
+                title: name,
+                detail: preview,
+                status: .running,
+                systemImage: toolIcon(name)
+            )
         case .toolFinished(let record):
             let prefix = record.succeeded ? "[ok]" : "[ERR]"
             let preview = String(SecretRedactor.redact(record.result).prefix(400))
             streaming.append("\(prefix) \(record.name): \(preview)\n")
+            recordChangedFile(from: record)
+            appendWorkbenchEvent(
+                title: record.name,
+                detail: preview,
+                status: record.succeeded ? .succeeded : .failed,
+                systemImage: toolIcon(record.name)
+            )
         case .compacted(let count, let summary):
             compactionCount = count
             streaming.append("\n[context] \(summary)\n")
+            appendWorkbenchEvent(
+                title: "Context compacted",
+                detail: summary,
+                status: .info,
+                systemImage: "rectangle.compress.vertical"
+            )
         case .reviewReady(let review):
             pendingRunReview = review
             streaming.append("\n\(review)\n")
+            appendWorkbenchEvent(
+                title: "Review ready",
+                detail: "Changed files and tool issues summarized.",
+                status: .succeeded,
+                systemImage: "doc.text.magnifyingglass"
+            )
         case .completed(let finalText):
             _ = streaming.finish()
             var committed = finalText.isEmpty ? "(done)" : finalText
@@ -988,11 +1523,30 @@ struct AgentPaneView: View {
             }
             commitAssistantMessage(text: committed, toolProposals: nil)
             pendingRunReview = nil
+            appendWorkbenchEvent(
+                title: "Run completed",
+                detail: changedFiles.isEmpty ? "No file edits recorded." : "\(changedFiles.count) changed file\(changedFiles.count == 1 ? "" : "s").",
+                status: .succeeded,
+                systemImage: "checkmark.circle.fill"
+            )
+            Task { await runVerificationFromWorkbench(force: false) }
         case .failed(let message):
             streaming.cancel()
             error = message
+            appendWorkbenchEvent(
+                title: "Run failed",
+                detail: message,
+                status: .failed,
+                systemImage: "xmark.octagon"
+            )
         case .cancelled:
             streaming.cancel()
+            appendWorkbenchEvent(
+                title: "Run cancelled",
+                detail: "",
+                status: .failed,
+                systemImage: "stop.circle"
+            )
         }
     }
 
@@ -1011,6 +1565,9 @@ struct AgentPaneView: View {
         - edit_file(path, old_string, new_string) — surgical text edit
         - write_file(path, content) — create or overwrite a file
         - run_bash(command) — run a shell command (\(agentRunBashEnabled ? "enabled" : "DISABLED — do not call"))
+        - git_status() / git_diff(summary, path) — inspect local git changes
+        - run_test(command) — run a verification command (\(agentRunBashEnabled ? "enabled" : "DISABLED — do not call"))
+        - preview_snapshot(url) — check a localhost preview URL
         - update_tasks(tasks) — replace the visible task list. Use it to plan multi-step work and reflect progress.
 
         Permission mode: \(permissionMode.label). \(permissionMode.help)
@@ -1272,6 +1829,214 @@ private struct RenameSessionSheet: View {
         }
         .padding(20)
         .frame(width: 360)
+    }
+}
+
+private struct LMStudioSessionBrowserSheet: View {
+    let loomSessions: [AgentSessionStore.SessionSummary]
+    let cliSessions: [AgentSessionStore.CLISessionSummary]
+    let onResumeLoom: (AgentSessionStore.SessionSummary) -> Void
+    let onResumeCLI: (AgentSessionStore.CLISessionSummary) -> Void
+    let onDeleteLoom: (AgentSessionStore.SessionSummary) -> Void
+    let onClose: () -> Void
+
+    @State private var query: String = ""
+    @State private var showCLI: Bool = true
+
+    private var filteredLoom: [AgentSessionStore.SessionSummary] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty else { return loomSessions }
+        return loomSessions.filter { summary in
+            [
+                summary.title,
+                summary.workspaceName,
+                summary.modelLabel ?? "",
+                summary.finalStatus ?? "",
+                summary.changedFiles?.joined(separator: " ") ?? "",
+                summary.lastPreview
+            ].joined(separator: " ").lowercased().contains(trimmed)
+        }
+    }
+
+    private var filteredCLI: [AgentSessionStore.CLISessionSummary] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty else { return cliSessions }
+        return cliSessions.filter { summary in
+            [
+                summary.title,
+                summary.workspacePath,
+                summary.modelLabel ?? "",
+                summary.preview
+            ].joined(separator: " ").lowercased().contains(trimmed)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("LM Studio Sessions")
+                    .font(.system(size: 15, weight: .semibold))
+                Spacer()
+                Button("Done", action: onClose)
+                    .keyboardShortcut(.cancelAction)
+            }
+
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search sessions, models, files", text: $query)
+                    .textFieldStyle(.plain)
+                Toggle("CLI", isOn: $showCLI)
+                    .toggleStyle(.checkbox)
+            }
+            .padding(8)
+            .background(Color.white.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    sessionHeader("Saved in Loom", count: filteredLoom.count)
+                    if filteredLoom.isEmpty {
+                        emptyRow("No Loom sessions match.")
+                    } else {
+                        ForEach(filteredLoom) { summary in
+                            loomSessionRow(summary)
+                        }
+                    }
+
+                    if showCLI {
+                        sessionHeader("Saved by lmstudio CLI", count: filteredCLI.count)
+                            .padding(.top, 8)
+                        if filteredCLI.isEmpty {
+                            emptyRow("No CLI sessions match.")
+                        } else {
+                            ForEach(filteredCLI) { summary in
+                                cliSessionRow(summary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 640, height: 520)
+    }
+
+    private func sessionHeader(_ title: String, count: Int) -> some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text("\(count)")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private func loomSessionRow(_ summary: AgentSessionStore.SessionSummary) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: statusIcon(summary.finalStatus))
+                .foregroundStyle(statusColor(summary.finalStatus))
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(summary.title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                Text(rowDetail(
+                    date: summary.updatedAt,
+                    model: summary.modelLabel,
+                    count: summary.messageCount,
+                    extra: summary.changedFiles?.isEmpty == false ? "\(summary.changedFiles?.count ?? 0) files" : nil
+                ))
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                if !summary.lastPreview.isEmpty {
+                    Text(summary.lastPreview)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer()
+            Button("Resume") { onResumeLoom(summary) }
+                .controlSize(.small)
+            Button(role: .destructive) {
+                onDeleteLoom(summary)
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(10)
+        .background(Color.white.opacity(0.045))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func cliSessionRow(_ summary: AgentSessionStore.CLISessionSummary) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "terminal")
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(summary.title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                Text(rowDetail(date: summary.savedAt, model: summary.modelLabel, count: summary.messageCount, extra: "CLI"))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                if !summary.preview.isEmpty {
+                    Text(summary.preview)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer()
+            Button("Resume") { onResumeCLI(summary) }
+                .controlSize(.small)
+        }
+        .padding(10)
+        .background(Color.white.opacity(0.045))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func emptyRow(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
+            .background(Color.white.opacity(0.03))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func rowDetail(date: Date, model: String?, count: Int, extra: String?) -> String {
+        [date.formatted(date: .abbreviated, time: .shortened), model, "\(count) messages", extra]
+            .compactMap { $0 }
+            .joined(separator: " · ")
+    }
+
+    private func statusIcon(_ status: String?) -> String {
+        switch status {
+        case "verified":        return "checkmark.seal.fill"
+        case "needs_attention": return "exclamationmark.triangle.fill"
+        case "edited":          return "doc.badge.gearshape"
+        case "running":         return "arrow.triangle.2.circlepath"
+        default:                return "clock"
+        }
+    }
+
+    private func statusColor(_ status: String?) -> Color {
+        switch status {
+        case "verified":        return .green
+        case "needs_attention": return .orange
+        case "edited":          return .blue
+        case "running":         return .purple
+        default:                return .secondary
+        }
     }
 }
 

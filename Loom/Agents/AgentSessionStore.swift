@@ -14,6 +14,9 @@ final class AgentSessionStore {
         var messageCount: Int
         var compactedCount: Int
         var lastPreview: String
+        var finalStatus: String?
+        var changedFiles: [String]?
+        var verificationSummary: String?
     }
 
     struct CLISessionSummary: Identifiable, Hashable {
@@ -111,7 +114,10 @@ final class AgentSessionStore {
         workspaceName: String,
         workspacePath: String?,
         modelLabel: String?,
-        compactedCount: Int
+        compactedCount: Int,
+        finalStatus: String? = nil,
+        changedFiles: [String] = [],
+        verificationSummary: String? = nil
     ) {
         let storable = messages
             .filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -138,7 +144,10 @@ final class AgentSessionStore {
             updatedAt: Date(),
             messageCount: storable.count,
             compactedCount: compactedCount,
-            lastPreview: String(preview.prefix(180))
+            lastPreview: String(preview.prefix(180)),
+            finalStatus: finalStatus,
+            changedFiles: changedFiles,
+            verificationSummary: verificationSummary
         )
         persist(StoredRecord(summary: summary, messages: storable))
         load(workspaceKey: workspaceKey, workspacePath: workspacePath)

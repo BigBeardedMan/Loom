@@ -9,6 +9,7 @@ struct LoomApp: App {
     @State private var usageService = UsageService()
     @State private var updateService = UpdateService()
     @State private var localEndpoints = LocalEndpointStore()
+    @State private var lmStudioRuntime = LMStudioRuntimeService()
     @State private var workspaceContext = WorkspaceContext()
     @State private var mcpService = MCPService()
     @State private var commandHistory = CommandHistoryService()
@@ -45,6 +46,7 @@ struct LoomApp: App {
                 .environment(usageService)
                 .environment(updateService)
                 .environment(localEndpoints)
+                .environment(lmStudioRuntime)
                 .environment(workspaceContext)
                 .environment(commandHistory)
                 .environment(terminalTranscripts)
@@ -196,6 +198,7 @@ struct LoomApp: App {
         Settings {
             SettingsView()
                 .environment(localEndpoints)
+                .environment(lmStudioRuntime)
                 .environment(agentRegistry)
                 .environment(mcpService)
                 .environment(terminalTranscripts)

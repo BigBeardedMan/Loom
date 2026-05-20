@@ -187,6 +187,48 @@ struct AgentToolRunner: Sendable {
             ])
         ),
         LLMTool(
+            name: "git_status",
+            description: "Read the current git status inside the workspace. Read-only.",
+            inputSchema: jsonSchema([
+                "type": "object",
+                "properties": [:]
+            ])
+        ),
+        LLMTool(
+            name: "git_diff",
+            description: "Read a capped git diff or diff summary inside the workspace. Read-only.",
+            inputSchema: jsonSchema([
+                "type": "object",
+                "properties": [
+                    "summary": ["type": "boolean", "description": "When true, return --stat --shortstat instead of the full diff."],
+                    "path": ["type": "string", "description": "Optional file path relative to the workspace root."]
+                ]
+            ])
+        ),
+        LLMTool(
+            name: "run_test",
+            description: "Run an explicit verification command in the workspace. Uses the same permission gate as run_bash.",
+            inputSchema: jsonSchema([
+                "type": "object",
+                "properties": [
+                    "command": ["type": "string", "description": "The test or build command to run."],
+                    "timeout_seconds": ["type": "integer", "description": "Maximum runtime in seconds. Default 120."]
+                ],
+                "required": ["command"]
+            ])
+        ),
+        LLMTool(
+            name: "preview_snapshot",
+            description: "Check a local preview URL and return HTTP status plus page title. Use localhost dev-server URLs only.",
+            inputSchema: jsonSchema([
+                "type": "object",
+                "properties": [
+                    "url": ["type": "string", "description": "Preview URL, usually http://localhost:3000."]
+                ],
+                "required": ["url"]
+            ])
+        ),
+        LLMTool(
             name: "update_tasks",
             description: "Replace the visible task list. Use this to plan multi-step work and keep the user informed of progress.",
             inputSchema: jsonSchema([
@@ -219,6 +261,10 @@ struct AgentToolRunner: Sendable {
         case "edit_file":     return try await editFile(input: input)
         case "list_dir":      return try await listDir(input: input)
         case "run_bash":      return try await runBash(input: input)
+        case "git_status":    return try await gitStatus(input: input)
+        case "git_diff":      return try await gitDiff(input: input)
+        case "run_test":      return try await runTest(input: input)
+        case "preview_snapshot": return try await previewSnapshot(input: input)
         case "update_tasks":
             // Should never reach the runner — the orchestrator intercepts it.
             throw ToolError.unknownTool(name)
@@ -350,6 +396,76 @@ struct AgentToolRunner: Sendable {
             }
             return header + raw
         }.value
+    }
+
+    private func gitStatus(input: Data) async throws -> String {
+        _ = input
+        let workingDir = try canonicalWorkspaceRoot()
+        guard FileManager.default.fileExists(atPath: workingDir.appendingPathComponent(".git").path) else {
+            return "Not a git repository."
+        }
+        return try await runReadOnlyShell("git status --short --branch", workingDir: workingDir, timeout: 20)
+    }
+
+    private func gitDiff(input: Data) async throws -> String {
+        struct Args: Decodable {
+            let summary: Bool?
+            let path: String?
+        }
+        let args = (try? decode(Args.self, from: input)) ?? Args(summary: true, path: nil)
+        let workingDir = try canonicalWorkspaceRoot()
+        guard FileManager.default.fileExists(atPath: workingDir.appendingPathComponent(".git").path) else {
+            return "Not a git repository."
+        }
+        var command = args.summary == false ? "git diff --" : "git diff --stat --shortstat --"
+        if let path = args.path?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !path.isEmpty {
+            _ = try workspaceTarget(path)
+            command += " \(shellQuote(path))"
+        }
+        return try await runReadOnlyShell(command, workingDir: workingDir, timeout: 30)
+    }
+
+    private func runTest(input: Data) async throws -> String {
+        if permissionMode == .plan {
+            throw ToolError.modeBlocked("run_test is blocked by Plan mode.")
+        }
+        guard allowBash || permissionMode == .bypassPermissions else {
+            throw ToolError.bashDisabled
+        }
+        struct Args: Decodable {
+            let command: String
+            let timeout_seconds: Int?
+        }
+        let args = try decode(Args.self, from: input)
+        let timeout = max(1, min(args.timeout_seconds ?? 120, 600))
+        let workingDir = try canonicalWorkspaceRoot()
+        try await requireApproval(
+            action: .runBash,
+            target: workingDir.path,
+            preview: SecretRedactor.redact(args.command)
+        )
+        return try await runReadOnlyShell(args.command, workingDir: workingDir, timeout: timeout)
+    }
+
+    private func previewSnapshot(input: Data) async throws -> String {
+        struct Args: Decodable { let url: String }
+        let args = try decode(Args.self, from: input)
+        guard let url = URL(string: args.url),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = url.host?.lowercased(),
+              ["localhost", "127.0.0.1", "0.0.0.0", "::1"].contains(host) else {
+            throw ToolError.modeBlocked("preview_snapshot only allows localhost HTTP(S) URLs.")
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        request.httpMethod = "GET"
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let body = String(decoding: data.prefix(4096), as: UTF8.self)
+        let title = extractHTMLTitle(body) ?? url.absoluteString
+        return "HTTP \(status)\nTitle: \(title)"
     }
 
     // MARK: - Helpers
@@ -509,5 +625,50 @@ struct AgentToolRunner: Sendable {
 
     private static func jsonSchema(_ object: [String: Any]) -> Data {
         (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
+    }
+
+    private func runReadOnlyShell(_ command: String, workingDir: URL, timeout: Int) async throws -> String {
+        try await Task.detached(priority: .userInitiated) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            process.arguments = ["-lic", command]
+            process.currentDirectoryURL = workingDir
+            let outPipe = Pipe()
+            process.standardOutput = outPipe
+            process.standardError = outPipe
+            try process.run()
+
+            let deadline = Date().addingTimeInterval(TimeInterval(timeout))
+            while process.isRunning {
+                if Date() > deadline {
+                    process.terminate()
+                    throw ToolError.bashTimeout
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+
+            let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+            let raw = SecretRedactor.redact(String(decoding: data, as: UTF8.self))
+            let header = "$ \(SecretRedactor.redact(command))\n[exit \(process.terminationStatus)]\n"
+            if raw.count > 16_000 {
+                let cap = raw.index(raw.startIndex, offsetBy: 16_000)
+                return header + String(raw[..<cap]) + "\n...(truncated)"
+            }
+            return header + raw
+        }.value
+    }
+
+    private func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private func extractHTMLTitle(_ html: String) -> String? {
+        guard let start = html.range(of: "<title", options: [.caseInsensitive]),
+              let closeStart = html[start.upperBound...].range(of: ">"),
+              let end = html[closeStart.upperBound...].range(of: "</title>", options: [.caseInsensitive]) else {
+            return nil
+        }
+        return String(html[closeStart.upperBound..<end.lowerBound])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
