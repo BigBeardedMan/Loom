@@ -101,6 +101,8 @@ private struct ProvidersSettings: View {
     @Environment(AgentRegistry.self) private var registry
     @State private var editing: LocalEndpoint?
     @State private var presentEditor: Bool = false
+    @State private var lmStudioDetected: Bool = false
+    @State private var isCheckingLMStudio: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -127,9 +129,19 @@ private struct ProvidersSettings: View {
                 .listStyle(.bordered)
             }
 
-            Text("Endpoints reachable on localhost or your LAN. Ollama auto-discovers models via /api/tags; OpenAI-compatible servers (LM Studio, llama.cpp, Jan, vLLM) use the model id you set here.")
+            if lmStudioDetected && !hasLMStudioEndpoint {
+                lmStudioDetectedCallout
+            }
+
+            Text("Endpoints reachable on localhost or your LAN. Ollama auto-discovers models via /api/tags; LM Studio uses /api/v0/models for loaded-model status; OpenAI-compatible servers use the model id you set here.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+        .task {
+            await checkForLMStudioServer()
+        }
+        .onChange(of: store.endpoints) { _, _ in
+            Task { await checkForLMStudioServer() }
         }
         .sheet(isPresented: $presentEditor, onDismiss: refreshAgents) {
             EndpointEditor(initial: editing) { saved in
@@ -142,6 +154,40 @@ private struct ProvidersSettings: View {
                 presentEditor = false
             }
         }
+    }
+
+    private var hasLMStudioEndpoint: Bool {
+        store.endpoints.contains { $0.kind == .lmstudio }
+    }
+
+    private var lmStudioDetectedCallout: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: "cpu")
+                .foregroundStyle(Color(red: 0.62, green: 0.40, blue: 0.95))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("LM Studio server detected")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("Add it as a local provider so models appear in the Agent picker.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if isCheckingLMStudio {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            Button("Add LM Studio") {
+                addDetectedLMStudio()
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(10)
+        .background(Color.purple.opacity(0.10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.purple.opacity(0.28), lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private var emptyState: some View {
@@ -197,6 +243,33 @@ private struct ProvidersSettings: View {
         Task { await registry.refresh(localEndpoints: store.endpoints) }
     }
 
+    private func checkForLMStudioServer() async {
+        guard !hasLMStudioEndpoint else {
+            lmStudioDetected = false
+            return
+        }
+        guard let url = URL(string: LocalEndpoint.Kind.lmstudio.defaultBaseURL) else {
+            return
+        }
+        isCheckingLMStudio = true
+        let reachable = await LMStudioProvider.serverIsUp(baseURL: url)
+        isCheckingLMStudio = false
+        lmStudioDetected = reachable && !hasLMStudioEndpoint
+    }
+
+    private func addDetectedLMStudio() {
+        let endpoint = LocalEndpoint(
+            displayName: "LM Studio",
+            kind: .lmstudio,
+            baseURL: LocalEndpoint.Kind.lmstudio.defaultBaseURL,
+            defaultModel: "",
+            requiresAuth: false
+        )
+        store.upsert(endpoint)
+        lmStudioDetected = false
+        refreshAgents()
+    }
+
     private func endpointIcon(for kind: LocalEndpoint.Kind) -> String {
         switch kind {
         case .ollama:           return "shippingbox"
@@ -225,10 +298,21 @@ private struct EndpointEditor: View {
     @State private var testStatus: TestStatus = .idle
     @State private var testMessage: String = ""
     @State private var lmsCLI = LMStudioCLI()
-    @State private var discoveredModels: [String] = []
+    @State private var discoveredModels: [DiscoveredModel] = []
     @State private var isDiscoveringModels: Bool = false
 
     enum TestStatus { case idle, running, ok, failed }
+
+    private struct DiscoveredModel: Identifiable, Hashable {
+        let id: String
+        let detail: String
+        let loaded: Bool
+
+        var menuLabel: String {
+            if detail.isEmpty { return id }
+            return "\(id) (\(detail))"
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -330,11 +414,15 @@ private struct EndpointEditor: View {
             if isDiscoveringModels {
                 Text("Fetching…").foregroundStyle(.secondary)
             } else if discoveredModels.isEmpty {
-                Text("No models loaded on the server")
+                Text(kind == .lmstudio ? "No models found on the server" : "No models loaded on the server")
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(discoveredModels, id: \.self) { id in
-                    Button(id) { defaultModel = id }
+                ForEach(discoveredModels) { model in
+                    Button {
+                        defaultModel = model.id
+                    } label: {
+                        Label(model.menuLabel, systemImage: model.loaded ? "circle.fill" : "circle")
+                    }
                 }
             }
             Divider()
@@ -354,9 +442,9 @@ private struct EndpointEditor: View {
         }
     }
 
-    /// Hit the server's models endpoint and populate `discoveredModels` with
-    /// the ids. Path differs by kind: OpenAI-compatible (LM Studio included)
-    /// uses `<base>/models`; Ollama uses `<base>/api/tags`.
+    /// Hit the server's models endpoint and populate `discoveredModels`.
+    /// LM Studio uses its richer native discovery path so the UI can show
+    /// loaded state and runtime context length.
     private func discoverModels() async {
         let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: trimmed) else {
@@ -370,8 +458,18 @@ private struct EndpointEditor: View {
         switch kind {
         case .ollama:
             endpoint = url.appendingPathComponent("api/tags")
-        case .openAICompatible, .lmstudio:
+        case .openAICompatible:
             endpoint = url.appendingPathComponent("models")
+        case .lmstudio:
+            let models = await LMStudioProvider.fetchModels(baseURL: url)
+            discoveredModels = models.map {
+                DiscoveredModel(
+                    id: $0.id,
+                    detail: $0.metadataSummary,
+                    loaded: $0.loaded
+                )
+            }
+            return
         }
 
         var request = URLRequest(url: endpoint)
@@ -392,14 +490,20 @@ private struct EndpointEditor: View {
                     struct Item: Decodable { let name: String }
                 }
                 let resp = try JSONDecoder().decode(OllamaResp.self, from: data)
-                discoveredModels = resp.models.map(\.name)
-            case .openAICompatible, .lmstudio:
+                discoveredModels = resp.models.map {
+                    DiscoveredModel(id: $0.name, detail: "", loaded: false)
+                }
+            case .openAICompatible:
                 struct OpenAIResp: Decodable {
                     let data: [Item]
                     struct Item: Decodable { let id: String }
                 }
                 let resp = try JSONDecoder().decode(OpenAIResp.self, from: data)
-                discoveredModels = resp.data.map(\.id)
+                discoveredModels = resp.data.map {
+                    DiscoveredModel(id: $0.id, detail: "", loaded: false)
+                }
+            case .lmstudio:
+                break
             }
         } catch {
             discoveredModels = []
@@ -1015,10 +1119,18 @@ private struct MCPSettings: View {
 private struct AgentSettings: View {
     @AppStorage("loom.agent.maxTurns") private var maxTurns: Int = 30
     @AppStorage("loom.agent.allowBash") private var allowBash: Bool = false
+    @AppStorage("loom.agent.permissionMode") private var permissionModeRaw: String = AgentPermissionMode.confirm.rawValue
     @State private var helperStatus: HelperStatus = .unknown
     @State private var helperError: String?
 
     enum HelperStatus { case unknown, installed(URL), missing }
+
+    private var permissionModeBinding: Binding<AgentPermissionMode> {
+        Binding(
+            get: { AgentPermissionMode(rawValue: permissionModeRaw) ?? .confirm },
+            set: { permissionModeRaw = $0.rawValue }
+        )
+    }
 
     var body: some View {
         Form {
@@ -1032,6 +1144,18 @@ private struct AgentSettings: View {
 
                 Toggle("Allow run_bash tool", isOn: $allowBash)
                 Text("Lets the agent execute shell commands in the workspace. Off by default. Local code models will sometimes try aggressive cleanup commands. Turn on only when you trust the model and the workspace.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Picker("Permission mode", selection: permissionModeBinding) {
+                    ForEach(AgentPermissionMode.allCases) { mode in
+                        Label(mode.label, systemImage: mode.systemImage)
+                            .tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                Text((AgentPermissionMode(rawValue: permissionModeRaw) ?? .confirm).help)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

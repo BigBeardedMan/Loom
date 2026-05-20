@@ -1,5 +1,10 @@
 ## Changes
 
+- LM Studio is now a first-class Agent pane provider in Testing Edition. If its local server is already running, Settings -> Providers offers a one-click **Add LM Studio** shortcut.
+- LM Studio model discovery now uses `/api/v0/models` first, so loaded models appear first with context length, quantization, and architecture details in the model picker and Agent picker.
+- The Agent pane defaults LM Studio to Agent Mode, shows a compact local-model status strip, and adds permission modes: Ask, Plan, Accept Edits, and Bypass Permissions.
+- In-app LM Studio tool execution now honors those permission modes: Plan blocks edits/bash, Accept Edits auto-approves file edits, and Bypass Permissions auto-approves edits and shell commands for the run.
+- The bundled `lmstudio` helper no longer crashes when printing `--help`.
 - Terminal sessions now save local transcripts in Testing Edition. Closed panes appear under **Recently Closed**, with a transcript reader and **Start Fresh Shell Here** action.
 - Terminal Sessions now includes **Recently Deleted** so deleted transcripts can be recovered or deleted permanently.
 - Settings -> Shell now has Terminal History controls: save on/off, a user-selectable storage cap that defaults to 1 GB, current usage, prune, and reveal-folder actions.

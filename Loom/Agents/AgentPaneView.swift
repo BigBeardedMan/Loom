@@ -45,7 +45,9 @@ struct AgentPaneView: View {
     /// of single-shot streaming. Off by default since plain chat is what
     /// users expect when they pick a model from the picker.
     @AppStorage("loom.agent.mode") private var agentMode: Bool = false
+    @AppStorage("loom.agent.lmstudioMode") private var lmStudioAgentMode: Bool = true
     @AppStorage("loom.agent.allowBash") private var allowBash: Bool = false
+    @AppStorage("loom.agent.permissionMode") private var permissionModeRaw: String = AgentPermissionMode.confirm.rawValue
 
     private let cwd: URL?
     private let handlesExternalRuns: Bool
@@ -69,6 +71,19 @@ struct AgentPaneView: View {
 
     private var selectedAgent: AgentDescriptor {
         registry.selectedAgent
+    }
+
+    private var effectiveAgentMode: Bool {
+        selectedAgent.vendor == .lmstudio ? lmStudioAgentMode : agentMode
+    }
+
+    private var permissionMode: AgentPermissionMode {
+        get { AgentPermissionMode(rawValue: permissionModeRaw) ?? .confirm }
+        nonmutating set { permissionModeRaw = newValue.rawValue }
+    }
+
+    private var agentRunBashEnabled: Bool {
+        permissionMode != .plan && (allowBash || permissionMode == .bypassPermissions)
     }
 
     var body: some View {
@@ -114,6 +129,9 @@ struct AgentPaneView: View {
             }
 
             Divider().overlay(Color.white.opacity(0.10))
+            if selectedAgent.vendor == .lmstudio {
+                lmStudioStatusLine
+            }
             inputBar
         }
         .background(Color(red: 0.018, green: 0.022, blue: 0.026))
@@ -279,6 +297,9 @@ struct AgentPaneView: View {
     /// secondary text isn't possible with a plain Text.
     private func pickerRowLabel(for agent: AgentDescriptor) -> String {
         var label = "\(agent.vendor.label) · \(agent.displayName)"
+        if agent.vendor == .lmstudio {
+            return label
+        }
         if let model = agent.model {
             label += "  (\(model))"
         }
@@ -452,25 +473,29 @@ struct AgentPaneView: View {
         HStack(alignment: .bottom, spacing: 8) {
             if selectedAgent.vendor.isLocalHTTP {
                 Button {
-                    agentMode.toggle()
+                    toggleAgentMode()
                 } label: {
-                    Image(systemName: agentMode ? "wand.and.stars" : "wand.and.stars.inverse")
+                    Image(systemName: effectiveAgentMode ? "wand.and.stars" : "wand.and.stars.inverse")
                         .font(.system(size: 14))
-                        .foregroundStyle(agentMode
+                        .foregroundStyle(effectiveAgentMode
                             ? Color(red: 0.62, green: 0.40, blue: 0.95)
                             : Color.white.opacity(0.35))
                 }
                 .buttonStyle(.plain)
-                .help(agentMode
+                .help(effectiveAgentMode
                     ? "Agent Mode on — model can call tools and track tasks"
                     : "Agent Mode off — single-shot chat")
                 .disabled(isWaiting)
             }
 
+            if selectedAgent.vendor == .lmstudio && effectiveAgentMode {
+                permissionModePicker
+            }
+
             TextField(
                 "",
                 text: $draft,
-                prompt: Text(agentMode && selectedAgent.vendor.isLocalHTTP
+                prompt: Text(effectiveAgentMode && selectedAgent.vendor.isLocalHTTP
                     ? "Tell the agent what to do…"
                     : "Ask the agent…").foregroundColor(.white.opacity(0.4)),
                 axis: .vertical
@@ -495,6 +520,73 @@ struct AgentPaneView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .background(Color.black.opacity(0.32))
+    }
+
+    private var lmStudioStatusLine: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "cpu")
+                .font(.system(size: 10))
+                .foregroundStyle(Color(red: 0.62, green: 0.40, blue: 0.95))
+            Text(lmStudioStatusText)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer()
+            Text(effectiveAgentMode ? "Agent Mode" : "Chat")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(effectiveAgentMode ? Color.purple : Color.secondary)
+            if effectiveAgentMode {
+                Text(permissionMode.label)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(permissionMode == .bypassPermissions ? Color.orange : Color.secondary)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(Color.black.opacity(0.22))
+    }
+
+    private var lmStudioStatusText: String {
+        guard selectedAgent.vendor == .lmstudio else { return "" }
+        let endpointText: String
+        if let id = selectedAgent.endpointID,
+           let endpoint = endpoints.endpoints.first(where: { $0.id == id }),
+           let url = endpoint.resolvedBaseURL,
+           let host = url.host {
+            endpointText = url.port.map { "\(host):\($0)" } ?? host
+        } else {
+            endpointText = "no endpoint"
+        }
+        let modelText = selectedAgent.displayName.isEmpty ? "no model" : selectedAgent.displayName
+        return "\(endpointText) · \(modelText)"
+    }
+
+    private var permissionModePicker: some View {
+        Menu {
+            ForEach(AgentPermissionMode.allCases) { mode in
+                Button {
+                    permissionMode = mode
+                } label: {
+                    Label(mode.label, systemImage: mode.systemImage)
+                }
+            }
+        } label: {
+            Image(systemName: permissionMode.systemImage)
+                .font(.system(size: 14))
+                .foregroundStyle(permissionMode == .bypassPermissions ? Color.orange : Color.white.opacity(0.55))
+        }
+        .buttonStyle(.plain)
+        .help(permissionMode.help)
+        .disabled(isWaiting)
+    }
+
+    private func toggleAgentMode() {
+        if selectedAgent.vendor == .lmstudio {
+            lmStudioAgentMode.toggle()
+        } else {
+            agentMode.toggle()
+        }
     }
 
     private var canSend: Bool {
@@ -543,7 +635,7 @@ struct AgentPaneView: View {
         isWaiting = true
 
         if selectedAgent.vendor.isLocalHTTP {
-            if agentMode {
+            if effectiveAgentMode {
                 sendViaOrchestrator(prompt: prompt)
             } else {
                 sendViaLocalHTTP(prompt: prompt)
@@ -583,7 +675,8 @@ struct AgentPaneView: View {
         let workspaceURL = cwd ?? URL(fileURLWithPath: workspace.folderPath, isDirectory: true)
         let runner = AgentToolRunner(
             workspaceRoot: workspace.folderPath.isEmpty ? nil : workspaceURL,
-            allowBash: allowBash,
+            allowBash: agentRunBashEnabled,
+            permissionMode: permissionMode,
             approvalHandler: { request in
                 await requestToolApproval(request)
             }
@@ -647,8 +740,10 @@ struct AgentPaneView: View {
         - list_dir(path) — list a directory inside the workspace
         - edit_file(path, old_string, new_string) — surgical text edit
         - write_file(path, content) — create or overwrite a file
-        - run_bash(command) — run a shell command (\(allowBash ? "enabled" : "DISABLED — do not call"))
+        - run_bash(command) — run a shell command (\(agentRunBashEnabled ? "enabled" : "DISABLED — do not call"))
         - update_tasks(tasks) — replace the visible task list. Use it to plan multi-step work and reflect progress.
+
+        Permission mode: \(permissionMode.label). \(permissionMode.help)
 
         Workflow:
         1. For non-trivial requests, first call update_tasks with a plan.

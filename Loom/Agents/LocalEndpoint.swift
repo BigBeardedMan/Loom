@@ -1,10 +1,11 @@
 import Foundation
 
 /// User-configured local LLM endpoint reachable over HTTP on localhost or the
-/// LAN. Two shapes are supported today: native Ollama and any OpenAI-compatible
-/// chat-completions server (LM Studio, llama.cpp's `llama-server`, Jan, vLLM,
-/// LocalAI). Auth tokens, when needed, live in Keychain — `LocalEndpoint`
-/// itself only stores `requiresAuth` so the UI knows to render the field.
+/// LAN. Supported shapes: native Ollama, LM Studio with native model discovery,
+/// and generic OpenAI-compatible chat-completions servers (llama.cpp's
+/// `llama-server`, Jan, vLLM, LocalAI). Auth tokens, when needed, live in
+/// Keychain — `LocalEndpoint` itself only stores `requiresAuth` so the UI knows
+/// to render the field.
 struct LocalEndpoint: Codable, Identifiable, Hashable, Sendable {
     enum Kind: String, Codable, Hashable, Sendable, CaseIterable, Identifiable {
         case ollama

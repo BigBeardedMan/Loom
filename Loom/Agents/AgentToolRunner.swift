@@ -1,5 +1,45 @@
 import Foundation
 
+enum AgentPermissionMode: String, CaseIterable, Identifiable, Sendable {
+    case confirm
+    case plan
+    case acceptEdits
+    case bypassPermissions
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .confirm:           return "Ask"
+        case .plan:              return "Plan"
+        case .acceptEdits:       return "Accept Edits"
+        case .bypassPermissions: return "Bypass Permissions"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .confirm:           return "questionmark.shield"
+        case .plan:              return "list.bullet.clipboard"
+        case .acceptEdits:       return "pencil.and.list.clipboard"
+        case .bypassPermissions: return "exclamationmark.triangle"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .confirm:
+            return "Ask before file edits and shell commands."
+        case .plan:
+            return "Allow reads and task planning only; block file edits and shell commands."
+        case .acceptEdits:
+            return "Auto-approve file edits; still ask before shell commands."
+        case .bypassPermissions:
+            return "Auto-approve file edits and shell commands for this run."
+        }
+    }
+}
+
 struct AgentToolApprovalRequest: Identifiable, Hashable, Sendable {
     enum Action: String, Sendable {
         case writeFile
@@ -35,15 +75,18 @@ struct AgentToolRunner: Sendable {
     /// of executing. Default off — bash on a local model is dicey enough that
     /// we want the user to opt in via Settings.
     let allowBash: Bool
+    let permissionMode: AgentPermissionMode
     let approvalHandler: (@MainActor @Sendable (AgentToolApprovalRequest) async -> Bool)?
 
     init(
         workspaceRoot: URL?,
         allowBash: Bool,
+        permissionMode: AgentPermissionMode = .confirm,
         approvalHandler: (@MainActor @Sendable (AgentToolApprovalRequest) async -> Bool)? = nil
     ) {
         self.workspaceRoot = workspaceRoot
         self.allowBash = allowBash
+        self.permissionMode = permissionMode
         self.approvalHandler = approvalHandler
     }
 
@@ -55,6 +98,7 @@ struct AgentToolRunner: Sendable {
         case noWorkspace
         case sensitivePath(String)
         case approvalDenied(String)
+        case modeBlocked(String)
         case bashDisabled
         case bashTimeout
         case fileNotFound(String)
@@ -70,6 +114,7 @@ struct AgentToolRunner: Sendable {
             case .noWorkspace:               return "Agent tools require a workspace folder."
             case .sensitivePath(let p):       return "Agent tools cannot access sensitive file paths: \(p)"
             case .approvalDenied(let action): return "\(action) was denied by the user."
+            case .modeBlocked(let reason):    return reason
             case .bashDisabled:              return "Bash tool disabled. Enable it in Settings → Agent."
             case .bashTimeout:               return "Bash command timed out"
             case .fileNotFound(let p):       return "File not found: \(p)"
@@ -257,7 +302,12 @@ struct AgentToolRunner: Sendable {
     }
 
     private func runBash(input: Data) async throws -> String {
-        guard allowBash else { throw ToolError.bashDisabled }
+        if permissionMode == .plan {
+            throw ToolError.modeBlocked("run_bash is blocked by Plan mode.")
+        }
+        guard allowBash || permissionMode == .bypassPermissions else {
+            throw ToolError.bashDisabled
+        }
         struct Args: Decodable {
             let command: String
             let timeout_seconds: Int?
@@ -309,6 +359,19 @@ struct AgentToolRunner: Sendable {
         target: String,
         preview: String
     ) async throws {
+        switch permissionMode {
+        case .confirm:
+            break
+        case .plan:
+            throw ToolError.modeBlocked("\(action.label) is blocked by Plan mode.")
+        case .acceptEdits:
+            if action == .writeFile || action == .editFile {
+                return
+            }
+        case .bypassPermissions:
+            return
+        }
+
         guard let approvalHandler else {
             throw ToolError.approvalDenied(action.label)
         }

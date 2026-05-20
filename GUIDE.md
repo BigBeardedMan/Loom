@@ -1103,17 +1103,18 @@ Direct API calls bill against your Anthropic account, separate from any
 Claude Code subscription. The Usage dashboard reads on-disk Claude Code
 session logs and does **not** track direct API usage.
 
-### 7.3. Local LLMs (Ollama and OpenAI compatible)
+### 7.3. Local LLMs (Ollama, LM Studio, and OpenAI compatible)
 
-Loom can stream chat from any LLM you run on `localhost` or your LAN. Two
+Loom can stream chat from any LLM you run on `localhost` or your LAN. Three
 integrations are built in.
 
 | Kind | Best for | Wire format |
 | ---- | -------- | ----------- |
 | Ollama | `ollama serve` running locally or on a homelab box | `POST /api/chat` (NDJSON), `GET /api/tags` for models |
-| OpenAI compatible | LM Studio, llama.cpp's `llama-server`, Jan, vLLM, LocalAI, anything that speaks `/v1/chat/completions` | OpenAI SSE stream |
+| LM Studio | LM Studio's local server, with richer model discovery through `/api/v0/models` | OpenAI SSE stream plus LM Studio model metadata |
+| OpenAI compatible | llama.cpp's `llama-server`, Jan, vLLM, LocalAI, anything that speaks `/v1/chat/completions` | OpenAI SSE stream |
 
-Both are added in [Settings -> Providers](#113-providers).
+All three are added in [Settings -> Providers](#113-providers).
 
 #### Ollama setup
 
@@ -1137,23 +1138,34 @@ pulled model. Pick one, send a prompt, watch tokens stream in.
 LAN setup: run `OLLAMA_HOST=0.0.0.0:11434 ollama serve` on the remote box and
 set Loom's Base URL to `http://<host>:11434`.
 
-#### OpenAI-compatible setup
+#### LM Studio setup
 
-These tools all expose an OpenAI-shaped HTTP API. Pick one, start its
-server, then add an endpoint in Loom.
-
-LM Studio:
+LM Studio exposes an OpenAI-shaped chat API plus a native model-discovery API
+that tells Loom which models are installed and loaded.
 
 1. In LM Studio: **Developer -> Local Server -> Start Server** (default port
    1234).
-2. Note the model identifier (e.g. `lmstudio-community/Llama-3.1-8B-Instruct`).
+2. Load a model in LM Studio, or use the `lms` CLI to load one.
 3. Loom -> **Settings -> Providers -> Add**.
    - Display name: `LM Studio`
-   - Kind: OpenAI-compatible
+   - Kind: LM Studio
    - Base URL: `http://localhost:1234/v1`
-   - Model: the identifier from step 2
+   - Default model: optional fallback only; Loom auto-discovers installed
+     models through `/api/v0/models`
    - Requires auth: off
-4. **Save**.
+4. Click **Test connection**. It should report installed and loaded model
+   counts.
+5. Click **Save**.
+
+If the LM Studio server is already running when you open Settings ->
+Providers, Loom offers an **Add LM Studio** shortcut that creates this
+endpoint for you. Loaded models appear first in the Agent picker with their
+context and quantization details.
+
+#### OpenAI-compatible setup
+
+For llama.cpp, Jan, vLLM, LocalAI, and other OpenAI-shaped servers, start
+the server and add an OpenAI-compatible endpoint in Loom.
 
 llama.cpp:
 
@@ -1605,15 +1617,18 @@ and a row of actions:
 - **Trash icon.** Removes the endpoint and clears its Keychain auth token.
 
 Empty state shows a hint pointing at Add.
+If LM Studio's default server is already running on `localhost:1234` and no
+LM Studio endpoint exists yet, Loom shows an **LM Studio server detected**
+callout with a one-click **Add LM Studio** action.
 
 #### Add a provider
 
 | Field | Notes |
 | ----- | ----- |
 | Display name | Free-form. Shown as the menu group header (`Local . <name>`). |
-| Kind | Ollama or OpenAI-compatible. Switching kinds swaps the default base URL hint. |
-| Base URL | Full URL. Trailing slash is stripped. Defaults: `http://localhost:11434` (Ollama), `http://localhost:1234/v1` (OpenAI-compatible). |
-| Default model / Model | For Ollama: optional fallback when `/api/tags` fails. For OpenAI-compatible: required. |
+| Kind | Ollama, LM Studio, or OpenAI-compatible. Switching kinds swaps the default base URL hint. |
+| Base URL | Full URL. Trailing slash is stripped. Defaults: `http://localhost:11434` (Ollama), `http://localhost:1234/v1` (LM Studio and OpenAI-compatible). |
+| Default model / Model | For Ollama and LM Studio: optional fallback when discovery fails. For OpenAI-compatible: required. |
 | Requires auth token | Toggle. When on, reveals a SecureField for a bearer token. |
 
 #### Test connection
@@ -1622,8 +1637,13 @@ Click **Test connection** before saving:
 
 - Ollama: hits `GET <baseURL>/api/tags`. Reports the number of models or
   "No models / unreachable".
+- LM Studio: hits `/api/v0/models` first, then falls back to
+  `GET <baseURL>/models`. Reports installed and loaded model counts.
 - OpenAI compatible: hits `GET <baseURL>/models`. Reports HTTP 200 or the
   failure reason.
+
+For LM Studio, the model menu lists loaded models first and includes available
+context length, quantization, and architecture details from `/api/v0/models`.
 
 Test does not save the endpoint; you still have to click **Save**.
 
@@ -1645,6 +1665,7 @@ Controls local-agent runtime behavior and the optional terminal helper.
 | ----- | ------- | ------- |
 | Max turns per run | UserDefaults `loom.agent.maxTurns` | Caps tool-call rounds for one agent run. Default 30 |
 | Allow run_bash tool | UserDefaults `loom.agent.allowBash` | Lets local agents execute shell commands in the workspace. Off by default |
+| Permission mode | UserDefaults `loom.agent.permissionMode` | Controls in-app local-agent approvals: Ask, Plan, Accept Edits, or Bypass Permissions |
 
 The tab also installs or uninstalls a `loom` helper at `~/.local/bin/loom`.
 That helper opens a `loom://run?...` URL so a terminal can launch an agent run
@@ -2361,6 +2382,8 @@ security dump-keychain | awk -F\" '/svce.*com.chasesims.Loom/{getline; print $4}
 | `loom.localEndpoints` | Data | JSON-encoded `[LocalEndpoint]` |
 | `loom.agent.maxTurns` | Int | Max tool-call rounds for one local-agent run |
 | `loom.agent.allowBash` | Bool | Enables the local-agent `run_bash` tool |
+| `loom.agent.lmstudioMode` | Bool | Keeps LM Studio Agent Mode on by default in the Agent pane |
+| `loom.agent.permissionMode` | String | In-app local-agent permission mode |
 | `loom.shellIntegration` | Bool | Settings → Shell toggle. Default true; false skips the `ZDOTDIR` override and command logging |
 | `loom.terminal.pasteAsPlainText` | Bool | Settings -> Shell paste toggle |
 | `loom.terminalHistory.enabled` | Bool | Settings -> Shell transcript persistence toggle |

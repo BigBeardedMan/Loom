@@ -10350,7 +10350,7 @@ def main():
              "Default 16384. The autoscale also force-reloads when the "
              "current parallel slot count > 1 and the model cap allows "
              "a much bigger context, since dropping parallel from 4 to 1 "
-             "frees 75% of the KV cache.")
+             "frees 75%% of the KV cache.")
     parser.add_argument("--autoscale-max", type=int,
         default=int(os.environ.get("LMSTUDIO_AUTOSCALE_MAX", "65536")),
         help="Hard cap on the autoscale target. Reload picks "

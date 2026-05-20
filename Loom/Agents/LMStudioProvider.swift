@@ -54,9 +54,31 @@ struct LMStudioProvider: LLMProvider {
         let architecture: String?
 
         var displayLabel: String {
-            var bits: [String] = [id]
-            if loaded { bits.append("●") }
-            return bits.joined(separator: " ")
+            let details = metadataSummary
+            if details.isEmpty { return id }
+            return "\(id) (\(details))"
+        }
+
+        var metadataSummary: String {
+            var bits: [String] = []
+            if loaded { bits.append("loaded") }
+            if let contextLength {
+                bits.append(Self.formatContext(contextLength))
+            }
+            if let quantization, !quantization.isEmpty {
+                bits.append(quantization)
+            }
+            if let architecture, !architecture.isEmpty {
+                bits.append(architecture)
+            }
+            return bits.joined(separator: " · ")
+        }
+
+        private static func formatContext(_ length: Int) -> String {
+            if length >= 1000 {
+                return "\(length / 1000)k ctx"
+            }
+            return "\(length) ctx"
         }
     }
 
@@ -65,9 +87,18 @@ struct LMStudioProvider: LLMProvider {
     static func fetchModels(baseURL: URL) async -> [LMStudioModel] {
         let nativeRoot = nativeAPIRoot(from: baseURL)
         if let models = await tryNativeModels(nativeRoot: nativeRoot), !models.isEmpty {
-            return models
+            return sortedModels(models)
         }
-        return await tryOpenAIModels(baseURL: baseURL)
+        return sortedModels(await tryOpenAIModels(baseURL: baseURL))
+    }
+
+    private static func sortedModels(_ models: [LMStudioModel]) -> [LMStudioModel] {
+        models.sorted { lhs, rhs in
+            if lhs.loaded != rhs.loaded {
+                return lhs.loaded && !rhs.loaded
+            }
+            return lhs.id.localizedStandardCompare(rhs.id) == .orderedAscending
+        }
     }
 
     private static func tryNativeModels(nativeRoot: URL) async -> [LMStudioModel]? {

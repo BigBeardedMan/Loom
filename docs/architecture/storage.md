@@ -27,6 +27,8 @@ Lightweight settings + lists where SwiftData would be overkill.
 | `loom.localEndpoints` | Data (JSON `[LocalEndpoint]`) | User-configured local LLM endpoints. |
 | `loom.agent.maxTurns` | Int | Max tool-call rounds for one local-agent run. |
 | `loom.agent.allowBash` | Bool | Enables the local-agent `run_bash` tool. |
+| `loom.agent.lmstudioMode` | Bool | Keeps LM Studio Agent Mode on by default in the Agent pane. |
+| `loom.agent.permissionMode` | String | In-app local-agent permission mode: `confirm`, `plan`, `acceptEdits`, or `bypassPermissions`. |
 | `loom.shellIntegration` | Bool | Enables the zsh command-history shim. |
 | `loom.terminal.pasteAsPlainText` | Bool | Sends terminal text paste directly to the PTY. |
 | `loom.terminalHistory.enabled` | Bool | Enables local terminal transcript persistence. |
