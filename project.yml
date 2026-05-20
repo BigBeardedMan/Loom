@@ -10,8 +10,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "4.0.3"
-    CURRENT_PROJECT_VERSION: "59"
+    MARKETING_VERSION: "4.0.4"
+    CURRENT_PROJECT_VERSION: "60"
     CODE_SIGN_STYLE: Manual
     CODE_SIGN_IDENTITY: "Loom Local Codesign"
     DEVELOPMENT_TEAM: ""
