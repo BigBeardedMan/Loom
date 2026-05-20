@@ -1088,8 +1088,8 @@ section above the kanban columns:
 - One row per task, with a status badge.
 - Click a task to expand and read its full description and `activeForm`.
 
-When a session finishes (or its session id rotates), the live block clears
-on the next 2 second poll.
+When a session finishes, all tasks become terminal, or its session id rotates,
+the live block clears on the next 2 second poll.
 
 ### Multiple sessions
 
@@ -1135,8 +1135,8 @@ Every session header carries a × icon, and the trash icon in the pane
 header runs "Clear all". Claude sessions delete task JSON files. Codex
 sessions are hidden by a local dismissal timestamp keyed by product, model,
 and session id, because their rollout JSONL also contains conversation
-history. Active log-backed sessions reappear after their next event; stuck
-sessions stay cleared.
+history. Active log-backed sessions reappear after their next task-plan
+update; stuck or completed sessions stay cleared.
 
 ---
 
