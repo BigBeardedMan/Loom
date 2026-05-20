@@ -209,6 +209,7 @@ struct WorkspaceSidebarView: View {
     private var terminalSessionsSection: some View {
         let sessions = terminalBlocks
         let closed = terminalHistory.recentlyClosed(workspaceID: selectedWorkspaceID)
+        let visibleClosed = Array(closed.prefix(5))
         return VStack(alignment: .leading, spacing: 10) {
             if showRecentlyDeletedTerminals {
                 recentlyDeletedTerminalsSection
@@ -237,18 +238,18 @@ struct WorkspaceSidebarView: View {
                     .frame(maxHeight: 220)
                 }
 
-                if !closed.isEmpty {
+                Spacer(minLength: 8)
+
+                if !visibleClosed.isEmpty {
                     sectionHeader(title: "Recently Closed", trailing: {
-                        countBadge(closed.count)
+                        countBadge(visibleClosed.count)
                     })
                     VStack(alignment: .leading, spacing: 6) {
-                        ForEach(closed.prefix(5)) { session in
+                        ForEach(visibleClosed) { session in
                             closedTerminalRow(session)
                         }
                     }
                 }
-
-                Spacer(minLength: 8)
 
                 recentlyDeletedTerminalButton
             }

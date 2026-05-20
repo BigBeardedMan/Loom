@@ -297,9 +297,8 @@ struct CLIToolUsage: Identifiable, Hashable {
 @Observable
 @MainActor
 final class UsageService {
-    /// Testing Edition threshold for this build. Production target is 85%;
-    /// this build intentionally warns at 20% so the badge flow is testable.
-    nonisolated static let limitWarningThresholdPercent: Double = 20
+    /// Warn when a local limit snapshot reaches the product threshold.
+    nonisolated static let limitWarningThresholdPercent: Double = 85
 
     /// How many sessions across all known CLIs were touched within
     /// `liveWindow`. Drives the Prompt-workspace badge.
