@@ -1,5 +1,5 @@
 // Mirrors Loom/Agents/UsageService.swift.
-// Reads on-disk usage data from local CLI agents (Claude Code, Codex, Gemini)
+// Reads on-disk usage data from local agents (Claude Code, Codex, LM Studio)
 // and aggregates token totals, sessions, models, projects, prompts.
 
 use chrono::{DateTime, Datelike, Duration, Local, TimeZone, Timelike, Utc};
@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 pub enum CliTool {
     Claude,
     Codex,
-    Gemini,
+    LmStudio,
 }
 
 impl CliTool {
@@ -24,7 +24,7 @@ impl CliTool {
         match s {
             "claude" => Some(Self::Claude),
             "codex" => Some(Self::Codex),
-            "gemini" => Some(Self::Gemini),
+            "lmstudio" => Some(Self::LmStudio),
             _ => None,
         }
     }
@@ -32,7 +32,7 @@ impl CliTool {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
-            Self::Gemini => "gemini",
+            Self::LmStudio => "lmstudio",
         }
     }
 }
@@ -1350,10 +1350,253 @@ fn walk_jsonl(root: &Path, visit: &mut dyn FnMut(&Path)) {
     }
 }
 
-fn read_gemini_usage(root: &Path) -> CliToolUsage {
-    let mut u = CliToolUsage::unavailable(CliTool::Gemini);
-    u.is_installed = root.exists();
-    u
+fn read_lmstudio_usage(
+    root: &Path,
+    live_cutoff: DateTime<Local>,
+    start_of_today: DateTime<Local>,
+    boundaries: &[BucketBoundary],
+    window_start: DateTime<Local>,
+) -> CliToolUsage {
+    let mut sessions_total: i64 = 0;
+    let mut sessions_today: i64 = 0;
+    let mut active_sessions: i64 = 0;
+    let mut input_tokens: i64 = 0;
+    let mut output_tokens: i64 = 0;
+    let mut last_activity: Option<DateTime<Local>> = None;
+    let mut models: HashSet<String> = HashSet::new();
+    let mut buckets = vec![0_i64; boundaries.len()];
+    let mut hourly = vec![0_i64; 24];
+    let mut model_tokens: HashMap<String, i64> = HashMap::new();
+    let mut project_tokens: HashMap<String, i64> = HashMap::new();
+    let mut project_names: HashMap<String, String> = HashMap::new();
+    let mut project_sessions: HashMap<String, i64> = HashMap::new();
+    let mut project_last: HashMap<String, DateTime<Local>> = HashMap::new();
+    let mut topics: HashMap<String, i64> = HashMap::new();
+    let mut recent_prompts: Vec<PromptPreview> = Vec::new();
+    let mut prompt_count: i64 = 0;
+
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(text) = read_text(&path) else { continue };
+            let Ok(value) = serde_json::from_str::<Value>(&text) else {
+                continue;
+            };
+            let summary = value.get("summary").unwrap_or(&Value::Null);
+            let messages = value
+                .get("messages")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let updated_at = summary
+                .get("updatedAt")
+                .and_then(apple_date_from_value)
+                .or_else(|| file_mtime(&path))
+                .unwrap_or_else(Local::now);
+            let workspace_key = summary
+                .get("workspaceKey")
+                .and_then(Value::as_str)
+                .unwrap_or("global")
+                .to_string();
+            let workspace_name = summary
+                .get("workspaceName")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| friendly_project_name(&workspace_key));
+            let model = summary
+                .get("modelLabel")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("LM Studio")
+                .to_string();
+
+            sessions_total += 1;
+            if updated_at >= start_of_today {
+                sessions_today += 1;
+            }
+            if updated_at >= live_cutoff {
+                active_sessions += 1;
+            }
+            if last_activity.map(|d| updated_at > d).unwrap_or(true) {
+                last_activity = Some(updated_at);
+            }
+
+            models.insert(model.clone());
+            project_names.insert(workspace_key.clone(), workspace_name.clone());
+            if updated_at >= window_start {
+                *project_sessions.entry(workspace_key.clone()).or_default() += 1;
+                project_last
+                    .entry(workspace_key.clone())
+                    .and_modify(|prev| {
+                        if updated_at > *prev {
+                            *prev = updated_at;
+                        }
+                    })
+                    .or_insert(updated_at);
+            }
+
+            let mut session_tokens: i64 = 0;
+            for message in messages {
+                let role = message
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                let body = message.get("text").and_then(Value::as_str).unwrap_or("");
+                let tokens = estimate_tokens(body);
+                if tokens <= 0 {
+                    continue;
+                }
+                session_tokens += tokens;
+                if role == "user" {
+                    input_tokens += tokens;
+                } else if role == "assistant" {
+                    output_tokens += tokens;
+                }
+                let ts = message
+                    .get("createdAt")
+                    .and_then(apple_date_from_value)
+                    .unwrap_or(updated_at);
+                if ts >= window_start {
+                    if let Some(idx) = bucket_index(ts, boundaries) {
+                        buckets[idx] += tokens;
+                    }
+                    let hour = ts.hour() as usize;
+                    if hour < hourly.len() {
+                        hourly[hour] += tokens;
+                    }
+                    if role == "user" {
+                        prompt_count += 1;
+                        for word in extract_keywords(body) {
+                            *topics.entry(word).or_default() += 1;
+                        }
+                        recent_prompts.push(PromptPreview {
+                            text: body.replace('\n', " ").chars().take(140).collect(),
+                            timestamp: ts.to_rfc3339(),
+                            project: workspace_name.clone(),
+                        });
+                    }
+                }
+            }
+
+            if updated_at >= window_start {
+                *model_tokens.entry(model).or_default() += session_tokens;
+                *project_tokens.entry(workspace_key).or_default() += session_tokens;
+            }
+        }
+    }
+
+    let chart_buckets: Vec<UsageBucket> = boundaries
+        .iter()
+        .zip(buckets)
+        .map(|(b, t)| UsageBucket {
+            start: b.start.to_rfc3339(),
+            end: b.end.to_rfc3339(),
+            tokens: t,
+            label: b.label.clone(),
+        })
+        .collect();
+    let mut top_projects: Vec<ProjectUsage> = project_sessions
+        .into_iter()
+        .filter_map(|(path, sessions)| {
+            let last = project_last.get(&path)?;
+            Some(ProjectUsage {
+                display_name: project_names
+                    .get(&path)
+                    .cloned()
+                    .unwrap_or_else(|| friendly_project_name(&path)),
+                path,
+                sessions,
+                last_activity: last.to_rfc3339(),
+            })
+        })
+        .collect();
+    top_projects.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+    top_projects.truncate(5);
+
+    let mut tokens_by_model: Vec<ModelUsage> = model_tokens
+        .into_iter()
+        .map(|(model, tokens)| ModelUsage { model, tokens })
+        .collect();
+    tokens_by_model.sort_by(|a, b| b.tokens.cmp(&a.tokens));
+
+    let mut tokens_by_project: Vec<ProjectTokenSlice> = project_tokens
+        .into_iter()
+        .map(|(path, tokens)| ProjectTokenSlice {
+            display_name: project_names
+                .get(&path)
+                .cloned()
+                .unwrap_or_else(|| friendly_project_name(&path)),
+            path,
+            tokens,
+        })
+        .collect();
+    tokens_by_project.sort_by(|a, b| b.tokens.cmp(&a.tokens));
+
+    let mut top_topics: Vec<PromptTopic> = topics
+        .into_iter()
+        .filter(|(_, count)| *count >= 2)
+        .map(|(keyword, count)| PromptTopic { keyword, count })
+        .collect();
+    top_topics.sort_by(|a, b| b.count.cmp(&a.count));
+    top_topics.truncate(12);
+    recent_prompts.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    recent_prompts.truncate(8);
+    let mut models_sorted: Vec<String> = models.into_iter().collect();
+    models_sorted.sort();
+
+    CliToolUsage {
+        tool: CliTool::LmStudio.as_str().to_string(),
+        is_installed: true,
+        active_sessions,
+        sessions_today,
+        sessions_total,
+        input_tokens,
+        output_tokens,
+        cached_tokens: 0,
+        last_activity: last_activity.map(|d| d.to_rfc3339()),
+        models: models_sorted,
+        chart_buckets,
+        top_projects,
+        tokens_by_model,
+        tokens_by_project,
+        top_topics,
+        recent_prompts,
+        hourly_distribution: hourly,
+        prompt_count,
+        rate_limit_primary_used_percent: None,
+        rate_limit_primary_window_minutes: None,
+        rate_limit_primary_resets_at: None,
+        rate_limit_secondary_used_percent: None,
+        rate_limit_secondary_window_minutes: None,
+        rate_limit_secondary_resets_at: None,
+        plan_type: None,
+        credits: None,
+        rate_limit_reached_type: None,
+        rate_limit_observed_at: None,
+    }
+}
+
+fn apple_date_from_value(value: &Value) -> Option<DateTime<Local>> {
+    if let Some(seconds) = value.as_f64() {
+        let unix_seconds = 978_307_200_f64 + seconds;
+        let whole = unix_seconds.trunc() as i64;
+        let nanos = ((unix_seconds.fract().abs()) * 1_000_000_000.0) as u32;
+        return Utc.timestamp_opt(whole, nanos).single().map(|d| d.with_timezone(&Local));
+    }
+    value.as_str().and_then(parse_iso8601)
+}
+
+fn estimate_tokens(text: &str) -> i64 {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return 0;
+    }
+    ((trimmed.chars().count() as f64) / 4.0).ceil().max(1.0) as i64
 }
 
 fn home() -> PathBuf {
@@ -1396,9 +1639,18 @@ pub fn usage_read(tool: String, timeframe: String) -> Result<CliToolUsage, Strin
                 window_start,
             )
         }
-        CliTool::Gemini => {
-            let root = h.join(".gemini");
-            read_gemini_usage(&root)
+        CliTool::LmStudio => {
+            let root = dirs::data_dir()
+                .unwrap_or_else(|| h.join("AppData").join("Roaming"))
+                .join("Loom Testing Edition")
+                .join("lmstudio-agent-sessions");
+            read_lmstudio_usage(
+                &root,
+                live_cutoff,
+                start_of_today,
+                &boundaries,
+                window_start,
+            )
         }
     })
 }

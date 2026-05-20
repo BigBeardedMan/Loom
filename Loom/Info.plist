@@ -39,5 +39,9 @@
 	<string>$(LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64)</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 BigBeardedMan</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Loom uses the microphone for in-app dictation when you press the mic button or F5.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Loom uses speech recognition to transcribe dictation into the focused text field.</string>
 </dict>
 </plist>

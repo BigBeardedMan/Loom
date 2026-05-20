@@ -76,6 +76,16 @@ export function AgentPane({ workspace, blockId }: Props) {
   useEffect(() => () => cleanupRef.current?.(), []);
 
   useEffect(() => {
+    const onDictation = (event: Event) => {
+      const text = (event as CustomEvent<{ text?: string }>).detail?.text?.trim();
+      if (!text) return;
+      setDraft((prev) => (prev.trim() ? `${prev} ${text}` : text));
+    };
+    window.addEventListener("loom-dictation-insert", onDictation);
+    return () => window.removeEventListener("loom-dictation-insert", onDictation);
+  }, []);
+
+  useEffect(() => {
     scrollRef.current?.scrollTo({ top: 99999, behavior: "smooth" });
   }, [turns]);
 

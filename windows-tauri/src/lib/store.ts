@@ -29,7 +29,7 @@ export type Panel =
   | "preview"
   | "commands";
 
-type UsageTool = "claude" | "codex" | "gemini" | null;
+type UsageTool = "claude" | "codex" | "lmstudio" | null;
 type UsageTimeframe = "day" | "week" | "month" | "year";
 
 type Theme = "system" | "light" | "dark";

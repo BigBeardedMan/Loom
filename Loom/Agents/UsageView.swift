@@ -20,7 +20,7 @@ private struct LimitMeterRow: Identifiable {
     var id: String { label }
 }
 
-/// Single-tool usage dashboard. Each top-bar tab (Claude / Codex / Gemini)
+/// Single-tool usage dashboard. Each top-bar tab (Claude / Codex / LM Studio)
 /// instantiates its own UsageView with the matching `tool`, so each CLI gets
 /// a dedicated full-width dashboard. Dismissed by clicking any workspace in
 /// the sidebar.

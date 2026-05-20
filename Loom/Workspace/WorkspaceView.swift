@@ -5,6 +5,7 @@ struct WorkspaceView: View {
     @Environment(WorkspaceLayout.self) private var layout
     @Environment(UpdateService.self) private var updates
     @Environment(UsageService.self) private var usage
+    @Environment(DictationService.self) private var dictation
     @Environment(WorkspaceContext.self) private var workspaceContext
     @Environment(\.openURL) private var openURL
     @Query(sort: \Workspace.createdAt) private var workspaces: [Workspace]
@@ -117,6 +118,8 @@ struct WorkspaceView: View {
 
             usageTabs
 
+            dictationButton
+
             Spacer()
 
             if selectedUsageTool == nil {
@@ -171,7 +174,53 @@ struct WorkspaceView: View {
         HStack(spacing: 6) {
             usageTab(.claude, label: "Claude Usage")
             usageTab(.codex,  label: "Codex Usage")
-            usageTab(.gemini, label: "Gemini Usage")
+            usageTab(.lmstudio, label: "LM Studio Usage")
+        }
+    }
+
+    private var dictationButton: some View {
+        Button {
+            dictation.toggle()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: dictation.state.isActive ? "mic.fill" : "mic")
+                    .font(.system(size: 11, weight: .bold))
+                Text(dictation.state.isActive ? dictation.state.label : "Dictate")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundStyle(dictation.state.isActive ? .white : LoomTheme.primaryText)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(dictation.state.isActive ? Color(red: 0.62, green: 0.40, blue: 0.95) : LoomTheme.softPanel.opacity(0.7))
+            .overlay(Capsule().stroke(dictation.state.isActive ? Color(red: 0.62, green: 0.40, blue: 0.95).opacity(0.5) : LoomTheme.hairline, lineWidth: 1))
+            .clipShape(Capsule())
+            .overlay(alignment: .topTrailing) {
+                if dictation.state.isActive {
+                    Circle()
+                        .fill(.red)
+                        .frame(width: 7, height: 7)
+                        .offset(x: 1, y: -1)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .help(dictationHelpText)
+        .accessibilityLabel(dictation.state.isActive ? "Stop dictation" : "Start dictation")
+    }
+
+    private var dictationHelpText: String {
+        switch dictation.state {
+        case .idle:
+            return "Start dictation (F5)"
+        case .requestingPermission:
+            return "Requesting microphone and speech access"
+        case .listening:
+            return dictation.liveTranscript.isEmpty ? "Listening… press F5 to insert or Esc to cancel" : dictation.liveTranscript
+        case .transcribing:
+            return "Transcribing…"
+        case .error(let message):
+            return message
         }
     }
 

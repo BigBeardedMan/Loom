@@ -7,7 +7,7 @@ import SwiftUI
 enum CLITool: String, CaseIterable, Identifiable, Hashable {
     case claude
     case codex
-    case gemini
+    case lmstudio
 
     var id: String { rawValue }
 
@@ -15,7 +15,7 @@ enum CLITool: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .claude: return "Claude Code"
         case .codex:  return "Codex"
-        case .gemini: return "Gemini"
+        case .lmstudio: return "LM Studio"
         }
     }
 
@@ -23,7 +23,7 @@ enum CLITool: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .claude: return "claude"
         case .codex:  return "codex"
-        case .gemini: return "gemini"
+        case .lmstudio: return "lmstudio"
         }
     }
 
@@ -31,7 +31,7 @@ enum CLITool: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .claude: return "sparkles"
         case .codex:  return "chevron.left.forwardslash.chevron.right"
-        case .gemini: return "diamond"
+        case .lmstudio: return "cpu"
         }
     }
 
@@ -39,7 +39,7 @@ enum CLITool: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .claude: return Color(red: 0.95, green: 0.39, blue: 0.18)
         case .codex:  return Color(red: 0.23, green: 0.86, blue: 0.46)
-        case .gemini: return Color(red: 0.18, green: 0.50, blue: 0.96)
+        case .lmstudio: return Color(red: 0.62, green: 0.40, blue: 0.95)
         }
     }
 }
@@ -367,9 +367,9 @@ final class UsageService {
             .appendingPathComponent(".codex/sessions", isDirectory: true)
     }()
 
-    private let geminiRoot: URL = {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".gemini", isDirectory: true)
+    private let lmStudioSessionsRoot: URL = {
+        UpdateService.appSupportRoot
+            .appendingPathComponent("lmstudio-agent-sessions", isDirectory: true)
     }()
 
     init() {
@@ -419,7 +419,7 @@ final class UsageService {
         let live = liveWindow
         let claudeRoot = claudeProjectsRoot
         let codexRoot = codexSessionsRoot
-        let geminiRoot = geminiRoot
+        let lmStudioRoot = lmStudioSessionsRoot
         let boundaries = timeframe.boundaries()
         let span = timeframe.totalSpan
         isRefreshing = true
@@ -428,7 +428,7 @@ final class UsageService {
                 Self.computeSnapshot(
                     claudeRoot: claudeRoot,
                     codexRoot: codexRoot,
-                    geminiRoot: geminiRoot,
+                    lmStudioRoot: lmStudioRoot,
                     liveWindow: live,
                     boundaries: boundaries,
                     timeframeSpan: span
@@ -474,12 +474,14 @@ final class UsageService {
         let live = liveWindow
         let claudeRoot = claudeProjectsRoot
         let codexRoot = codexSessionsRoot
+        let lmStudioRoot = lmStudioSessionsRoot
         Task { [weak self] in
             let total = await Task.detached(priority: .utility) {
                 let cutoff = Date().addingTimeInterval(-live)
                 let claude = Self.countActiveJSONL(in: claudeRoot, cutoff: cutoff, recursive: false)
                 let codex  = Self.countActiveJSONL(in: codexRoot,  cutoff: cutoff, recursive: true)
-                return claude + codex
+                let lmStudio = Self.countActiveJSON(in: lmStudioRoot, cutoff: cutoff)
+                return claude + codex + lmStudio
             }.value
             guard let self else { return }
             if self.activeSessionCount != total {
@@ -635,12 +637,29 @@ final class UsageService {
         return count
     }
 
+    private nonisolated static func countActiveJSON(in root: URL, cutoff: Date) -> Int {
+        let urls = (try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        return urls.reduce(0) { partial, url in
+            guard url.pathExtension == "json",
+                  let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                    .contentModificationDate,
+                  mtime >= cutoff else {
+                return partial
+            }
+            return partial + 1
+        }
+    }
+
     // MARK: - Full snapshot
 
     private nonisolated static func computeSnapshot(
         claudeRoot: URL,
         codexRoot: URL,
-        geminiRoot: URL,
+        lmStudioRoot: URL,
         liveWindow: TimeInterval,
         boundaries: [BucketBoundary],
         timeframeSpan: TimeInterval
@@ -663,8 +682,14 @@ final class UsageService {
             startOfToday: startOfToday,
             boundaries: boundaries
         )
-        let gemini = readGeminiUsage(root: geminiRoot)
-        return [claude, codex, gemini]
+        let lmStudio = readLMStudioUsage(
+            root: lmStudioRoot,
+            liveCutoff: cutoff,
+            startOfToday: startOfToday,
+            boundaries: boundaries,
+            windowStart: windowStart
+        )
+        return [claude, codex, lmStudio]
     }
 
     // MARK: - Claude reader
@@ -1428,35 +1453,198 @@ final class UsageService {
         return nil
     }
 
-    // MARK: - Gemini
+    // MARK: - LM Studio reader
 
-    /// Gemini CLI doesn't currently log usage we can read locally — surface
-    /// it as installed-but-no-data rather than hiding it, so users know the
-    /// row exists.
-    private nonisolated static func readGeminiUsage(root: URL) -> CLIToolUsage {
+    private struct LMStudioStoredRecord: Decodable {
+        var summary: LMStudioStoredSummary
+        var messages: [LMStudioStoredMessage]
+    }
+
+    private struct LMStudioStoredSummary: Decodable {
+        var workspaceKey: String
+        var workspaceName: String
+        var modelLabel: String?
+        var updatedAt: Date
+        var messageCount: Int
+        var changedFiles: [String]?
+        var finalStatus: String?
+    }
+
+    private struct LMStudioStoredMessage: Decodable {
+        var role: String
+        var text: String
+        var createdAt: Date
+    }
+
+    private nonisolated static func readLMStudioUsage(
+        root: URL,
+        liveCutoff: Date,
+        startOfToday: Date,
+        boundaries: [BucketBoundary],
+        windowStart: Date
+    ) -> CLIToolUsage {
         let fm = FileManager.default
-        let installed = fm.fileExists(atPath: root.path)
+        let urls = (try? fm.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+
+        var sessionsTotal = 0
+        var sessionsToday = 0
+        var activeSessions = 0
+        var inputTokens = 0
+        var outputTokens = 0
+        var lastActivity: Date?
+        var models: Set<String> = []
+        var bucketTokens = [Int](repeating: 0, count: boundaries.count)
+        var hourlyDistribution = [Int](repeating: 0, count: 24)
+        var modelTokens: [String: Int] = [:]
+        var projectTokens: [String: Int] = [:]
+        var projectNames: [String: String] = [:]
+        var projectSessions: [String: Int] = [:]
+        var projectLastActivity: [String: Date] = [:]
+        var topicCounts: [String: Int] = [:]
+        var promptCount = 0
+        var recentPrompts: [PromptPreview] = []
+
+        let calendar = Calendar.current
+        let decoder = JSONDecoder()
+
+        for url in urls where url.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: url),
+                  let record = try? decoder.decode(LMStudioStoredRecord.self, from: data) else {
+                continue
+            }
+
+            let updatedAt = record.summary.updatedAt
+            let workspaceKey = record.summary.workspaceKey
+            let workspaceName = record.summary.workspaceName.isEmpty ? friendlyProjectName(workspaceKey) : record.summary.workspaceName
+            let model = record.summary.modelLabel?.nilIfEmpty ?? "LM Studio"
+
+            sessionsTotal += 1
+            if updatedAt >= startOfToday { sessionsToday += 1 }
+            if updatedAt >= liveCutoff { activeSessions += 1 }
+            if lastActivity == nil || updatedAt > lastActivity! { lastActivity = updatedAt }
+
+            models.insert(model)
+            projectNames[workspaceKey] = workspaceName
+            if updatedAt >= windowStart {
+                projectSessions[workspaceKey, default: 0] += 1
+                if let prev = projectLastActivity[workspaceKey] {
+                    if updatedAt > prev { projectLastActivity[workspaceKey] = updatedAt }
+                } else {
+                    projectLastActivity[workspaceKey] = updatedAt
+                }
+            }
+
+            var sessionTokens = 0
+            for message in record.messages {
+                let tokens = estimatedTokenCount(message.text)
+                guard tokens > 0 else { continue }
+                sessionTokens += tokens
+                let role = message.role.lowercased()
+                if role == "user" {
+                    inputTokens += tokens
+                } else if role == "assistant" {
+                    outputTokens += tokens
+                }
+
+                let timestamp = message.createdAt
+                if timestamp >= windowStart {
+                    if let idx = bucketIndex(for: timestamp, in: boundaries) {
+                        bucketTokens[idx] += tokens
+                    }
+                    let hour = calendar.component(.hour, from: timestamp)
+                    if hour >= 0 && hour < 24 {
+                        hourlyDistribution[hour] += tokens
+                    }
+                    if role == "user" {
+                        promptCount += 1
+                        for word in extractTopicKeywords(from: message.text) {
+                            topicCounts[word, default: 0] += 1
+                        }
+                        recentPrompts.append(PromptPreview(
+                            text: String(message.text.replacingOccurrences(of: "\n", with: " ").prefix(140)),
+                            timestamp: timestamp,
+                            project: workspaceName
+                        ))
+                    }
+                }
+            }
+
+            if updatedAt >= windowStart {
+                modelTokens[model, default: 0] += sessionTokens
+                projectTokens[workspaceKey, default: 0] += sessionTokens
+            }
+        }
+
+        let chartBuckets: [UsageBucket] = zip(boundaries, bucketTokens).map { boundary, tokens in
+            UsageBucket(start: boundary.start, end: boundary.end, tokens: tokens, label: boundary.label)
+        }
+        let topProjects = projectSessions.compactMap { key, count -> ProjectUsage? in
+            guard let last = projectLastActivity[key] else { return nil }
+            return ProjectUsage(
+                displayName: projectNames[key] ?? friendlyProjectName(key),
+                path: key,
+                sessions: count,
+                lastActivity: last
+            )
+        }
+        .sorted { $0.lastActivity > $1.lastActivity }
+        .prefix(5)
+        .map { $0 }
+
+        let tokensByModel = modelTokens
+            .map { ModelUsage(model: $0.key, tokens: $0.value) }
+            .sorted { $0.tokens > $1.tokens }
+        let tokensByProject = projectTokens
+            .map { key, tokens in
+                ProjectTokenSlice(
+                    displayName: projectNames[key] ?? friendlyProjectName(key),
+                    path: key,
+                    tokens: tokens
+                )
+            }
+            .sorted { $0.tokens > $1.tokens }
+        let topTopics = topicCounts
+            .filter { $0.value >= 2 }
+            .map { PromptTopic(keyword: $0.key, count: $0.value) }
+            .sorted { $0.count > $1.count }
+            .prefix(12)
+            .map { $0 }
+        let trimmedRecent = recentPrompts
+            .sorted { $0.timestamp > $1.timestamp }
+            .prefix(8)
+            .map { $0 }
+
         return CLIToolUsage(
-            tool: .gemini,
-            isInstalled: installed,
-            activeSessions: 0,
-            sessionsToday: 0,
-            sessionsTotal: 0,
-            inputTokens: 0,
-            outputTokens: 0,
+            tool: .lmstudio,
+            isInstalled: true,
+            activeSessions: activeSessions,
+            sessionsToday: sessionsToday,
+            sessionsTotal: sessionsTotal,
+            inputTokens: inputTokens,
+            outputTokens: outputTokens,
             cachedTokens: 0,
-            lastActivity: nil,
-            models: [],
-            chartBuckets: [],
-            topProjects: [],
-            tokensByModel: [],
-            tokensByProject: [],
-            topTopics: [],
-            recentPrompts: [],
-            hourlyDistribution: Array(repeating: 0, count: 24),
-            promptCount: 0,
+            lastActivity: lastActivity,
+            models: models.sorted(),
+            chartBuckets: chartBuckets,
+            topProjects: topProjects,
+            tokensByModel: tokensByModel,
+            tokensByProject: tokensByProject,
+            topTopics: topTopics,
+            recentPrompts: trimmedRecent,
+            hourlyDistribution: hourlyDistribution,
+            promptCount: promptCount,
             limitSnapshot: nil
         )
+    }
+
+    private nonisolated static func estimatedTokenCount(_ text: String) -> Int {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return 0 }
+        return max(1, Int(ceil(Double(trimmed.count) / 4.0)))
     }
 
     // MARK: - Helpers

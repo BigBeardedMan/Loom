@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { ipc, type CliToolUsage } from "./ipc";
 
-export type Tool = "claude" | "codex" | "gemini";
+export type Tool = "claude" | "codex" | "lmstudio";
 export type Timeframe = "day" | "week" | "month" | "year";
 
 export function toolLabel(t: Tool): string {
-  return t === "claude" ? "Claude Code" : t === "codex" ? "Codex" : "Gemini";
+  return t === "claude" ? "Claude Code" : t === "codex" ? "Codex" : "LM Studio";
 }
 
 export function toolBrandColor(t: Tool): string {
@@ -13,7 +13,7 @@ export function toolBrandColor(t: Tool): string {
     ? "rgb(242, 99, 46)"
     : t === "codex"
       ? "rgb(59, 219, 117)"
-      : "rgb(46, 128, 245)";
+      : "rgb(158, 87, 240)";
 }
 
 export function timeframeLabel(tf: Timeframe): string {

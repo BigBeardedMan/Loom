@@ -3,14 +3,15 @@ import { ipc } from "../lib/ipc";
 import { LoomLogoMark } from "./LoomLogoMark";
 import { UpdatePill } from "./UpdatePill";
 import { Icons } from "../lib/icons";
+import { useDictation } from "../lib/dictation";
 import { surface, text, workspaceColorVar } from "../lib/theme";
 import type { Panel as PanelType } from "../lib/store";
 
-type UsageTool = "claude" | "codex" | "gemini";
+type UsageTool = "claude" | "codex" | "lmstudio";
 const USAGE_TOOLS: { id: UsageTool; label: string; color: string }[] = [
   { id: "claude", label: "Claude Usage", color: workspaceColorVar.orange },
   { id: "codex", label: "Codex Usage", color: workspaceColorVar.green },
-  { id: "gemini", label: "Gemini Usage", color: workspaceColorVar.blue },
+  { id: "lmstudio", label: "LM Studio Usage", color: workspaceColorVar.purple },
 ];
 
 const PANEL_META: Record<
@@ -37,6 +38,7 @@ export function Titlebar() {
   const setUsageTool = useApp((s) => s.setUsageTool);
   const selectedUsageTool = useApp((s) => s.selectedUsageTool);
   const workspace = workspaces.find((w) => w.id === selectedId);
+  const dictation = useDictation();
 
   return (
     <div
@@ -89,6 +91,29 @@ export function Titlebar() {
           />
         ))}
       </div>
+
+      <button
+        onClick={dictation.toggle}
+        className="flex items-center gap-1.5 transition-colors"
+        style={{
+          padding: "4px 10px",
+          borderRadius: 999,
+          background: dictation.isActive ? workspaceColorVar.purple : surface.softPanel,
+          border: `1px solid ${surface.hairline}`,
+          color: dictation.isActive ? "#fff" : text.primary,
+          fontSize: 12,
+          fontWeight: 600,
+        }}
+        title={
+          dictation.error ??
+          (dictation.isActive
+            ? dictation.liveTranscript || "Listening. Press F5 to insert or Esc to cancel."
+            : "Start dictation (F5)")
+        }
+      >
+        <Icons.mic size={13} strokeWidth={2.2} />
+        {dictation.isActive ? "Listening" : "Dictate"}
+      </button>
 
       <div className="flex-1" />
 

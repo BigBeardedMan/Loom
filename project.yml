@@ -15,8 +15,8 @@ settings:
     # release, so the pill never shows a code lower than what's on main.
     # Bump this manually before each testing release; release-testing.sh
     # reads it back out and tags the GitHub pre-release `testing-<version>`.
-    MARKETING_VERSION: "8.0.29"
-    CURRENT_PROJECT_VERSION: "6"
+    MARKETING_VERSION: "8.0.30"
+    CURRENT_PROJECT_VERSION: "7"
     CODE_SIGN_STYLE: Manual
     CODE_SIGN_IDENTITY: "Loom Local Codesign"
     DEVELOPMENT_TEAM: ""
@@ -53,6 +53,8 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LoomReleaseSignaturePublicKeyBase64: $(LOOM_RELEASE_SIGNATURE_PUBLIC_KEY_BASE64)
         NSHumanReadableCopyright: "© 2026 BigBeardedMan"
+        NSMicrophoneUsageDescription: "Loom uses the microphone for in-app dictation when you press the mic button or F5."
+        NSSpeechRecognitionUsageDescription: "Loom uses speech recognition to transcribe dictation into the focused text field."
         CFBundleURLTypes:
           - CFBundleTypeRole: Editor
             CFBundleURLName: com.chasesims.Loom.url
@@ -63,6 +65,7 @@ targets:
       properties:
         com.apple.security.app-sandbox: false
         com.apple.security.network.client: true
+        com.apple.security.device.audio-input: true
     settings:
       base:
         PRODUCT_NAME: "Loom Testing Edition"

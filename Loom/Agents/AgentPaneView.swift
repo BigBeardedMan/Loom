@@ -208,6 +208,17 @@ struct AgentPaneView: View {
                 await prepareLMStudioForAgentWork()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .loomDictationInsertText)) { notification in
+            guard let text = notification.userInfo?["text"] as? String,
+                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return
+            }
+            if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                draft = text
+            } else {
+                draft += " " + text
+            }
+        }
     }
 
     private var conversationArea: some View {

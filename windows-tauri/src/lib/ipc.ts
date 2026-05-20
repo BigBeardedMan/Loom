@@ -285,7 +285,7 @@ export const ipc = {
   },
 
   usage: {
-    read: (tool: "claude" | "codex" | "gemini", timeframe: "day" | "week" | "month" | "year") =>
+    read: (tool: "claude" | "codex" | "lmstudio", timeframe: "day" | "week" | "month" | "year") =>
       invoke<CliToolUsage>("usage_read", { tool, timeframe }),
   },
 
@@ -401,7 +401,7 @@ export type PromptPreview = {
 };
 
 export type CliToolUsage = {
-  tool: "claude" | "codex" | "gemini";
+  tool: "claude" | "codex" | "lmstudio";
   isInstalled: boolean;
   activeSessions: number;
   sessionsToday: number;

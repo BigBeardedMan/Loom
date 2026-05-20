@@ -10,6 +10,7 @@ struct LoomApp: App {
     @State private var updateService = UpdateService()
     @State private var localEndpoints = LocalEndpointStore()
     @State private var lmStudioRuntime = LMStudioRuntimeService()
+    @State private var dictationService = DictationService()
     @State private var workspaceContext = WorkspaceContext()
     @State private var mcpService = MCPService()
     @State private var commandHistory = CommandHistoryService()
@@ -47,6 +48,7 @@ struct LoomApp: App {
                 .environment(updateService)
                 .environment(localEndpoints)
                 .environment(lmStudioRuntime)
+                .environment(dictationService)
                 .environment(workspaceContext)
                 .environment(commandHistory)
                 .environment(terminalTranscripts)
@@ -168,6 +170,18 @@ struct LoomApp: App {
                 .keyboardShortcut("o", modifiers: [.command, .shift])
                 .disabled(layout.previousWorkspaceID == nil)
             }
+            CommandMenu("Dictation") {
+                Button(dictationService.state.isActive ? "Stop Dictation" : "Start Dictation") {
+                    dictationService.toggle()
+                }
+                .keyboardShortcut(f5Key, modifiers: [])
+
+                Button("Cancel Dictation") {
+                    dictationService.cancel()
+                }
+                .keyboardShortcut(.escape, modifiers: [])
+                .disabled(!dictationService.state.isActive)
+            }
 
             CommandGroup(replacing: .help) {
                 Button("Loom Testing Edition Help") {
@@ -199,6 +213,7 @@ struct LoomApp: App {
             SettingsView()
                 .environment(localEndpoints)
                 .environment(lmStudioRuntime)
+                .environment(dictationService)
                 .environment(agentRegistry)
                 .environment(mcpService)
                 .environment(terminalTranscripts)
@@ -210,6 +225,10 @@ struct LoomApp: App {
         let index = panels.firstIndex(of: panel) ?? 0
         let digit = String(min(index + 1, 9))
         return KeyEquivalent(Character(digit))
+    }
+
+    private var f5Key: KeyEquivalent {
+        KeyEquivalent(Character(UnicodeScalar(NSF5FunctionKey)!))
     }
 
     private func pinFocused(_ pin: BlockPin?) {
