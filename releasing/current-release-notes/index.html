@@ -2140,12 +2140,9 @@
 
 <h2 id="changes">Changes<a class="headerlink" href="#changes" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Fixes production auto-update validation so the downloaded Mac app bundle carries the <code>Loom</code> display name expected by existing installations.</li>
-<li>Adds a release-script bundle metadata check to prevent publishing a Mac DMG that the in-app updater would reject.</li>
-<li>Terminal panes now support screenshot/image paste for Codex workflows: image-only clipboards insert editable <code>--image '&lt;path&gt;'</code> text instead of sending image bytes into the PTY.</li>
-<li>Finder-copied image files reuse their original file path, while raw clipboard screenshots are saved as PNG files under Loom's Application Support folder.</li>
-<li>Dragged image files or raw image data now use the same editable <code>--image '&lt;path&gt;'</code> argument behavior and never auto-submit the command.</li>
-<li>Text paste still wins when rich clipboard content includes both text and an image, so browser and document copies keep the normal text-paste behavior.</li>
+<li>Fixes Codex live task clearing so completed plans do not reappear after pressing clear.</li>
+<li>Codex task sessions now use the latest <code>update_plan</code> timestamp for live activity instead of unrelated rollout log writes.</li>
+<li>Fully completed Codex plans now disappear from the Tasks pane instead of lingering as live sessions.</li>
 </ul>
 
 
