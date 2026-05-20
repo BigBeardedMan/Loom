@@ -2262,7 +2262,7 @@
 <p><strong>Codex</strong> records its plan inside the rollout JSONL it writes for each session:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>~/.codex/sessions/YYYY/MM/DD/rollout-&lt;ts&gt;-&lt;uuid&gt;.jsonl
 </span></code></pre></div>
-<p>Loom scans the rollout for <code>update_plan</code> function calls and surfaces the most recent plan from each rollout that's been touched inside the active window. Status maps directly: <code>pending</code>, <code>in_progress</code>, <code>completed</code>. The task header also uses the latest Codex <code>turn_context</code> model when the rollout includes one.</p>
+<p>Loom scans the rollout for <code>update_plan</code> function calls and surfaces the most recent non-terminal plan whose plan update is inside the active window. Status maps directly: <code>pending</code>, <code>in_progress</code>, <code>completed</code>. The task header also uses the latest Codex <code>turn_context</code> model when the rollout includes one.</p>
 <p><strong>Gemini CLI</strong> does not currently write plan state to disk in any format Loom can read; Gemini terminals show in the agent picker but won't appear in the Tasks pane until the CLI emits a structured plan log.</p>
 <p>Loom polls every <strong>2 seconds</strong> via <code>LiveAgentTasksService</code> and groups results by product + model + session id. Claude model labels come from the matching <code>~/.claude/projects/.../&lt;session-id&gt;.jsonl</code> when available.</p>
 <h2 id="what-you-see">What you see<a class="headerlink" href="#what-you-see" title="Permanent link">&para;</a></h2>
@@ -2272,7 +2272,7 @@
 <li>One row per task, with a status badge (•, ▶, ✓).</li>
 <li>Click a task to expand and read its full description.</li>
 </ul>
-<p>When the session finishes (or the session id rotates), the live block clears.</p>
+<p>When the session finishes, all tasks become terminal, or the session id rotates, the live block clears.</p>
 <h2 id="multiple-sessions">Multiple sessions<a class="headerlink" href="#multiple-sessions" title="Permanent link">&para;</a></h2>
 <p>If you have several CLI agents running across multiple Terminal panes — or if Claude Code is also running outside Loom — the pane shows all live sessions, each with its own header. Use the workspace's <strong>Stale window</strong> (Settings → Tasks) to hide sessions that haven't been touched recently.</p>
 <h2 id="stale-window">Stale window<a class="headerlink" href="#stale-window" title="Permanent link">&para;</a></h2>
@@ -2318,7 +2318,7 @@
 <p>Every session in the Tasks pane has a × button, and the trash icon in the header runs "Clear all". What happens on disk depends on the source:</p>
 <ul>
 <li><strong>Claude Code</strong> task JSON files are deleted (the session directory stays so the lock file is undisturbed). If the session is still live it rewrites its tasks on the next turn; truly stuck/zombie sessions stay gone.</li>
-<li><strong>Codex</strong> rollout files are left untouched — they hold the conversation history, so deleting them would destroy more than the plan. Instead Loom records a dismissal timestamp keyed to the product/model/session and hides the group until the rollout file's mtime advances past that mark. An active Codex session reappears after its next event; a stuck session stays cleared.</li>
+<li><strong>Codex</strong> rollout files are left untouched — they hold the conversation history, so deleting them would destroy more than the plan. Instead Loom records a dismissal timestamp keyed to the product/model/session and hides the group until a newer <code>update_plan</code> event advances past that mark. An active Codex session reappears after its next plan update; a stuck or completed session stays cleared.</li>
 <li><strong>Gemini</strong> is currently never collected from disk, so there's nothing to clear; the same dismissal mechanism applies if a future Gemini source is added.</li>
 </ul>
 <p>Dismissals persist across launches via <code>UserDefaults</code> key <code>loom.tasks.dismissedSessions</code>.</p>

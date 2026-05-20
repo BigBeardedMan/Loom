@@ -7626,8 +7626,8 @@ section above the kanban columns:</p>
 <li>One row per task, with a status badge.</li>
 <li>Click a task to expand and read its full description and <code>activeForm</code>.</li>
 </ul>
-<p>When a session finishes (or its session id rotates), the live block clears
-on the next 2 second poll.</p>
+<p>When a session finishes, all tasks become terminal, or its session id rotates,
+the live block clears on the next 2 second poll.</p>
 <h3 id="multiple-sessions">Multiple sessions<a class="headerlink" href="#multiple-sessions" title="Permanent link">&para;</a></h3>
 <p>If multiple CLI agents are running across multiple Terminal panes (or
 outside Loom), each appears with its own header. The active session count
@@ -7687,8 +7687,8 @@ require a separate privacy entitlement).</p>
 header runs "Clear all". Claude sessions delete task JSON files. Codex
 sessions are hidden by a local dismissal timestamp keyed by product, model,
 and session id, because their rollout JSONL also contains conversation
-history. Active log-backed sessions reappear after their next event; stuck
-sessions stay cleared.</p>
+history. Active log-backed sessions reappear after their next task-plan
+update; stuck or completed sessions stay cleared.</p>
 <hr />
 <h2 id="9-task-handoff">9. Task Handoff<a class="headerlink" href="#9-task-handoff" title="Permanent link">&para;</a></h2>
 <p>Kanban cards can carry the next action (a prompt or a shell command) and
