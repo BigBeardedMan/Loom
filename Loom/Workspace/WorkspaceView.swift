@@ -7,6 +7,7 @@ struct WorkspaceView: View {
     @Environment(UsageService.self) private var usage
     @Environment(DictationService.self) private var dictation
     @Environment(WorkspaceContext.self) private var workspaceContext
+    @Environment(TerminalTranscriptStore.self) private var terminalHistory
     @Environment(\.openURL) private var openURL
     @Query(sort: \Workspace.createdAt) private var workspaces: [Workspace]
     @State private var showCommandPalette: Bool = false
@@ -16,6 +17,7 @@ struct WorkspaceView: View {
     @State private var dragTarget: DropTarget?
     @State private var renamingBlockID: UUID?
     @State private var selectedUsageTool: CLITool? = nil
+    @State private var transcriptPreview: TerminalTranscriptSession?
 
     private var deckCapacity: Int {
         let cap = WorkspaceLayout.capacity(for: deckSize)
@@ -52,10 +54,17 @@ struct WorkspaceView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .padding(12)
+
+            if let session = transcriptPreview {
+                transcriptPreviewOverlay(session)
+                    .transition(.opacity.combined(with: .scale(scale: 0.985)))
+                    .zIndex(10)
+            }
         }
         .loomAppearance()
         .onChange(of: layout.selectedWorkspaceID) { _, _ in handleWorkspaceChange() }
         .onChange(of: selectedWorkspace?.folderPath) { _, _ in syncTerminalCwd() }
+        .animation(.easeOut(duration: 0.16), value: transcriptPreview?.id)
         .task { handleWorkspaceChange() }
     }
 
@@ -292,14 +301,6 @@ struct WorkspaceView: View {
         .help("Restart Loom with the staged build")
     }
 
-    private var usageTabs: some View {
-        HStack(spacing: 6) {
-            usageTab(.claude, label: "Claude Usage")
-            usageTab(.codex,  label: "Codex Usage")
-            usageTab(.lmstudio, label: "LM Studio Usage")
-        }
-    }
-
     private var dictationButton: some View {
         Button {
             dictation.toggle()
@@ -344,37 +345,6 @@ struct WorkspaceView: View {
         case .error(let message):
             return message
         }
-    }
-
-    private func usageTab(_ tool: CLITool, label: String) -> some View {
-        let isSelected = selectedUsageTool == tool
-        let hasLimitWarning = usage.hasUnacknowledgedLimitWarning(for: tool)
-        return Button {
-            selectedUsageTool = isSelected ? nil : tool
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: tool.systemImage)
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(isSelected ? .white : tool.brandColor)
-                Text(label)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(isSelected ? .white : LoomTheme.primaryText)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(isSelected ? tool.brandColor : LoomTheme.softPanel.opacity(0.7))
-            .overlay(Capsule().stroke(LoomTheme.hairline, lineWidth: 1))
-            .clipShape(Capsule())
-            .overlay(alignment: .topLeading) {
-                if hasLimitWarning {
-                    LoomNotificationBadge()
-                        .offset(x: -5, y: -6)
-                }
-            }
-        }
-        .buttonStyle(.plain)
-        .pointingHandCursor()
-        .help(hasLimitWarning ? "\(label) is near its limit" : (isSelected ? "Click a workspace to return" : "Open \(label) dashboard"))
     }
 
     private var addBlockStrip: some View {
@@ -423,9 +393,63 @@ struct WorkspaceView: View {
         return LoomPanel {
             WorkspaceSidebarView(
                 selectedWorkspaceID: $bindable.selectedWorkspaceID,
-                selectedUsageTool: $selectedUsageTool
+                selectedUsageTool: $selectedUsageTool,
+                transcriptPreview: $transcriptPreview
             )
         }
+    }
+
+    private func transcriptPreviewOverlay(_ session: TerminalTranscriptSession) -> some View {
+        GeometryReader { geo in
+            ZStack {
+                Color.black.opacity(0.46)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        transcriptPreview = nil
+                    }
+
+                TerminalTranscriptDetailView(
+                    session: session,
+                    onStartFreshShell: {
+                        let cwd = URL(fileURLWithPath: session.cwd)
+                        layout.addTerminalBlock(cwd: cwd)
+                        transcriptPreview = nil
+                    },
+                    onDismiss: {
+                        transcriptPreview = nil
+                    }
+                )
+                .environment(terminalHistory)
+                .frame(
+                    width: transcriptPreviewWidth(in: geo.size),
+                    height: transcriptPreviewHeight(in: geo.size)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(LoomTheme.hairline, lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.38), radius: 28, x: 0, y: 18)
+                .contentShape(RoundedRectangle(cornerRadius: 14))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .onExitCommand {
+            transcriptPreview = nil
+        }
+    }
+
+    private func transcriptPreviewWidth(in size: CGSize) -> CGFloat {
+        let available = max(320, size.width - 48)
+        let preferred = max(620, size.width * 0.74)
+        return min(980, min(preferred, available))
+    }
+
+    private func transcriptPreviewHeight(in size: CGSize) -> CGFloat {
+        let available = max(320, size.height - 48)
+        let preferred = max(440, size.height * 0.76)
+        return min(760, min(preferred, available))
     }
 
     // MARK: - Deck or Usage overlay

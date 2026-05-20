@@ -1,11 +1,11 @@
 import SwiftUI
 
 struct TerminalTranscriptDetailView: View {
-    @Environment(\.dismiss) private var dismiss
     @Environment(TerminalTranscriptStore.self) private var store
 
     let session: TerminalTranscriptSession
     let onStartFreshShell: () -> Void
+    let onDismiss: () -> Void
 
     @State private var transcriptText: String = "Loading transcript..."
 
@@ -23,7 +23,7 @@ struct TerminalTranscriptDetailView: View {
             }
             .background(Color(red: 0.018, green: 0.022, blue: 0.026))
         }
-        .frame(width: 860, height: 620)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(LoomTheme.panel)
         .task {
             transcriptText = store.readTranscriptText(for: session)
@@ -51,7 +51,7 @@ struct TerminalTranscriptDetailView: View {
                 Label("Start Fresh Shell Here", systemImage: "plus.rectangle.on.rectangle")
             }
             Button("Done") {
-                dismiss()
+                onDismiss()
             }
             .keyboardShortcut(.cancelAction)
         }

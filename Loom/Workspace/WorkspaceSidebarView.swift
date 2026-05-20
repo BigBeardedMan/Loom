@@ -15,12 +15,12 @@ struct WorkspaceSidebarView: View {
 
     @Binding var selectedWorkspaceID: UUID?
     @Binding var selectedUsageTool: CLITool?
+    @Binding var transcriptPreview: TerminalTranscriptSession?
     @State private var renamingSessionID: UUID?
     @State private var sessionRenameDraft: String = ""
     @State private var renamingNoteID: UUID?
     @State private var clearAllConfirm: ClearAllScope?
     @State private var showRecentlyDeletedTerminals: Bool = false
-    @State private var transcriptSheet: TerminalTranscriptSession?
     @FocusState private var renameFocused: Bool
 
     private enum ClearAllScope: Identifiable {
@@ -62,17 +62,6 @@ struct WorkspaceSidebarView: View {
         } message: { _ in
             Text("This can't be undone.")
         }
-        .sheet(item: $transcriptSheet) { session in
-            TerminalTranscriptDetailView(
-                session: session,
-                onStartFreshShell: {
-                    let cwd = URL(fileURLWithPath: session.cwd)
-                    layout.addTerminalBlock(cwd: cwd)
-                    transcriptSheet = nil
-                }
-            )
-            .environment(terminalHistory)
-        }
     }
 
     // MARK: - Workspaces
@@ -96,7 +85,7 @@ struct WorkspaceSidebarView: View {
         return HStack(alignment: .top, spacing: 10) {
             RoundedRectangle(cornerRadius: 2)
                 .fill(ws.color.color)
-                .frame(width: 4, height: hasFolder ? 34 : 24)
+                .frame(width: 4, height: hasFolder ? 34 : 22)
                 .padding(.top, 1)
 
             VStack(alignment: .leading, spacing: 3) {
@@ -121,11 +110,13 @@ struct WorkspaceSidebarView: View {
                     Spacer()
                 }
 
-                Text(hasFolder ? ws.displayFolderPath : ws.kind.label)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(LoomTheme.mutedText)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                if hasFolder {
+                    Text(ws.displayFolderPath)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(LoomTheme.mutedText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
             }
         }
         .padding(.horizontal, 10)
@@ -181,7 +172,7 @@ struct WorkspaceSidebarView: View {
     private func usageRow(_ tool: CLITool) -> some View {
         let isSelected = selectedUsageTool == tool
         let resolved = usage.tools.first(where: { $0.tool == tool }) ?? .unavailable(tool)
-        let hasWarning = usage.hasUnacknowledgedLimitWarning(for: tool)
+        let hasWarning = tool.supportsLimitSignals && usage.hasUnacknowledgedLimitWarning(for: tool)
 
         return Button {
             selectedUsageTool = isSelected ? nil : tool
@@ -411,12 +402,12 @@ struct WorkspaceSidebarView: View {
             icon: "clock.arrow.circlepath",
             tint: LoomTheme.green,
             primaryAction: {
-                transcriptSheet = session
+                transcriptPreview = session
             },
             trailing: {
                 HStack(spacing: 6) {
                     Button {
-                        transcriptSheet = session
+                        transcriptPreview = session
                     } label: {
                         Image(systemName: "arrow.up.left.and.arrow.down.right")
                             .font(.system(size: 9, weight: .semibold))
@@ -443,7 +434,7 @@ struct WorkspaceSidebarView: View {
             icon: "trash",
             tint: LoomTheme.orange,
             primaryAction: {
-                transcriptSheet = session
+                transcriptPreview = session
             },
             trailing: {
                 HStack(spacing: 6) {

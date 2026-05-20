@@ -29,6 +29,10 @@ struct UsageView: View {
     let tool: CLITool
     @State private var mode: UsageDashboardMode = .usage
 
+    private var canShowLimits: Bool {
+        tool.supportsLimitSignals
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             controlBar
@@ -40,7 +44,7 @@ struct UsageView: View {
                 } else {
                     ScrollView {
                         VStack(spacing: 14) {
-                            if mode == .limits {
+                            if mode == .limits && canShowLimits {
                                 limitsDashboard
                             } else {
                                 toolDashboard
@@ -64,6 +68,18 @@ struct UsageView: View {
         .background(LoomTheme.panel)
         .task {
             usage.requestRefresh()
+        }
+        .onAppear {
+            normalizeModeForTool()
+        }
+        .onChange(of: tool) { _, _ in
+            normalizeModeForTool()
+        }
+    }
+
+    private func normalizeModeForTool() {
+        if !canShowLimits && mode == .limits {
+            mode = .usage
         }
     }
 
@@ -492,7 +508,7 @@ struct UsageView: View {
                 Text(tool.label)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(LoomTheme.primaryText)
-                Text(mode == .limits ? "Local limit signals" : usage.timeframe.headlineLabel)
+                Text(mode == .limits && canShowLimits ? "Local limit signals" : usage.timeframe.headlineLabel)
                     .font(.system(size: 10))
                     .foregroundStyle(LoomTheme.mutedText)
             }
@@ -509,14 +525,16 @@ struct UsageView: View {
                         usage.timeframe = tf
                     }
                 }
-                usageModeButton(title: "Limits", isActive: mode == .limits) {
-                    mode = .limits
-                    usage.acknowledgeLimitWarning(for: tool)
-                }
-                .overlay(alignment: .topLeading) {
-                    if usage.hasUnacknowledgedLimitWarning(for: tool) {
-                        LoomNotificationBadge()
-                            .offset(x: -5, y: -6)
+                if canShowLimits {
+                    usageModeButton(title: "Limits", isActive: mode == .limits) {
+                        mode = .limits
+                        usage.acknowledgeLimitWarning(for: tool)
+                    }
+                    .overlay(alignment: .topLeading) {
+                        if usage.hasUnacknowledgedLimitWarning(for: tool) {
+                            LoomNotificationBadge()
+                                .offset(x: -5, y: -6)
+                        }
                     }
                 }
             }

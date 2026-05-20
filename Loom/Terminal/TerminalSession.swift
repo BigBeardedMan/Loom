@@ -150,7 +150,7 @@ final class TerminalSession: Identifiable {
     }
 
     /// CLI agents whose foreground state we recognize for the active-session
-    /// badge. Click-to-edit is narrower and currently Claude-only.
+    /// badge and terminal prompt click-to-position behavior.
     static let knownCLIAgents: Set<String> = ["claude", "codex", "gemini", "lmstudio"]
 
     fileprivate static func processName(pid: pid_t) -> String? {
@@ -268,10 +268,9 @@ final class TerminalSession: Identifiable {
 /// Drop those tiny frames and only forward real ones.
 ///
 /// Also hosts the click-to-position-cursor gesture: when the user single-
-/// clicks on the same row as the shell cursor we send ESC[C / ESC[D bytes
-/// to walk the cursor to the clicked column — same UX as Warp/iTerm2 with
-/// shell integration. Implemented as a gesture recognizer (not a mouseDown
-/// override) because SwiftTerm's `mouseDown` isn't `open`.
+/// clicks near editable terminal input we send arrow-key bytes to walk the
+/// cursor to the clicked cell. Implemented as a gesture recognizer (not a
+/// mouseDown override) because SwiftTerm's `mouseDown` isn't `open`.
 final class LoomTerminalView: LocalProcessTerminalView {
     var transcriptRecorder: TerminalTranscriptRecorder?
 
@@ -599,11 +598,7 @@ final class LoomTerminalView: LocalProcessTerminalView {
         let clampedCol = max(0, min(clickedCol, term.cols - 1))
         let colDelta = clampedCol - cursorCol
 
-        // Click-to-edit is scoped to Claude's interactive prompt. Sending
-        // arrows into zsh, Codex, Gemini, or an arbitrary TUI can trigger
-        // history navigation or tool-specific shortcuts instead of moving
-        // text insertion.
-        guard isClaudeForeground else { return }
+        guard canClickToPositionForeground else { return }
         if rowDelta != 0 {
             guard abs(rowDelta) <= Self.verticalClickRadius else { return }
         }
@@ -623,17 +618,39 @@ final class LoomTerminalView: LocalProcessTerminalView {
         send(txt: sequence)
     }
 
-    /// True when Claude is the foreground process. The text-click editing
-    /// affordance is intentionally Claude-only so other shells and TUIs keep
-    /// their default click behavior.
-    private var isClaudeForeground: Bool {
-        let fd = process.childfd
-        guard fd >= 0 else { return false }
-        let pgid = tcgetpgrp(fd)
-        guard pgid > 0 else { return false }
-        guard let name = TerminalSession.processName(pid: pgid)?.lowercased() else { return false }
-        return name == "claude"
+    /// True when the foreground process is a prompt-style shell/agent where
+    /// arrow-key cursor walking is expected. Full-screen apps and mouse-aware
+    /// TUIs keep ownership of clicks.
+    private var canClickToPositionForeground: Bool {
+        guard let name = foregroundProcessName else { return false }
+        if Self.clickToPositionBlockedCommands.contains(name) { return false }
+        guard terminal.mouseMode == .off || TerminalSession.knownCLIAgents.contains(name) else {
+            return false
+        }
+        return Self.clickToPositionAllowedCommands.contains(name)
+            || TerminalSession.knownCLIAgents.contains(name)
     }
+
+    private var foregroundProcessName: String? {
+        let fd = process.childfd
+        guard fd >= 0 else { return nil }
+        let pgid = tcgetpgrp(fd)
+        guard pgid > 0 else { return nil }
+        guard let name = TerminalSession.processName(pid: pgid)?.lowercased() else { return nil }
+        return name
+    }
+
+    private static let clickToPositionAllowedCommands: Set<String> = [
+        "bash", "dash", "fish", "irb", "ksh", "lua", "mysql", "node",
+        "psql", "python", "python3", "redis-cli", "ruby", "sh", "sqlite3",
+        "tcsh", "zsh"
+    ]
+
+    private static let clickToPositionBlockedCommands: Set<String> = [
+        "btop", "emacs", "fzf", "htop", "lazygit", "less", "man",
+        "more", "nano", "nvim", "screen", "scp", "sftp", "ssh",
+        "tail", "tmux", "top", "vi", "vim", "watch"
+    ]
 
     /// Mirrors SwiftTerm's internal `computeFontDimensions`: cell width is the
     /// "W" advancement, cell height is ascent + descent + leading. Snapped to

@@ -42,6 +42,13 @@ enum CLITool: String, CaseIterable, Identifiable, Hashable {
         case .lmstudio: return Color(red: 0.62, green: 0.40, blue: 0.95)
         }
     }
+
+    var supportsLimitSignals: Bool {
+        switch self {
+        case .codex: return true
+        case .claude, .lmstudio: return false
+        }
+    }
 }
 
 enum UsageTimeframe: String, CaseIterable, Identifiable, Hashable {
@@ -508,6 +515,7 @@ final class UsageService {
 
     private func applyLimitSnapshots(_ snapshots: [CLITool: UsageLimitSnapshot]) {
         let warnings = snapshots.reduce(into: [CLITool: UsageLimitWarning]()) { partial, entry in
+            guard entry.key.supportsLimitSignals else { return }
             if let warning = Self.limitWarning(
                 tool: entry.key,
                 snapshot: entry.value,
