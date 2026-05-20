@@ -309,17 +309,37 @@ struct AgentPaneView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(Color(red: 0.95, green: 0.39, blue: 0.18))
+        HStack(spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(LoomTheme.orange.opacity(0.16))
+                    .frame(width: 28, height: 26)
+                Image(systemName: "sparkles")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(LoomTheme.orange)
+            }
 
-            agentPicker
+            VStack(alignment: .leading, spacing: 2) {
+                agentPicker
 
-            Text("· \(headerSubtitle)")
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(.tertiary)
+                if !headerSubtitle.isEmpty {
+                    Text(headerSubtitle)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(LoomTheme.mutedText)
+                        .lineLimit(1)
+                }
+            }
+
             Spacer()
+
+            if effectiveAgentMode {
+                LoomStatusPill(
+                    title: selectedAgent.vendor == .lmstudio ? permissionMode.label : "Agent Mode",
+                    systemImage: "wand.and.stars",
+                    tint: selectedAgent.vendor == .lmstudio && permissionMode == .bypassPermissions ? LoomTheme.orange : LoomTheme.purple
+                )
+            }
+
             if selectedAgent.vendor == .lmstudio {
                 lmStudioSessionMenu
                 Button {
@@ -327,9 +347,10 @@ struct AgentPaneView: View {
                 } label: {
                     Image(systemName: "terminal")
                         .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.55))
+                        .foregroundStyle(LoomTheme.mutedText)
                 }
                 .buttonStyle(.plain)
+                .pointingHandCursor()
                 .help("Open this workspace in the lmstudio CLI")
             }
             if registry.isRefreshing {
@@ -338,34 +359,28 @@ struct AgentPaneView: View {
                     .scaleEffect(0.6)
                     .help("Refreshing agents")
             }
-            Button {
-                Task { await registry.refresh(localEndpoints: endpoints.endpoints) }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.55))
-            }
-            .buttonStyle(.plain)
-            .help("Refresh agent list")
+            LoomIconButton(
+                systemName: "arrow.clockwise",
+                help: "Refresh agent list",
+                tint: LoomTheme.orange,
+                action: { Task { await registry.refresh(localEndpoints: endpoints.endpoints) } }
+            )
 
             if isWaiting {
                 ProgressView()
                     .controlSize(.small)
                     .scaleEffect(0.7)
-                Button {
-                    cancelInflight()
-                } label: {
-                    Image(systemName: "stop.circle")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.55))
-                }
-                .buttonStyle(.plain)
-                .help("Cancel")
+                LoomIconButton(
+                    systemName: "stop.circle",
+                    help: "Cancel",
+                    tint: LoomTheme.orange,
+                    action: { cancelInflight() }
+                )
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Color.black.opacity(0.32))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.black.opacity(0.26))
         .overlay(Divider().overlay(Color.white.opacity(0.10)), alignment: .bottom)
     }
 
@@ -497,7 +512,7 @@ struct AgentPaneView: View {
         } label: {
             Image(systemName: "clock.arrow.circlepath")
                 .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(LoomTheme.mutedText)
         }
         .menuStyle(.borderlessButton)
         .help("LM Studio sessions")
@@ -583,10 +598,10 @@ struct AgentPaneView: View {
         .padding(10)
         .background(bubbleBackground(msg.wrappedValue.role))
         .overlay {
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: LoomTheme.rowRadius)
                 .stroke(Color.white.opacity(0.08), lineWidth: 1)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: LoomTheme.rowRadius))
     }
 
     @ViewBuilder
@@ -681,7 +696,7 @@ struct AgentPaneView: View {
     }
 
     private var inputBar: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        HStack(alignment: .bottom, spacing: 9) {
             if selectedAgent.vendor.isLocalHTTP {
                 Button {
                     toggleAgentMode()
@@ -717,6 +732,14 @@ struct AgentPaneView: View {
             .lineLimit(1...6)
             .disabled(isWaiting)
             .onSubmit { send() }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(Color.white.opacity(0.055))
+            .overlay(
+                RoundedRectangle(cornerRadius: LoomTheme.rowRadius)
+                    .stroke(Color.white.opacity(0.09), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: LoomTheme.rowRadius))
 
             Button {
                 send()
@@ -730,7 +753,7 @@ struct AgentPaneView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Color.black.opacity(0.32))
+        .background(Color.black.opacity(0.30))
     }
 
     private var lmStudioStatusLine: some View {

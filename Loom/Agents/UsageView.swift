@@ -152,6 +152,8 @@ struct UsageView: View {
                 .foregroundStyle(LoomTheme.mutedText)
 
             if tool.isInstalled {
+                usageHero(tool)
+
                 statGrid(tool)
 
                 if !tool.chartBuckets.isEmpty {
@@ -201,6 +203,43 @@ struct UsageView: View {
                     .foregroundStyle(LoomTheme.mutedText)
             }
         }
+    }
+
+    private func usageHero(_ tool: CLIToolUsage) -> some View {
+        HStack(spacing: 10) {
+            heroStat("Tokens", formatTokens(tool.totalTokens), systemImage: "number", tint: tool.tool.brandColor)
+            heroStat("Prompts", formatCount(tool.promptCount), systemImage: "text.bubble", tint: tool.tool.brandColor)
+            heroStat("Active", formatCount(tool.activeSessions), systemImage: "dot.radiowaves.left.and.right", tint: tool.activeSessions > 0 ? LoomTheme.green : tool.tool.brandColor)
+        }
+    }
+
+    private func heroStat(_ label: String, _ value: String, systemImage: String, tint: Color) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(tint)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(value)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(LoomTheme.primaryText)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                Text(label.uppercased())
+                    .font(.system(size: 8, weight: .bold))
+                    .tracking(0.45)
+                    .foregroundStyle(LoomTheme.mutedText)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(LoomTheme.panel.opacity(0.68))
+        .overlay(
+            RoundedRectangle(cornerRadius: LoomTheme.rowRadius)
+                .stroke(LoomTheme.hairline, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: LoomTheme.rowRadius))
     }
 
     private func limitsColumn(title: String, tool: CLIToolUsage) -> some View {
@@ -439,7 +478,27 @@ struct UsageView: View {
 
     private var controlBar: some View {
         @Bindable var usage = usage
-        return HStack(spacing: 10) {
+        return HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: LoomTheme.controlRadius)
+                    .fill(tool.brandColor.opacity(0.14))
+                    .frame(width: 28, height: 26)
+                Image(systemName: tool.systemImage)
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(tool.brandColor)
+            }
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(tool.label)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(LoomTheme.primaryText)
+                Text(mode == .limits ? "Local limit signals" : usage.timeframe.headlineLabel)
+                    .font(.system(size: 10))
+                    .foregroundStyle(LoomTheme.mutedText)
+            }
+
+            Spacer()
+
             HStack(spacing: 0) {
                 ForEach(UsageTimeframe.allCases) { tf in
                     usageModeButton(
@@ -463,13 +522,11 @@ struct UsageView: View {
             }
             .padding(2)
             .background(LoomTheme.softPanel.opacity(0.75))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: LoomTheme.rowRadius))
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: LoomTheme.rowRadius)
                     .stroke(LoomTheme.hairline, lineWidth: 1)
             )
-
-            Spacer()
 
             if let stamp = usage.lastRefreshedAt {
                 Text("updated \(relativeTime(stamp))")
@@ -477,18 +534,21 @@ struct UsageView: View {
                     .foregroundStyle(LoomTheme.mutedText)
             }
 
-            Button {
-                usage.requestRefresh()
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(LoomTheme.mutedText)
+            if usage.isRefreshing {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.7)
             }
-            .buttonStyle(.plain)
-            .help("Recompute totals")
+
+            LoomIconButton(
+                systemName: "arrow.clockwise",
+                help: "Recompute totals",
+                tint: tool.brandColor,
+                action: { usage.requestRefresh() }
+            )
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
         .background(LoomTheme.inset)
     }
 
@@ -662,6 +722,14 @@ struct UsageView: View {
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
                 .foregroundStyle(LoomTheme.primaryText)
         }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(LoomTheme.panel.opacity(0.54))
+        .overlay(
+            RoundedRectangle(cornerRadius: LoomTheme.rowRadius)
+                .stroke(LoomTheme.hairline, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: LoomTheme.rowRadius))
     }
 
     @ViewBuilder

@@ -5,6 +5,10 @@ import SwiftUI
 /// is "first-class" — set Appearance in Settings to System, Light, or Dark.
 /// Accent colors stay constant since the brand reads on either background.
 enum LoomTheme {
+    static let panelRadius: CGFloat = 12
+    static let rowRadius: CGFloat = 8
+    static let controlRadius: CGFloat = 7
+
     static var background: LinearGradient {
         LinearGradient(
             colors: [backgroundStart, backgroundEnd],
@@ -25,6 +29,11 @@ enum LoomTheme {
     static let panel = adaptive(
         light: Color(red: 0.99, green: 0.99, blue: 1.0).opacity(0.96),
         dark:  Color(red: 0.055, green: 0.06, blue: 0.07).opacity(0.92)
+    )
+
+    static let chrome = adaptive(
+        light: Color(red: 0.98, green: 0.985, blue: 0.995).opacity(0.88),
+        dark:  Color(red: 0.048, green: 0.052, blue: 0.06).opacity(0.9)
     )
 
     static let softPanel = adaptive(
@@ -53,6 +62,11 @@ enum LoomTheme {
         dark:  Color.white.opacity(0.55)
     )
 
+    static let tertiaryText = adaptive(
+        light: Color.black.opacity(0.34),
+        dark:  Color.white.opacity(0.35)
+    )
+
     /// Darker pane background — terminals, agent chat. Stays inky in both
     /// modes because terminals are conventionally dark.
     static let terminalSurface = Color(red: 0.018, green: 0.022, blue: 0.026)
@@ -62,6 +76,20 @@ enum LoomTheme {
     static let green  = Color(red: 0.23, green: 0.86, blue: 0.46)
     static let orange = Color(red: 0.95, green: 0.39, blue: 0.18)
     static let pink   = Color(red: 0.95, green: 0.20, blue: 0.55)
+
+    static let purple = Color(red: 0.62, green: 0.40, blue: 0.95)
+    static let yellow = Color(red: 0.96, green: 0.77, blue: 0.20)
+
+    static func panelShadow(active: Bool = false) -> Color {
+        .black.opacity(active ? 0.34 : 0.18)
+    }
+
+    static func sectionLabel(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(mutedText)
+            .tracking(0.55)
+    }
 
     /// Build a Color that picks `dark` under any dark-mode appearance and
     /// `light` otherwise. Wraps NSColor's dynamic provider.
@@ -109,5 +137,88 @@ struct LoomNotificationBadge: View {
             .overlay(Circle().stroke(LoomTheme.panel, lineWidth: 1.5))
             .shadow(color: LoomTheme.pink.opacity(0.45), radius: 4, x: 0, y: 1)
             .accessibilityLabel("\(value) usage limit warning")
+    }
+}
+
+struct LoomIconButton: View {
+    let systemName: String
+    var help: String
+    var tint: Color = LoomTheme.mutedText
+    var isActive: Bool = false
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(isActive ? .white : tint)
+                .frame(width: 26, height: 24)
+                .background(isActive ? tint : LoomTheme.softPanel.opacity(0.72))
+                .overlay(
+                    RoundedRectangle(cornerRadius: LoomTheme.controlRadius)
+                        .stroke(isActive ? tint.opacity(0.6) : LoomTheme.hairline, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: LoomTheme.controlRadius))
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .help(help)
+        .accessibilityLabel(help)
+    }
+}
+
+struct LoomStatusPill: View {
+    let title: String
+    var systemImage: String?
+    var tint: Color = LoomTheme.mutedText
+    var filled: Bool = false
+
+    var body: some View {
+        HStack(spacing: 5) {
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .font(.system(size: 9, weight: .bold))
+            }
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .lineLimit(1)
+        }
+        .foregroundStyle(filled ? .white : tint)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(filled ? tint : tint.opacity(0.12))
+        .overlay(Capsule().stroke(filled ? tint.opacity(0.5) : tint.opacity(0.22), lineWidth: 1))
+        .clipShape(Capsule())
+    }
+}
+
+struct LoomEmptyState: View {
+    let systemImage: String
+    let title: String
+    let detail: String
+    var tint: Color = LoomTheme.mutedText
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.system(size: 28, weight: .light))
+                .foregroundStyle(tint.opacity(0.75))
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(LoomTheme.primaryText)
+            Text(detail)
+                .font(.system(size: 11))
+                .foregroundStyle(LoomTheme.mutedText)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(32)
+        .background(LoomTheme.softPanel.opacity(0.42))
+        .overlay(
+            RoundedRectangle(cornerRadius: LoomTheme.panelRadius)
+                .stroke(LoomTheme.hairline, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: LoomTheme.panelRadius))
     }
 }
