@@ -300,6 +300,8 @@ private struct EndpointEditor: View {
     @State private var lmsCLI = LMStudioCLI()
     @State private var discoveredModels: [DiscoveredModel] = []
     @State private var isDiscoveringModels: Bool = false
+    @AppStorage("loom.lmstudio.autoScale") private var lmStudioAutoScale: Bool = true
+    @AppStorage("loom.lmstudio.maxContext") private var lmStudioMaxContext: Int = 65_536
 
     enum TestStatus { case idle, running, ok, failed }
 
@@ -541,6 +543,17 @@ private struct EndpointEditor: View {
                 .buttonStyle(.borderless)
             }
 
+            Toggle("Auto-scale for agent work", isOn: $lmStudioAutoScale)
+                .font(.system(size: 11))
+            Stepper(value: $lmStudioMaxContext, in: 4_096...131_072, step: 4_096) {
+                Text("Target context: \(lmStudioMaxContext.formatted())")
+                    .font(.system(size: 11, design: .monospaced))
+            }
+            .disabled(!lmStudioAutoScale)
+            Text("Optimize reloads use `parallel=1` and this context target so the in-app agent has room for tools and transcript history.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             if lmsCLI.status == .lmsMissing {
                 Text("`lms` CLI not found on PATH. Install LM Studio from lmstudio.ai and open it once to enable the CLI.")
                     .font(.caption)
@@ -568,7 +581,18 @@ private struct EndpointEditor: View {
                                         }
                                         .buttonStyle(.borderless)
                                         .font(.system(size: 10))
+                                    } else {
+                                        Button("Unload") {
+                                            Task { await lmsCLI.unloadModel(id) }
+                                        }
+                                        .buttonStyle(.borderless)
+                                        .font(.system(size: 10))
                                     }
+                                    Button("Optimize") {
+                                        Task { await lmsCLI.optimizeForAgentWork(id, contextLength: lmStudioMaxContext) }
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .font(.system(size: 10))
                                 }
                             }
                         }
@@ -768,10 +792,19 @@ private struct EndpointEditor: View {
             return .failure("Server reachable but no models installed")
         }
         let loaded = models.filter(\.loaded).count
-        if loaded > 0 {
-            return .ok("\(models.count) installed, \(loaded) loaded")
+        let preferred = defaultModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let probeModel = preferred.isEmpty ? (models.first(where: \.loaded)?.id ?? models.first?.id) : preferred
+        let schemaSupport: String
+        if let probeModel, !probeModel.isEmpty {
+            let supported = await LMStudioProvider.supportsJSONSchemaResponseFormat(baseURL: url, model: probeModel)
+            schemaSupport = supported ? ", schema tools ok" : ", no schema tools"
+        } else {
+            schemaSupport = ""
         }
-        return .ok("\(models.count) installed, 0 loaded")
+        if loaded > 0 {
+            return .ok("\(models.count) installed, \(loaded) loaded\(schemaSupport)")
+        }
+        return .ok("\(models.count) installed, 0 loaded\(schemaSupport)")
     }
 }
 
@@ -1120,6 +1153,13 @@ private struct AgentSettings: View {
     @AppStorage("loom.agent.maxTurns") private var maxTurns: Int = 30
     @AppStorage("loom.agent.allowBash") private var allowBash: Bool = false
     @AppStorage("loom.agent.permissionMode") private var permissionModeRaw: String = AgentPermissionMode.confirm.rawValue
+    @AppStorage("loom.agent.autoCompact") private var autoCompact: Bool = true
+    @AppStorage("loom.agent.postEditActions") private var postEditActions: Bool = true
+    @AppStorage("loom.lmstudio.autoScale") private var lmStudioAutoScale: Bool = true
+    @AppStorage("loom.lmstudio.maxContext") private var lmStudioMaxContext: Int = 65_536
+    @AppStorage("loom.lmstudio.plannerModel") private var lmStudioPlannerModel: String = ""
+    @AppStorage("loom.lmstudio.coderModel") private var lmStudioCoderModel: String = ""
+    @AppStorage("loom.lmstudio.routingEnabled") private var lmStudioRoutingEnabled: Bool = false
     @State private var helperStatus: HelperStatus = .unknown
     @State private var helperError: String?
 
@@ -1156,6 +1196,38 @@ private struct AgentSettings: View {
                 .pickerStyle(.menu)
 
                 Text((AgentPermissionMode(rawValue: permissionModeRaw) ?? .confirm).help)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Auto-compact long local-agent conversations", isOn: $autoCompact)
+                Text("When the transcript grows near the LM Studio context target, Loom keeps the recent turns and inserts a compact summary of older messages.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Add review summary after edits", isOn: $postEditActions)
+                Text("After file-editing runs, Loom adds a Review changes block with changed files, tool issues, and a git diff summary when available.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("LM Studio Runtime") {
+                Toggle("Auto-scale loaded model context", isOn: $lmStudioAutoScale)
+                Stepper(value: $lmStudioMaxContext, in: 4_096...131_072, step: 4_096) {
+                    Text("Context target: \(lmStudioMaxContext.formatted())")
+                }
+                .disabled(!lmStudioAutoScale)
+
+                Toggle("Route planner and coder models", isOn: $lmStudioRoutingEnabled)
+                TextField("Planner model", text: $lmStudioPlannerModel, prompt: Text("small fast model"))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                    .disabled(!lmStudioRoutingEnabled)
+                TextField("Coder model", text: $lmStudioCoderModel, prompt: Text("strong code model"))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                    .disabled(!lmStudioRoutingEnabled)
+
+                Text("These settings are shared by the Agent pane and the lmstudio CLI handoff.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -40,6 +40,8 @@ final class AgentOrchestrator {
         case taskListUpdated([LiveAgentTask])
         case toolStarted(name: String, arguments: String)
         case toolFinished(ToolCallRecord)
+        case compacted(count: Int, summary: String)
+        case reviewReady(String)
         case completed(finalText: String)
         case failed(String)
         case cancelled
@@ -78,6 +80,22 @@ final class AgentOrchestrator {
     private let toolRunner: AgentToolRunner
     private var currentTask: Task<Void, Never>?
     private var transcript: [LLMMessage] = []
+    private var compactionCount: Int = 0
+    private var didSendMissingToolNudge: Bool = false
+
+    private var autoCompactEnabled: Bool {
+        if UserDefaults.standard.object(forKey: "loom.agent.autoCompact") == nil {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: "loom.agent.autoCompact")
+    }
+
+    private var postEditReviewEnabled: Bool {
+        if UserDefaults.standard.object(forKey: "loom.agent.postEditActions") == nil {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: "loom.agent.postEditActions")
+    }
 
     init(provider: LLMProvider, toolRunner: AgentToolRunner, source: AgentSource, modelLabel: String? = nil) {
         self.provider = provider
@@ -106,6 +124,8 @@ final class AgentOrchestrator {
         turns = []
         currentStreamingText = ""
         transcript = [LLMMessage(role: .user, content: prompt)]
+        compactionCount = 0
+        didSendMissingToolNudge = false
 
         let task = Task { @MainActor in
             do {
@@ -138,6 +158,10 @@ final class AgentOrchestrator {
             turnIndex += 1
             onEvent(.turnStarted(index: turnIndex))
             currentStreamingText = ""
+            if autoCompactEnabled,
+               let summary = compactTranscriptIfNeeded() {
+                onEvent(.compacted(count: compactionCount, summary: summary))
+            }
 
             var assistantText = ""
             var toolCalls: [(name: String, input: Data)] = []
@@ -162,9 +186,36 @@ final class AgentOrchestrator {
             transcript.append(LLMMessage(role: .assistant, content: assistantText))
 
             if toolCalls.isEmpty {
+                let recovered = LMStudioToolRepair.extractToolCalls(from: assistantText, tools: tools)
+                if !recovered.isEmpty {
+                    toolCalls = recovered
+                    transcript.append(LLMMessage(
+                        role: .user,
+                        content: "Loom recovered the tool calls from your text response and is executing them now."
+                    ))
+                }
+            }
+
+            if toolCalls.isEmpty,
+               source == .lmstudio,
+               !didSendMissingToolNudge,
+               LMStudioToolRepair.shouldNudgeForMissingToolCall(assistantText) {
+                didSendMissingToolNudge = true
                 let turn = Turn(index: turnIndex, assistantText: assistantText, toolCalls: [])
                 turns.append(turn)
                 onEvent(.turnFinished(turn))
+                transcript.append(LMStudioToolRepair.continuationNudge(toolNames: tools.map(\.name)))
+                continue
+            }
+
+            if toolCalls.isEmpty {
+                let turn = Turn(index: turnIndex, assistantText: assistantText, toolCalls: [])
+                turns.append(turn)
+                onEvent(.turnFinished(turn))
+                if postEditReviewEnabled,
+                   let review = await AgentRunReview.build(workspaceRoot: toolRunner.workspaceRoot, turns: turns) {
+                    onEvent(.reviewReady(review))
+                }
                 onEvent(.completed(finalText: assistantText))
                 markRemainingTasksComplete()
                 return
@@ -173,12 +224,25 @@ final class AgentOrchestrator {
             var records: [ToolCallRecord] = []
             for call in toolCalls {
                 try Task.checkCancellation()
-                let argsString = String(decoding: call.input, as: UTF8.self)
+                var activeInput = call.input
+                if source == .lmstudio,
+                   let tool = tools.first(where: { $0.name == call.name }),
+                   LMStudioToolRepair.inputNeedsRepair(activeInput, schema: tool.inputSchema),
+                   let repaired = await repairToolInput(
+                        name: call.name,
+                        input: activeInput,
+                        tools: tools,
+                        errorMessage: "Arguments were incomplete before tool execution."
+                   ) {
+                    activeInput = repaired
+                }
+
+                let argsString = String(decoding: activeInput, as: UTF8.self)
                 onEvent(.toolStarted(name: call.name, arguments: argsString))
                 let record: ToolCallRecord
                 if call.name == "update_tasks" {
                     do {
-                        let count = try applyTaskUpdate(call.input)
+                        let count = try applyTaskUpdate(activeInput)
                         let summary = "Task list updated. \(count) task\(count == 1 ? "" : "s")."
                         record = ToolCallRecord(
                             name: call.name,
@@ -197,7 +261,7 @@ final class AgentOrchestrator {
                     }
                 } else {
                     do {
-                        let result = try await toolRunner.execute(name: call.name, input: call.input)
+                        let result = try await toolRunner.execute(name: call.name, input: activeInput)
                         record = ToolCallRecord(
                             name: call.name,
                             arguments: argsString,
@@ -205,12 +269,37 @@ final class AgentOrchestrator {
                             succeeded: true
                         )
                     } catch {
-                        record = ToolCallRecord(
-                            name: call.name,
-                            arguments: argsString,
-                            result: "Error: \(error.localizedDescription)",
-                            succeeded: false
-                        )
+                        if source == .lmstudio,
+                           let repaired = await repairToolInput(
+                                name: call.name,
+                                input: activeInput,
+                                tools: tools,
+                                errorMessage: error.localizedDescription
+                           ) {
+                            do {
+                                let repairedResult = try await toolRunner.execute(name: call.name, input: repaired)
+                                record = ToolCallRecord(
+                                    name: call.name,
+                                    arguments: String(decoding: repaired, as: UTF8.self),
+                                    result: repairedResult,
+                                    succeeded: true
+                                )
+                            } catch {
+                                record = ToolCallRecord(
+                                    name: call.name,
+                                    arguments: String(decoding: repaired, as: UTF8.self),
+                                    result: "Error: \(error.localizedDescription)",
+                                    succeeded: false
+                                )
+                            }
+                        } else {
+                            record = ToolCallRecord(
+                                name: call.name,
+                                arguments: argsString,
+                                result: "Error: \(error.localizedDescription)",
+                                succeeded: false
+                            )
+                        }
                     }
                 }
                 records.append(record)
@@ -231,6 +320,53 @@ final class AgentOrchestrator {
         }
 
         throw OrchestratorError.maxTurnsExceeded(maxTurns)
+    }
+
+    private func repairToolInput(
+        name: String,
+        input: Data,
+        tools: [LLMTool],
+        errorMessage: String?
+    ) async -> Data? {
+        guard source == .lmstudio,
+              let lmProvider = self.provider as? LMStudioProvider,
+              let tool = tools.first(where: { $0.name == name }) else {
+            return nil
+        }
+        return await lmProvider.repairToolArguments(
+            transcript: transcript,
+            toolName: name,
+            badInput: input,
+            schema: tool.inputSchema,
+            errorMessage: errorMessage
+        )
+    }
+
+    private func compactTranscriptIfNeeded() -> String? {
+        guard transcript.count > 10 else { return nil }
+        let configuredContext = UserDefaults.standard.integer(forKey: "loom.lmstudio.maxContext")
+        let tokenBudget = configuredContext > 0 ? configuredContext : 16_000
+        let charThreshold = max(24_000, tokenBudget * 3)
+        let total = transcript.reduce(0) { $0 + $1.content.count }
+        guard total > charThreshold else { return nil }
+
+        let keepCount = min(8, transcript.count)
+        let older = transcript.dropLast(keepCount)
+        let recent = transcript.suffix(keepCount)
+        let summaryLines = older.enumerated().map { index, message in
+            let excerpt = String(message.content.prefix(900))
+                .replacingOccurrences(of: "\n\n", with: "\n")
+            return "\(index + 1). \(message.role.rawValue): \(excerpt)"
+        }
+        let summary = """
+        Conversation compacted by Loom before continuing.
+        Preserved recent turns: \(recent.count)
+        Earlier turn summary:
+        \(summaryLines.joined(separator: "\n"))
+        """
+        transcript = [LLMMessage(role: .user, content: summary)] + Array(recent)
+        compactionCount += 1
+        return "Compacted \(older.count) older message\(older.count == 1 ? "" : "s"); kept \(recent.count) recent message\(recent.count == 1 ? "" : "s")."
     }
 
     // MARK: - Task list management

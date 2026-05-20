@@ -81,10 +81,38 @@ final class LMStudioCLI {
         }
     }
 
-    func loadModel(_ identifier: String) async {
+    func loadModel(_ identifier: String, contextLength: Int? = nil, parallel: Int? = nil) async {
+        let escaped = shellEscape(identifier)
+        var command = "lms load \(escaped) -y"
+        if let contextLength, contextLength > 0 {
+            command += " -c \(contextLength)"
+        }
+        if let parallel, parallel > 0 {
+            command += " --parallel \(parallel)"
+        }
+        do {
+            _ = try await runShell(command)
+            await refresh()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    func unloadModel(_ identifier: String) async {
         let escaped = shellEscape(identifier)
         do {
-            _ = try await runShell("lms load \(escaped)")
+            _ = try await runShell("lms unload \(escaped)")
+            await refresh()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    func optimizeForAgentWork(_ identifier: String, contextLength: Int) async {
+        let escaped = shellEscape(identifier)
+        let context = max(4096, contextLength)
+        do {
+            _ = try await runShell("lms unload \(escaped) >/dev/null 2>&1 || true; lms load \(escaped) -y -c \(context) --parallel 1 --gpu max")
             await refresh()
         } catch {
             lastError = error.localizedDescription
@@ -176,6 +204,7 @@ final class LMStudioCLI {
             if let key = entry["modelKey"] as? String { ids.append(key); continue }
             if let path = entry["path"] as? String { ids.append(path); continue }
             if let id = entry["id"] as? String { ids.append(id); continue }
+            if let identifier = entry["identifier"] as? String { ids.append(identifier); continue }
         }
         return ids
     }

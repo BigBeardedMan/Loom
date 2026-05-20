@@ -44,6 +44,180 @@ struct LMStudioProvider: LLMProvider {
         }
     }
 
+    /// Probe whether this LM Studio build/model accepts OpenAI-style
+    /// `response_format: { type: "json_schema" }`. The result is cached per
+    /// endpoint + model because older LM Studio builds reject the field, while
+    /// newer ones use it to reliably repair malformed tool arguments.
+    static func supportsJSONSchemaResponseFormat(baseURL: URL, model: String) async -> Bool {
+        let key = jsonSchemaProbeCacheKey(baseURL: baseURL, model: model)
+        if let cached = UserDefaults.standard.object(forKey: key) as? Bool {
+            return cached
+        }
+        let supported = await probeJSONSchemaResponseFormat(baseURL: baseURL, model: model)
+        UserDefaults.standard.set(supported, forKey: key)
+        return supported
+    }
+
+    func repairToolArguments(
+        transcript: [LLMMessage],
+        toolName: String,
+        badInput: Data,
+        schema: Data,
+        errorMessage: String?
+    ) async -> Data? {
+        guard let schemaObject = try? JSONSerialization.jsonObject(with: schema),
+              JSONSerialization.isValidJSONObject(schemaObject) else {
+            return nil
+        }
+
+        let recent = transcript.suffix(8).map { message in
+            "\(message.role.rawValue): \(String(message.content.prefix(1400)))"
+        }.joined(separator: "\n\n")
+        let rawInput = String(decoding: badInput, as: UTF8.self)
+        let repairPrompt = """
+        Repair the JSON arguments for the tool named "\(toolName)".
+
+        Return only a JSON object that conforms to this schema. Do not include markdown.
+
+        Schema:
+        \(String(decoding: schema, as: UTF8.self))
+
+        Invalid arguments:
+        \(rawInput)
+
+        Error:
+        \(errorMessage ?? "The arguments were missing required fields or were not valid JSON.")
+
+        Recent conversation:
+        \(recent)
+        """
+
+        let supportsSchema = await Self.supportsJSONSchemaResponseFormat(baseURL: baseURL, model: model)
+        if supportsSchema,
+           let repaired = await runArgumentRepair(
+                prompt: repairPrompt,
+                schemaName: "loom_\(toolName)_args",
+                schemaObject: schemaObject
+           ) {
+            return repaired
+        }
+
+        return await runArgumentRepair(
+            prompt: repairPrompt,
+            schemaName: nil,
+            schemaObject: nil
+        )
+    }
+
+    private static func probeJSONSchemaResponseFormat(baseURL: URL, model: String) async -> Bool {
+        let schema: [String: Any] = [
+            "type": "object",
+            "properties": [
+                "ok": ["type": "boolean"]
+            ],
+            "required": ["ok"],
+            "additionalProperties": false
+        ]
+        let responseFormat = ResponseFormat(
+            type: "json_schema",
+            json_schema: ResponseJSONSchema(
+                name: "loom_probe",
+                strict: true,
+                schema: AnyEncodable(schema)
+            )
+        )
+        let messages = [
+            Msg(role: "user", content: "Return {\"ok\": true}.")
+        ]
+        var request = URLRequest(url: baseURL.appendingPathComponent("chat/completions"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 8
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue("Bearer lm-studio", forHTTPHeaderField: "authorization")
+
+        do {
+            let payload = RequestBody(
+                model: model,
+                stream: false,
+                messages: messages,
+                response_format: responseFormat,
+                max_tokens: 32,
+                temperature: 0
+            )
+            request.httpBody = try JSONEncoder().encode(payload)
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { return false }
+            return (200..<300).contains(http.statusCode)
+        } catch {
+            return false
+        }
+    }
+
+    private static func jsonSchemaProbeCacheKey(baseURL: URL, model: String) -> String {
+        let raw = "\(baseURL.absoluteString)|\(model)"
+        let encoded = Data(raw.utf8)
+            .base64EncodedString()
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "=", with: "")
+        return "loom.lmstudio.jsonSchemaSupport.\(encoded)"
+    }
+
+    private func runArgumentRepair(
+        prompt: String,
+        schemaName: String?,
+        schemaObject: Any?
+    ) async -> Data? {
+        var request = URLRequest(url: baseURL.appendingPathComponent("chat/completions"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 45
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue("Bearer lm-studio", forHTTPHeaderField: "authorization")
+
+        let responseFormat: ResponseFormat?
+        if let schemaName, let schemaObject {
+            responseFormat = ResponseFormat(
+                type: "json_schema",
+                json_schema: ResponseJSONSchema(
+                    name: schemaName,
+                    strict: true,
+                    schema: AnyEncodable(schemaObject)
+                )
+            )
+        } else {
+            responseFormat = nil
+        }
+
+        let payload = RequestBody(
+            model: model,
+            stream: false,
+            messages: [
+                Msg(role: "system", content: "You repair tool-call JSON for a local coding agent."),
+                Msg(role: "user", content: prompt)
+            ],
+            response_format: responseFormat,
+            max_tokens: 1024,
+            temperature: 0
+        )
+
+        do {
+            request.httpBody = try JSONEncoder().encode(payload)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                return nil
+            }
+            let decoded = try JSONDecoder().decode(NonStreamingResponse.self, from: data)
+            guard let content = decoded.choices.first?.message.content,
+                  let repaired = LMStudioToolRepair.firstJSONObjectData(in: content),
+                  (try? JSONSerialization.jsonObject(with: repaired)) != nil else {
+                return nil
+            }
+            return repaired
+        } catch {
+            return nil
+        }
+    }
+
     // MARK: - Model discovery
 
     struct LMStudioModel: Hashable, Sendable {
@@ -52,6 +226,7 @@ struct LMStudioProvider: LLMProvider {
         let contextLength: Int?
         let quantization: String?
         let architecture: String?
+        let trainedForToolUse: Bool?
 
         var displayLabel: String {
             let details = metadataSummary
@@ -70,6 +245,11 @@ struct LMStudioProvider: LLMProvider {
             }
             if let architecture, !architecture.isEmpty {
                 bits.append(architecture)
+            }
+            if trainedForToolUse == true {
+                bits.append("tools")
+            } else if trainedForToolUse == false {
+                bits.append("no tools")
             }
             return bits.joined(separator: " · ")
         }
@@ -117,7 +297,8 @@ struct LMStudioProvider: LLMProvider {
                     loaded: (entry.state ?? "").lowercased() == "loaded",
                     contextLength: entry.max_context_length ?? entry.loaded_context_length,
                     quantization: entry.quantization,
-                    architecture: entry.arch
+                    architecture: entry.arch,
+                    trainedForToolUse: entry.trained_for_tool_use ?? entry.trainedForToolUse
                 )
             }
         } catch {
@@ -141,7 +322,8 @@ struct LMStudioProvider: LLMProvider {
                     loaded: false,
                     contextLength: nil,
                     quantization: nil,
-                    architecture: nil
+                    architecture: nil,
+                    trainedForToolUse: nil
                 )
             }
         } catch {
@@ -201,7 +383,13 @@ struct LMStudioProvider: LLMProvider {
             )
         }
 
-        let payload = RequestBody(model: model, stream: true, messages: msgs, tools: toolDefs)
+        let payload = RequestBody(
+            model: model,
+            stream: true,
+            messages: msgs,
+            tools: toolDefs,
+            tool_choice: toolDefs == nil ? nil : "auto"
+        )
         request.httpBody = try JSONEncoder().encode(payload)
 
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
@@ -258,6 +446,30 @@ struct LMStudioProvider: LLMProvider {
         let stream: Bool
         let messages: [Msg]
         let tools: [ToolDef]?
+        let tool_choice: String?
+        let response_format: ResponseFormat?
+        let max_tokens: Int?
+        let temperature: Double?
+
+        init(
+            model: String,
+            stream: Bool,
+            messages: [Msg],
+            tools: [ToolDef]? = nil,
+            tool_choice: String? = nil,
+            response_format: ResponseFormat? = nil,
+            max_tokens: Int? = nil,
+            temperature: Double? = nil
+        ) {
+            self.model = model
+            self.stream = stream
+            self.messages = messages
+            self.tools = tools
+            self.tool_choice = tool_choice
+            self.response_format = response_format
+            self.max_tokens = max_tokens
+            self.temperature = temperature
+        }
     }
 
     private struct Msg: Encodable {
@@ -274,6 +486,17 @@ struct LMStudioProvider: LLMProvider {
         let name: String
         let description: String
         let parameters: AnyEncodable
+    }
+
+    private struct ResponseFormat: Encodable {
+        let type: String
+        let json_schema: ResponseJSONSchema
+    }
+
+    private struct ResponseJSONSchema: Encodable {
+        let name: String
+        let strict: Bool
+        let schema: AnyEncodable
     }
 
     /// Wraps a Foundation JSON object so it can be re-encoded inside Codable.
@@ -357,6 +580,8 @@ struct LMStudioProvider: LLMProvider {
         let loaded_context_length: Int?
         let quantization: String?
         let arch: String?
+        let trained_for_tool_use: Bool?
+        let trainedForToolUse: Bool?
     }
 
     private struct OpenAIModelsResponse: Decodable {
@@ -365,5 +590,17 @@ struct LMStudioProvider: LLMProvider {
 
     private struct OpenAIModelEntry: Decodable {
         let id: String
+    }
+
+    private struct NonStreamingResponse: Decodable {
+        let choices: [Choice]
+
+        struct Choice: Decodable {
+            let message: Message
+        }
+
+        struct Message: Decodable {
+            let content: String?
+        }
     }
 }

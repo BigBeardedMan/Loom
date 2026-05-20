@@ -27,7 +27,9 @@ struct AgentPaneView: View {
     @Environment(AgentRegistry.self) private var registry
     @Environment(LocalEndpointStore.self) private var endpoints
     @Environment(WorkspaceContext.self) private var workspace
+    @Environment(WorkspaceLayout.self) private var layout
     @State private var cliProvider = CLIAgentProvider()
+    @State private var sessionStore = AgentSessionStore()
     @State private var messages: [AgentMessage] = []
     @State private var streaming = StreamingState()
     @State private var draft: String = ""
@@ -39,6 +41,10 @@ struct AgentPaneView: View {
     @State private var orchestratorTask: Task<Void, Never>?
     @State private var pendingURLRun: PendingURLRun?
     @State private var pendingToolApproval: PendingToolApproval?
+    @State private var pendingRunReview: String?
+    @State private var compactionCount: Int = 0
+    @State private var showRenameSession: Bool = false
+    @State private var renameDraft: String = ""
 
     /// Persisted across panes: when on, local-HTTP providers run through
     /// `AgentOrchestrator` (multi-turn loop, tool calls, task list) instead
@@ -48,6 +54,11 @@ struct AgentPaneView: View {
     @AppStorage("loom.agent.lmstudioMode") private var lmStudioAgentMode: Bool = true
     @AppStorage("loom.agent.allowBash") private var allowBash: Bool = false
     @AppStorage("loom.agent.permissionMode") private var permissionModeRaw: String = AgentPermissionMode.confirm.rawValue
+    @AppStorage("loom.lmstudio.routingEnabled") private var lmStudioRoutingEnabled: Bool = false
+    @AppStorage("loom.lmstudio.plannerModel") private var lmStudioPlannerModel: String = ""
+    @AppStorage("loom.lmstudio.coderModel") private var lmStudioCoderModel: String = ""
+    @AppStorage("loom.lmstudio.autoScale") private var lmStudioAutoScale: Bool = true
+    @AppStorage("loom.lmstudio.maxContext") private var lmStudioMaxContext: Int = 65_536
 
     private let cwd: URL?
     private let handlesExternalRuns: Bool
@@ -84,6 +95,26 @@ struct AgentPaneView: View {
 
     private var agentRunBashEnabled: Bool {
         permissionMode != .plan && (allowBash || permissionMode == .bypassPermissions)
+    }
+
+    private var sessionWorkspaceKey: String {
+        AgentSessionStore.workspaceKey(
+            workspaceID: workspace.workspaceID,
+            folderPath: sessionWorkspacePath ?? workspace.folderPath,
+            workspaceName: workspace.workspaceName
+        )
+    }
+
+    private var sessionWorkspacePath: String? {
+        if let cwd {
+            return cwd.standardizedFileURL.path
+        }
+        let trimmed = workspace.folderPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : URL(fileURLWithPath: trimmed).standardizedFileURL.path
+    }
+
+    private var sessionScopeKey: String {
+        "\(sessionWorkspaceKey)|\(selectedAgent.id)"
     }
 
     var body: some View {
@@ -153,6 +184,23 @@ struct AgentPaneView: View {
             )
             .interactiveDismissDisabled()
         }
+        .sheet(isPresented: $showRenameSession) {
+            RenameSessionSheet(
+                title: $renameDraft,
+                onCancel: { showRenameSession = false },
+                onSave: {
+                    sessionStore.renameCurrent(
+                        to: renameDraft,
+                        workspaceKey: sessionWorkspaceKey,
+                        workspacePath: sessionWorkspacePath
+                    )
+                    showRenameSession = false
+                }
+            )
+        }
+        .task(id: sessionScopeKey) {
+            sessionStore.load(workspaceKey: sessionWorkspaceKey, workspacePath: sessionWorkspacePath)
+        }
     }
 
     /// Triggered by `loom://run?...` URLs forwarded through `URLSchemeHandler`.
@@ -205,6 +253,18 @@ struct AgentPaneView: View {
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(.tertiary)
             Spacer()
+            if selectedAgent.vendor == .lmstudio {
+                lmStudioSessionMenu
+                Button {
+                    openInLMStudioCLI()
+                } label: {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+                .buttonStyle(.plain)
+                .help("Open this workspace in the lmstudio CLI")
+            }
             if registry.isRefreshing {
                 ProgressView()
                     .controlSize(.small)
@@ -290,6 +350,85 @@ struct AgentPaneView: View {
         .labelsHidden()
         .fixedSize()
         .font(.system(size: 11))
+    }
+
+    private var lmStudioSessionMenu: some View {
+        Menu {
+            Button {
+                startNewLMStudioSession()
+            } label: {
+                Label("New Session", systemImage: "plus")
+            }
+
+            if !messages.isEmpty {
+                Button {
+                    renameDraft = sessionStore.summaries.first(where: { $0.id == sessionStore.currentSessionID })?.title
+                        ?? messages.first(where: { $0.role == .user })?.text
+                        ?? "LM Studio Session"
+                    showRenameSession = true
+                } label: {
+                    Label("Rename Current Session", systemImage: "pencil")
+                }
+
+                Button(role: .destructive) {
+                    sessionStore.deleteCurrent(
+                        workspaceKey: sessionWorkspaceKey,
+                        workspacePath: sessionWorkspacePath
+                    )
+                    messages = []
+                    compactionCount = 0
+                } label: {
+                    Label("Delete Current Session", systemImage: "trash")
+                }
+            }
+
+            Section("Saved in Loom") {
+                if sessionStore.summaries.isEmpty {
+                    Text("No saved sessions")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(sessionStore.summaries.prefix(8)) { summary in
+                        Menu(summary.title) {
+                            Button {
+                                resumeLMStudioSession(summary)
+                            } label: {
+                                Label("Resume in Agent Pane", systemImage: "arrow.uturn.forward")
+                            }
+                            Button(role: .destructive) {
+                                sessionStore.delete(
+                                    summary,
+                                    workspaceKey: sessionWorkspaceKey,
+                                    workspacePath: sessionWorkspacePath
+                                )
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                    }
+                }
+            }
+
+            Section("Saved by lmstudio CLI") {
+                if sessionStore.cliSessions.isEmpty {
+                    Text("No CLI sessions for this workspace")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(sessionStore.cliSessions.prefix(8)) { summary in
+                        Button {
+                            resumeLMStudioCLISession(summary)
+                        } label: {
+                            Label(summary.title, systemImage: "terminal")
+                        }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.55))
+        }
+        .menuStyle(.borderlessButton)
+        .help("LM Studio sessions")
     }
 
     /// "<vendor> · <agent>  (model)" — single Text so macOS Menu items render
@@ -559,7 +698,18 @@ struct AgentPaneView: View {
             endpointText = "no endpoint"
         }
         let modelText = selectedAgent.displayName.isEmpty ? "no model" : selectedAgent.displayName
-        return "\(endpointText) · \(modelText)"
+        var bits = ["\(endpointText) · \(modelText)"]
+        let context = lmStudioContextFilesSummary()
+        if !context.isEmpty {
+            bits.append("ctx \(context)")
+        }
+        if compactionCount > 0 {
+            bits.append("compacted x\(compactionCount)")
+        }
+        if lmStudioRoutingEnabled {
+            bits.append("routing")
+        }
+        return bits.joined(separator: " · ")
     }
 
     private var permissionModePicker: some View {
@@ -587,6 +737,112 @@ struct AgentPaneView: View {
         } else {
             agentMode.toggle()
         }
+    }
+
+    private func persistLMStudioSession() {
+        guard selectedAgent.vendor == .lmstudio else { return }
+        sessionStore.save(
+            messages: messages,
+            workspaceKey: sessionWorkspaceKey,
+            workspaceName: workspace.workspaceName.isEmpty ? "Workspace" : workspace.workspaceName,
+            workspacePath: sessionWorkspacePath,
+            modelLabel: selectedAgent.model ?? selectedAgent.displayName,
+            compactedCount: compactionCount
+        )
+    }
+
+    private func startNewLMStudioSession() {
+        guard !isWaiting else { return }
+        sessionStore.startNew()
+        messages = []
+        error = nil
+        compactionCount = 0
+        pendingRunReview = nil
+        streaming.cancel()
+    }
+
+    private func resumeLMStudioSession(_ summary: AgentSessionStore.SessionSummary) {
+        guard !isWaiting else { return }
+        messages = sessionStore.resume(summary)
+        error = nil
+        compactionCount = summary.compactedCount
+        pendingRunReview = nil
+        streaming.cancel()
+    }
+
+    private func resumeLMStudioCLISession(_ summary: AgentSessionStore.CLISessionSummary) {
+        guard !isWaiting else { return }
+        messages = sessionStore.resumeCLI(summary)
+        error = nil
+        compactionCount = 0
+        pendingRunReview = nil
+        streaming.cancel()
+        persistLMStudioSession()
+    }
+
+    private func openInLMStudioCLI() {
+        guard selectedAgent.vendor == .lmstudio else { return }
+        var parts: [String] = ["lmstudio"]
+        if let workspacePath = sessionWorkspacePath {
+            parts += ["--workspace", shellQuote(workspacePath)]
+        }
+        if let url = selectedLMStudioEndpointURL() {
+            parts += ["--base-url", shellQuote(url.absoluteString)]
+        }
+        if let model = selectedAgent.model, !model.isEmpty {
+            parts += ["--model", shellQuote(model)]
+        }
+        if !lmStudioAutoScale {
+            parts.append("--no-autoscale")
+        } else {
+            parts += ["--autoscale-max", "\(lmStudioMaxContext)"]
+        }
+        if lmStudioRoutingEnabled {
+            if !lmStudioPlannerModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                parts += ["--planner-model", shellQuote(lmStudioPlannerModel)]
+            }
+            if !lmStudioCoderModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                parts += ["--coder-model", shellQuote(lmStudioCoderModel)]
+            }
+        }
+        if permissionMode == .bypassPermissions {
+            parts.append("--bypass-permissions")
+        } else if agentRunBashEnabled {
+            parts.append("--allow-bash")
+        }
+
+        layout.ensureTerminalBlock()
+        guard let terminal = layout.firstTerminalSession() else {
+            error = "Could not open a terminal block for lmstudio."
+            return
+        }
+        terminal.submit(parts.joined(separator: " "))
+    }
+
+    private func selectedLMStudioEndpointURL() -> URL? {
+        guard let id = selectedAgent.endpointID,
+              let endpoint = endpoints.endpoints.first(where: { $0.id == id }) else {
+            return nil
+        }
+        return endpoint.resolvedBaseURL
+    }
+
+    private func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private func lmStudioContextFilesSummary() -> String {
+        guard let workspacePath = sessionWorkspacePath else { return "" }
+        let folder = URL(fileURLWithPath: workspacePath, isDirectory: true)
+        let candidates = ["CLAUDE.md", "AGENTS.md", "GUIDE.md", "README.md", ".loom/project.json"]
+        let found = candidates.filter {
+            FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path)
+        }
+        guard !found.isEmpty else { return "" }
+        if found.count <= 3 {
+            return found.joined(separator: ", ")
+        }
+        return found.prefix(3).joined(separator: ", ") + " +\(found.count - 3)"
     }
 
     private var canSend: Bool {
@@ -619,6 +875,7 @@ struct AgentPaneView: View {
         orchestrator?.cancel()
         streaming.cancel()
         pendingProposals = nil
+        pendingRunReview = nil
         resolveToolApproval(false)
         isWaiting = false
     }
@@ -632,7 +889,9 @@ struct AgentPaneView: View {
         messages.append(userMsg)
         streaming.begin()
         pendingProposals = nil
+        pendingRunReview = nil
         isWaiting = true
+        persistLMStudioSession()
 
         if selectedAgent.vendor.isLocalHTTP {
             if effectiveAgentMode {
@@ -715,9 +974,20 @@ struct AgentPaneView: View {
             let prefix = record.succeeded ? "[ok]" : "[ERR]"
             let preview = String(SecretRedactor.redact(record.result).prefix(400))
             streaming.append("\(prefix) \(record.name): \(preview)\n")
+        case .compacted(let count, let summary):
+            compactionCount = count
+            streaming.append("\n[context] \(summary)\n")
+        case .reviewReady(let review):
+            pendingRunReview = review
+            streaming.append("\n\(review)\n")
         case .completed(let finalText):
             _ = streaming.finish()
-            commitAssistantMessage(text: finalText.isEmpty ? "(done)" : finalText, toolProposals: nil)
+            var committed = finalText.isEmpty ? "(done)" : finalText
+            if let pendingRunReview, !pendingRunReview.isEmpty {
+                committed += "\n\n" + pendingRunReview
+            }
+            commitAssistantMessage(text: committed, toolProposals: nil)
+            pendingRunReview = nil
         case .failed(let message):
             streaming.cancel()
             error = message
@@ -856,6 +1126,7 @@ struct AgentPaneView: View {
         msg.proposals = toolProposals
         msg.proposalMode = workspace.hasActiveTab ? .createNewTabs : .createNewTabs
         messages.append(msg)
+        persistLMStudioSession()
     }
 
     /// System prompt for HTTP-based providers (Anthropic, Ollama, OpenAI-
@@ -975,6 +1246,32 @@ struct AgentPaneView: View {
             }
         }
         return history
+    }
+}
+
+private struct RenameSessionSheet: View {
+    @Binding var title: String
+    let onCancel: () -> Void
+    let onSave: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Rename Session")
+                .font(.system(size: 15, weight: .semibold))
+            TextField("Session title", text: $title)
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Save", action: onSave)
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 360)
     }
 }
 
