@@ -1,8 +1,7 @@
 ## Changes
 
-- Refreshed the macOS Testing Edition shell with a cleaner pro-workspace command bar, compact product identity, contextual workspace summary, and dedicated command palette affordance.
-- Moved Claude, Codex, and LM Studio usage dashboards into the left navigation rail with live status, limit warning badges, and refresh access.
-- Reworked workspace rows, session rows, empty states, and deck panel chrome for quieter hierarchy, tighter spacing, lighter shadows, and consistent icon-first controls.
-- Updated usage dashboards with clearer tool headers, timeframe controls, hero metrics, and carded stats.
-- Refined the Agent pane header, mode status, transcript cards, and input bar without changing provider execution behavior.
-- Bumped Testing Edition to `8.0.33` for this UI/UX redesign prerelease.
+- Polished the redesigned macOS workspace shell for a cleaner, tighter Testing Edition `8.1.0` experience.
+- Simplified seed workspace rows so Prompt, Ideas, and Review read as single-word destinations instead of repeating their type label.
+- Removed local limit controls and warning badges from tools that do not expose limit telemetry, including LM Studio.
+- Replaced recently closed terminal transcript sheets with an app-level preview that can close from outside click, Escape, or Done.
+- Expanded terminal click-to-position editing beyond Claude so prompt text can be repositioned by click across supported shells, AI CLIs, and common REPLs while avoiding full-screen terminal apps.
