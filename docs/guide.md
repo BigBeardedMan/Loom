@@ -1336,8 +1336,8 @@ section above the kanban columns:
 - One row per task, with a status badge.
 - Click a task to expand and read its full description and `activeForm`.
 
-When a session finishes (or its session id rotates), the live block clears
-on the next 2 second poll.
+When a session finishes, all tasks become terminal, or its session id rotates,
+the live block clears on the next 2 second poll.
 
 ### Multiple sessions
 
@@ -1372,22 +1372,21 @@ forever. Only `.json` task-file mtimes count.
 
 ### Privacy
 
-Loom only reads files under `~/.claude/tasks/` and `~/.codex/sessions/`.
-Nothing leaves your machine. The polling service uses standard
+Loom only reads files under `~/.claude/tasks/`, `~/.claude/projects/`,
+`~/.codex/sessions/`, and `~/.loom/tasks/`. Nothing leaves your machine.
+The polling service uses standard
 `FileManager` calls and does not watch via FSEvents (which would require a
 separate privacy entitlement).
 
 ### Clearing
 
-The × icon next to a Claude session header deletes that session's `.json`
-task files. Live Claude sessions will rewrite them on the next turn, so
-this only "sticks" for crashed or zombie sessions. Codex groups don't
-expose the × button: Codex stores its plan inside the rollout JSONL
-alongside the rest of the conversation, so there's no safe per-session
-delete. "Clear all" applies to Claude sessions only.
-
-The "Clear all" button in the pane header opens a confirmation, then deletes
-every visible session's task files.
+Every session header carries a × icon, and the trash icon in the pane header
+runs "Clear all". Claude Code and LM Studio task JSON files are deleted. Codex
+rollout files are left untouched because they hold conversation history; Loom
+records a dismissal timestamp keyed to the product/model/session and hides the
+group until a newer `update_plan` event advances past that mark. Active Codex
+sessions reappear after their next plan update; stuck or completed sessions
+stay cleared.
 
 ---
 

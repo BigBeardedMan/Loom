@@ -182,9 +182,13 @@ final class LiveAgentTasksService {
     }()
     private var refreshInFlight: Bool = false
 
-    /// Sessions the user explicitly cleared. Log-backed sources such as Codex
-    /// are hidden until their file activity advances; file-backed sources also
-    /// get their task JSON deleted when safe.
+    /// Sessions the user has explicitly cleared, mapped to the `lastActivity`
+    /// timestamp at the moment they were cleared. A group stays hidden until
+    /// its source emits newer task activity, which means live sessions
+    /// naturally reappear on their next plan/task update while truly
+    /// stuck/zombie ones stay gone. Used for sources where we can't safely
+    /// delete the underlying files (Codex, Gemini) and as a belt-and-suspenders
+    /// for file-backed sources.
     private static let dismissedSessionsKey = "loom.tasks.dismissedSessions"
     private var dismissedSessions: [String: Date] = {
         let raw = UserDefaults.standard.dictionary(forKey: LiveAgentTasksService.dismissedSessionsKey)
@@ -559,7 +563,9 @@ final class LiveAgentTasksService {
             guard mtime >= cutoff else { continue }
 
             let sessionID = codexSessionID(from: url)
-            guard let snapshot = readLatestCodexPlanSnapshot(at: url), !snapshot.plan.isEmpty else { continue }
+            guard let snapshot = readLatestCodexPlanSnapshot(at: url, fallbackActivity: mtime),
+                  !snapshot.plan.isEmpty,
+                  snapshot.planActivity >= cutoff else { continue }
             let modelLabel = snapshot.modelLabel
 
             let tasks: [LiveAgentTask] = snapshot.plan.enumerated().map { index, step in
@@ -574,14 +580,17 @@ final class LiveAgentTasksService {
                     description: "",
                     activeForm: step.step,
                     status: status,
-                    updatedAt: mtime
+                    updatedAt: snapshot.planActivity
                 )
+            }
+            guard tasks.contains(where: { $0.status == .pending || $0.status == .inProgress }) else {
+                continue
             }
             collected.append(LiveAgentTaskGroup(
                 sessionID: sessionID,
                 source: .codex,
                 modelLabel: modelLabel,
-                lastActivity: mtime,
+                lastActivity: snapshot.planActivity,
                 tasks: tasks
             ))
         }
@@ -630,6 +639,7 @@ final class LiveAgentTasksService {
                 case collaborationMode = "collaboration_mode"
             }
         }
+        let timestamp: String?
         let type: String?
         let payload: Payload?
     }
@@ -646,18 +656,23 @@ final class LiveAgentTasksService {
     private struct CodexPlanSnapshot {
         let plan: [CodexPlanStep]
         let modelLabel: String?
+        let planActivity: Date
     }
 
     /// Scan a rollout JSONL for `function_call` lines whose `name` is
     /// `update_plan`. Returns the most recent plan, or nil if the rollout
     /// never emitted one.
-    nonisolated private static func readLatestCodexPlanSnapshot(at url: URL) -> CodexPlanSnapshot? {
+    nonisolated private static func readLatestCodexPlanSnapshot(
+        at url: URL,
+        fallbackActivity: Date
+    ) -> CodexPlanSnapshot? {
         guard let data = try? Data(contentsOf: url),
               let text = String(data: data, encoding: .utf8) else { return nil }
 
         let decoder = JSONDecoder()
         var latest: [CodexPlanStep]?
         var modelLabel: String?
+        var planActivity: Date?
         for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
             guard line.contains("\"update_plan\"") || line.contains("\"turn_context\"") else { continue }
             guard let lineData = String(line).data(using: .utf8) else { continue }
@@ -678,9 +693,25 @@ final class LiveAgentTasksService {
                   let argsData = args.data(using: .utf8) else { continue }
             guard let envelope = try? decoder.decode(CodexPlanArguments.self, from: argsData) else { continue }
             latest = envelope.plan
+            planActivity = parseCodexTimestamp(parsed.timestamp) ?? planActivity
         }
         guard let latest else { return nil }
-        return CodexPlanSnapshot(plan: latest, modelLabel: modelLabel)
+        return CodexPlanSnapshot(
+            plan: latest,
+            modelLabel: modelLabel,
+            planActivity: planActivity ?? fallbackActivity
+        )
+    }
+
+    nonisolated private static func parseCodexTimestamp(_ raw: String?) -> Date? {
+        guard let raw else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: raw) { return date }
+
+        let wholeSecond = ISO8601DateFormatter()
+        wholeSecond.formatOptions = [.withInternetDateTime]
+        return wholeSecond.date(from: raw)
     }
 
     nonisolated private static func mapCodexStatus(_ raw: String) -> LiveAgentTaskStatus {

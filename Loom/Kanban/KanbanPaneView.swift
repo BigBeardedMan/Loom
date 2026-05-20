@@ -200,7 +200,7 @@ struct KanbanPaneView: View {
         } else {
             labelText = labels.prefix(3).joined(separator: ", ") + ", and \(labels.count - 3) more"
         }
-        return "Clears every visible session\(labelText.isEmpty ? "" : " for \(labelText)"). File-backed task sessions delete their task JSON files; log-backed sessions such as Codex are hidden until their log updates, so stuck sessions stay gone and active sessions reappear on the next event."
+        return "Clears every visible session\(labelText.isEmpty ? "" : " for \(labelText)"). File-backed task sessions delete their task JSON files; log-backed sessions such as Codex are hidden until their task plan updates, so stuck sessions stay gone and active sessions reappear on the next plan update."
     }
 
     private func clearHelp(for group: LiveAgentTaskGroup) -> String {

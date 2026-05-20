@@ -40,10 +40,10 @@ struct WorkspaceSidebarView: View {
             workspaceSection
             Divider().overlay(LoomTheme.hairline)
             sessionsSection
-            Spacer(minLength: 0)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 14)
+        .frame(maxHeight: .infinity, alignment: .top)
         .task { seedIfEmpty() }
         .onChange(of: workspaces.map(\.id)) { _, _ in
             ensureSelection()
@@ -248,28 +248,35 @@ struct WorkspaceSidebarView: View {
                     }
                 }
 
-                Button {
-                    showRecentlyDeletedTerminals = true
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "trash")
-                            .font(.system(size: 10, weight: .semibold))
-                        Text("Recently Deleted")
-                            .font(.system(size: 11, weight: .medium))
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 9, weight: .bold))
-                    }
-                    .foregroundStyle(LoomTheme.mutedText)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .background(LoomTheme.softPanel.opacity(0.45))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
-                .buttonStyle(.plain)
-                .pointingHandCursor()
+                Spacer(minLength: 8)
+
+                recentlyDeletedTerminalButton
             }
         }
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private var recentlyDeletedTerminalButton: some View {
+        Button {
+            showRecentlyDeletedTerminals = true
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "trash")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("Recently Deleted")
+                    .font(.system(size: 11, weight: .medium))
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .bold))
+            }
+            .foregroundStyle(LoomTheme.mutedText)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(LoomTheme.softPanel.opacity(0.45))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
     }
 
     private var recentlyDeletedTerminalsSection: some View {
