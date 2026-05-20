@@ -109,7 +109,6 @@ struct WorkspaceView: View {
         HStack(spacing: 10) {
             brandButton
             verticalHairline
-            workspaceIdentity
             commandPaletteButton
 
             Spacer()

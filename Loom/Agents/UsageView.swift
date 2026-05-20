@@ -623,8 +623,8 @@ struct UsageView: View {
         ]
         return LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
             statCell("Sessions today",  formatCount(tool.sessionsToday))
-            statCell("Sessions total",  formatCount(tool.sessionsTotal))
-            statCell("Total tokens",    formatTokens(tool.totalTokens))
+            statCell("All sessions",    formatCount(tool.sessionsTotal))
+            statCell("Window tokens",   formatTokens(tool.totalTokens))
             statCell("Input",           formatTokens(tool.inputTokens))
             statCell("Output",          formatTokens(tool.outputTokens))
             statCell("Cached",          formatTokens(tool.cachedTokens))

@@ -1251,7 +1251,7 @@ private struct AgentSettings: View {
                     .font(.system(.body, design: .monospaced))
                     .disabled(!lmStudioRoutingEnabled)
 
-                Text("These settings are shared by the Agent pane and the lmstudio CLI handoff.")
+                Text("These settings are shared by the Agent pane, terminal LM Studio quick launches, and the lmstudio CLI handoff.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -234,7 +234,13 @@ private struct TerminalSinglePane: View {
         }
 
         Menu {
-            Button("lmstudio") { session.submit("lmstudio") }
+            Section("LM Studio") {
+                Button("lmstudio") { session.submit("lmstudio") }
+                Button("lmstudio --allow-bash") { session.submit("lmstudio --allow-bash") }
+                Button("lmstudio --bypass-permissions") { session.submit("lmstudio --bypass-permissions") }
+                Button("lms server status") { session.submit("lms server status") }
+            }
+            Divider()
             Button("claude")   { session.submit("claude") }
             Button("codex")    { session.submit("codex") }
             Button("gemini")   { session.submit("gemini") }

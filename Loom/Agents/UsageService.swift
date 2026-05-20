@@ -687,7 +687,8 @@ final class UsageService {
             root: codexRoot,
             liveCutoff: cutoff,
             startOfToday: startOfToday,
-            boundaries: boundaries
+            boundaries: boundaries,
+            windowStart: windowStart
         )
         let lmStudio = readLMStudioUsage(
             root: lmStudioRoot,
@@ -971,10 +972,6 @@ final class UsageService {
         let lineOutput = parseInt(nsLine, range: match.range(at: 4))
         let lineTotal  = lineInput + lineCached + lineOutput
 
-        inputTokens  += lineInput
-        cachedTokens += lineCached
-        outputTokens += lineOutput
-
         var model: String?
         if let modelRegex = Self.claudeModelRegex,
            let m = modelRegex.firstMatch(in: line, options: [], range: range),
@@ -991,18 +988,20 @@ final class UsageService {
         // the timestamp field isn't present (rare — usually internal events).
         let timestamp = parseClaudeTimestamp(line: line, fallback: fileMtime)
 
+        guard timestamp >= windowStart, lineTotal > 0 else { return }
+        inputTokens  += lineInput
+        cachedTokens += lineCached
+        outputTokens += lineOutput
         if let model {
             modelTokens[model, default: 0] += lineTotal
         }
-        if timestamp >= windowStart, lineTotal > 0 {
-            projectTokens[projectURL, default: 0] += lineTotal
-            if let idx = bucketIndex(for: timestamp, in: boundaries) {
-                bucketTokens[idx] += lineTotal
-            }
-            let hour = calendar.component(.hour, from: timestamp)
-            if hour >= 0 && hour < 24 {
-                hourlyDistribution[hour] += lineTotal
-            }
+        projectTokens[projectURL, default: 0] += lineTotal
+        if let idx = bucketIndex(for: timestamp, in: boundaries) {
+            bucketTokens[idx] += lineTotal
+        }
+        let hour = calendar.component(.hour, from: timestamp)
+        if hour >= 0 && hour < 24 {
+            hourlyDistribution[hour] += lineTotal
         }
     }
 
@@ -1175,7 +1174,8 @@ final class UsageService {
         root: URL,
         liveCutoff: Date,
         startOfToday: Date,
-        boundaries: [BucketBoundary]
+        boundaries: [BucketBoundary],
+        windowStart: Date
     ) -> CLIToolUsage {
         let fm = FileManager.default
         guard fm.fileExists(atPath: root.path) else {
@@ -1190,7 +1190,17 @@ final class UsageService {
         var cachedTokens = 0
         var lastActivity: Date?
         var models: Set<String> = []
+        var bucketTokens = [Int](repeating: 0, count: boundaries.count)
+        var hourlyDistribution = [Int](repeating: 0, count: 24)
+        var modelTokens: [String: Int] = [:]
+        var projectTokens: [String: Int] = [:]
+        var projectSessionCount: [String: Int] = [:]
+        var projectLastActivity: [String: Date] = [:]
+        var topicCounts: [String: Int] = [:]
+        var promptCount = 0
+        var recentPrompts: [PromptPreview] = []
         var latestLimitSnapshot: UsageLimitSnapshot?
+        let calendar = Calendar.current
 
         guard let enumerator = fm.enumerator(
             at: root,
@@ -1205,27 +1215,138 @@ final class UsageService {
             guard let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
                 .contentModificationDate else { continue }
             sessionsTotal += 1
-            if mtime >= startOfToday { sessionsToday += 1 }
             if mtime >= liveCutoff   { activeSessions += 1 }
-            if lastActivity == nil || mtime > lastActivity! { lastActivity = mtime }
 
-            if let data = try? Data(contentsOf: url),
-               let text = String(data: data, encoding: .utf8) {
-                let totals = parseCodexLastTotals(in: text)
-                inputTokens  += totals.input
-                outputTokens += totals.output
-                cachedTokens += totals.cached
-                if let model = parseCodexModel(in: text) {
-                    models.insert(model)
+            guard let data = try? Data(contentsOf: url),
+                  let text = String(data: data, encoding: .utf8) else {
+                if mtime >= startOfToday { sessionsToday += 1 }
+                if lastActivity == nil || mtime > lastActivity! { lastActivity = mtime }
+                continue
+            }
+
+            var sessionStartedAt = mtime
+            var sessionActivity = mtime
+            var sessionProject = url.deletingLastPathComponent().path
+            var sessionModel: String?
+
+            for rawLine in text.split(separator: "\n", omittingEmptySubsequences: true) {
+                guard let lineData = String(rawLine).data(using: .utf8),
+                      let rawJSON = try? JSONSerialization.jsonObject(with: lineData),
+                      let json = rawJSON as? [String: Any] else {
+                    continue
                 }
-                if let snapshot = parseCodexLatestLimitSnapshot(in: text, fallback: mtime) {
+                let timestamp = stringValue(json, path: ["timestamp"]).flatMap(parseISO8601) ?? mtime
+                if timestamp > sessionActivity { sessionActivity = timestamp }
+
+                let topType = stringValue(json, path: ["type"])
+                let payloadType = stringValue(json, path: ["payload", "type"])
+                if topType == "session_meta" {
+                    if let metaTimestamp = stringValue(json, path: ["payload", "timestamp"]).flatMap(parseISO8601) {
+                        sessionStartedAt = metaTimestamp
+                    }
+                    if let cwd = stringValue(json, path: ["payload", "cwd"]) {
+                        sessionProject = cwd
+                    }
+                } else if topType == "turn_context" {
+                    if let cwd = stringValue(json, path: ["payload", "cwd"]) {
+                        sessionProject = cwd
+                    }
+                    if let model = stringValue(json, path: ["payload", "model"]) {
+                        sessionModel = model
+                        models.insert(model)
+                    }
+                }
+
+                if topType == "event_msg", payloadType == "token_count" {
+                    if let snapshot = parseCodexLimitSnapshotFromLine(json, observedAt: timestamp) {
+                        let observedAt = snapshot.observedAt ?? .distantPast
+                        if latestLimitSnapshot?.observedAt.map({ observedAt > $0 }) ?? true {
+                            latestLimitSnapshot = snapshot
+                        }
+                    }
+                    guard timestamp >= windowStart,
+                          let usage = codexLastTokenUsageDictionary(from: json),
+                          let totals = parseCodexTokenUsage(from: usage) else {
+                        continue
+                    }
+                    let total = totals.input + totals.output + totals.cached
+                    guard total > 0 else { continue }
+                    inputTokens += totals.input
+                    outputTokens += totals.output
+                    cachedTokens += totals.cached
+                    let projectKey = sessionProject
+                    projectTokens[projectKey, default: 0] += total
+                    if let model = sessionModel {
+                        modelTokens[model, default: 0] += total
+                    }
+                    if let idx = bucketIndex(for: timestamp, in: boundaries) {
+                        bucketTokens[idx] += total
+                    }
+                    let hour = calendar.component(.hour, from: timestamp)
+                    if hour >= 0 && hour < 24 {
+                        hourlyDistribution[hour] += total
+                    }
+                } else if let prompt = codexPrompt(from: json), timestamp >= windowStart {
+                    promptCount += 1
+                    for word in extractTopicKeywords(from: prompt) {
+                        topicCounts[word, default: 0] += 1
+                    }
+                    recentPrompts.append(PromptPreview(
+                        text: String(prompt.replacingOccurrences(of: "\n", with: " ").prefix(140)),
+                        timestamp: timestamp,
+                        project: codexProjectDisplayName(sessionProject)
+                    ))
+                } else if let snapshot = parseCodexLimitSnapshotFromLine(json, observedAt: timestamp) {
                     let observedAt = snapshot.observedAt ?? .distantPast
                     if latestLimitSnapshot?.observedAt.map({ observedAt > $0 }) ?? true {
                         latestLimitSnapshot = snapshot
                     }
                 }
             }
+
+            if sessionStartedAt >= startOfToday { sessionsToday += 1 }
+            if lastActivity == nil || sessionActivity > lastActivity! { lastActivity = sessionActivity }
+            if sessionActivity >= windowStart {
+                projectSessionCount[sessionProject, default: 0] += 1
+                if let prev = projectLastActivity[sessionProject] {
+                    if sessionActivity > prev { projectLastActivity[sessionProject] = sessionActivity }
+                } else {
+                    projectLastActivity[sessionProject] = sessionActivity
+                }
+            }
         }
+
+        let chartBuckets: [UsageBucket] = zip(boundaries, bucketTokens).map { boundary, tokens in
+            UsageBucket(start: boundary.start, end: boundary.end, tokens: tokens, label: boundary.label)
+        }
+        let topProjects = projectSessionCount.compactMap { path, count -> ProjectUsage? in
+            guard let last = projectLastActivity[path] else { return nil }
+            return ProjectUsage(
+                displayName: codexProjectDisplayName(path),
+                path: path,
+                sessions: count,
+                lastActivity: last
+            )
+        }
+        .sorted { $0.lastActivity > $1.lastActivity }
+        .prefix(5)
+        .map { $0 }
+        let tokensByModel = modelTokens
+            .map { ModelUsage(model: $0.key, tokens: $0.value) }
+            .sorted { $0.tokens > $1.tokens }
+        let tokensByProject = projectTokens
+            .map { ProjectTokenSlice(displayName: codexProjectDisplayName($0.key), path: $0.key, tokens: $0.value) }
+            .sorted { $0.tokens > $1.tokens }
+        let topTopics = topicCounts
+            .filter { $0.value >= 2 }
+            .map { PromptTopic(keyword: $0.key, count: $0.value) }
+            .sorted { $0.count > $1.count }
+            .prefix(12)
+            .map { $0 }
+        let trimmedRecent = recentPrompts
+            .sorted { $0.timestamp > $1.timestamp }
+            .prefix(8)
+            .map { $0 }
 
         return CLIToolUsage(
             tool: .codex,
@@ -1238,21 +1359,114 @@ final class UsageService {
             cachedTokens: cachedTokens,
             lastActivity: lastActivity,
             models: models.sorted(),
-            chartBuckets: [],
-            topProjects: [],
-            tokensByModel: [],
-            tokensByProject: [],
-            topTopics: [],
-            recentPrompts: [],
-            hourlyDistribution: Array(repeating: 0, count: 24),
-            promptCount: 0,
+            chartBuckets: chartBuckets,
+            topProjects: topProjects,
+            tokensByModel: tokensByModel,
+            tokensByProject: tokensByProject,
+            topTopics: topTopics,
+            recentPrompts: trimmedRecent,
+            hourlyDistribution: hourlyDistribution,
+            promptCount: promptCount,
             limitSnapshot: latestLimitSnapshot
         )
     }
 
-    /// Codex emits a `token_count` event on every turn. The last one in a
-    /// rollout file holds cumulative `total_token_usage`, so we just need to
-    /// find the most recent match.
+    private nonisolated static func codexProjectDisplayName(_ path: String) -> String {
+        let url = URL(fileURLWithPath: path)
+        let name = url.lastPathComponent.nilIfEmpty ?? path
+        return friendlyProjectName(name)
+    }
+
+    private nonisolated static func codexLastTokenUsageDictionary(from json: [String: Any]) -> [String: Any]? {
+        dictValue(json, path: ["payload", "info", "last_token_usage"])
+            ?? dictValue(json, path: ["payload", "last_token_usage"])
+            ?? dictValue(json, path: ["info", "last_token_usage"])
+            ?? dictValue(json, path: ["last_token_usage"])
+    }
+
+    private nonisolated static func parseCodexTokenUsage(
+        from value: [String: Any]
+    ) -> (input: Int, output: Int, cached: Int)? {
+        let input = intValue(value["input_tokens"]) ?? 0
+        let cached = intValue(value["cached_input_tokens"])
+            ?? intValue(value["cache_read_input_tokens"])
+            ?? intValue(value["cached_tokens"])
+            ?? 0
+        let output = intValue(value["output_tokens"]) ?? 0
+        let reportedTotal = intValue(value["total_tokens"])
+        guard input > 0 || cached > 0 || output > 0 || (reportedTotal ?? 0) > 0 else {
+            return nil
+        }
+        let normalizedInput: Int
+        if let reportedTotal, reportedTotal == input + output, cached <= input {
+            normalizedInput = input - cached
+        } else {
+            normalizedInput = input
+        }
+        return (normalizedInput, output, cached)
+    }
+
+    private nonisolated static func parseCodexLimitSnapshotFromLine(
+        _ json: [String: Any],
+        observedAt: Date
+    ) -> UsageLimitSnapshot? {
+        guard var snapshot = parseCodexLimitSnapshot(from: json, observedAt: observedAt) else {
+            return nil
+        }
+        snapshot = fillCodexLimitMetadata(snapshot, from: json)
+        return snapshot
+    }
+
+    private nonisolated static func codexPrompt(from json: [String: Any]) -> String? {
+        let topType = stringValue(json, path: ["type"])
+        let payloadType = stringValue(json, path: ["payload", "type"])
+
+        if topType == "event_msg", payloadType == "user_message" {
+            if let message = stringValue(json, path: ["payload", "message"]) {
+                return message
+            }
+            if let elements = value(json, path: ["payload", "text_elements"]) {
+                var parts: [String] = []
+                collectCodexText(elements, into: &parts)
+                return parts.joined(separator: "\n").nilIfEmpty
+            }
+        }
+
+        if topType == "response_item",
+           payloadType == "message",
+           stringValue(json, path: ["payload", "role"]) == "user",
+           let content = value(json, path: ["payload", "content"]) {
+            var parts: [String] = []
+            collectCodexText(content, into: &parts)
+            return parts.joined(separator: "\n").nilIfEmpty
+        }
+        return nil
+    }
+
+    private nonisolated static func collectCodexText(_ value: Any, into parts: inout [String]) {
+        if let string = value as? String {
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { parts.append(trimmed) }
+            return
+        }
+        if let array = value as? [Any] {
+            for item in array { collectCodexText(item, into: &parts) }
+            return
+        }
+        if let dict = value as? [String: Any] {
+            if let text = stringValue(dict["text"]) {
+                parts.append(text)
+                return
+            }
+            if let content = dict["content"] {
+                collectCodexText(content, into: &parts)
+            }
+        }
+    }
+
+    /// Legacy parser for older Codex logs that only exposed cumulative
+    /// `total_token_usage`. The dashboard uses per-turn `last_token_usage`
+    /// when present so timeframe buttons do not show the same all-time data.
     private nonisolated static func parseCodexLastTotals(
         in text: String
     ) -> (input: Int, output: Int, cached: Int) {
@@ -1407,6 +1621,18 @@ final class UsageService {
         return current as? [String: Any]
     }
 
+    private nonisolated static func value(
+        _ dict: [String: Any],
+        path: [String]
+    ) -> Any? {
+        var current: Any = dict
+        for key in path {
+            guard let next = (current as? [String: Any])?[key] else { return nil }
+            current = next
+        }
+        return current
+    }
+
     private nonisolated static func stringValue(
         _ dict: [String: Any],
         path: [String]
@@ -1534,7 +1760,6 @@ final class UsageService {
             if updatedAt >= liveCutoff { activeSessions += 1 }
             if lastActivity == nil || updatedAt > lastActivity! { lastActivity = updatedAt }
 
-            models.insert(model)
             projectNames[workspaceKey] = workspaceName
             if updatedAt >= windowStart {
                 projectSessions[workspaceKey, default: 0] += 1
@@ -1549,16 +1774,16 @@ final class UsageService {
             for message in record.messages {
                 let tokens = estimatedTokenCount(message.text)
                 guard tokens > 0 else { continue }
-                sessionTokens += tokens
                 let role = message.role.lowercased()
-                if role == "user" {
-                    inputTokens += tokens
-                } else if role == "assistant" {
-                    outputTokens += tokens
-                }
 
                 let timestamp = message.createdAt
                 if timestamp >= windowStart {
+                    sessionTokens += tokens
+                    if role == "user" {
+                        inputTokens += tokens
+                    } else if role == "assistant" {
+                        outputTokens += tokens
+                    }
                     if let idx = bucketIndex(for: timestamp, in: boundaries) {
                         bucketTokens[idx] += tokens
                     }
@@ -1580,7 +1805,8 @@ final class UsageService {
                 }
             }
 
-            if updatedAt >= windowStart {
+            if sessionTokens > 0 {
+                models.insert(model)
                 modelTokens[model, default: 0] += sessionTokens
                 projectTokens[workspaceKey, default: 0] += sessionTokens
             }

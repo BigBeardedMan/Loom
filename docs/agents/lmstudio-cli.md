@@ -41,9 +41,18 @@ Type these at the `❯` prompt (they don't go to the model):
 
 | Command | Effect |
 | --- | --- |
-| `/help` | Show tips and the full command list |
+| `/doctor` | Check LM Studio install, `lms` CLI, server, loaded models, context, grammar, and tool support |
+| `/server status\|start\|stop\|daemon` | Manage the LM Studio local server from the shell |
+| `/status` | Show the current session, model, mode, permissions, routing, context, and background shells |
+| `/commands` | Show slash commands grouped by workflow, including custom `.loom/commands/*.md` files |
+| `/help [command]` | Show tips and command help |
 | `/clear` | Reset the transcript (history file kept) |
 | `/model` | List loaded models. `/model <id>` swaps mid-session |
+| `/models` | List local LM Studio models on disk with loaded/tool-use markers |
+| `/model-info` | Show model adapter, tool, grammar, and context details |
+| `/load <id> [context]` | Load a model through `lms load` |
+| `/unload [id]` | Unload a model through `lms unload` |
+| `/autoscale <target\|max>` | Reload the active model with a larger context target |
 | `/bash [on\|off]` | Toggle the `run_bash` tool |
 | `/cwd [path]` | Show or change the workspace root (reloads project context + knowledge) |
 | `/cost` | Approximate token count, elapsed wall-clock, tok/s |
@@ -75,6 +84,7 @@ Type these at the `❯` prompt (they don't go to the model):
 | `/autocommit [on\|off]` | Toggle git auto-commit on task completion |
 | `/persona [name]` | Load a persona by name (or print current) |
 | `/lsp <command>`, `/lsp off` | Start/stop an LSP server (stdio JSON-RPC) |
+| `/install`, `/install run` | Show or update the `~/.local/bin/lmstudio` symlink |
 | `/quit`, `/exit` | Leave the REPL (writes `.loom/project.json` + persists permissions) |
 
 ## Built-in tools (7.0.0 — 57 tools)

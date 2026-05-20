@@ -4,8 +4,9 @@ lmstudio - interactive agent shell backed by LM Studio's OpenAI-compatible
 local server. Mirrors Loom's in-app AgentOrchestrator (read/write/edit/
 list/bash/update_tasks) and adds:
 
-  - Slash commands  (/clear, /model, /bash, /cwd, /cost, /save, /resume,
-                     /system, /sh, /tasks, /yolo, /theme, /help)
+  - Slash commands  (/doctor, /server, /status, /commands, /clear, /model,
+                     /bash, /cwd, /cost, /save, /resume, /system, /sh,
+                     /tasks, /yolo, /theme, /help)
   - @file mentions with tab completion
   - Permission prompts (y/n/a) for write_file, edit_file, run_bash
   - Status footer above the boxed input
@@ -9187,6 +9188,83 @@ def _render_tool_result_summary(name, result, ok):
 # Slash commands
 # =============================================================================
 
+SLASH_COMMAND_HELP = {
+    "/doctor": "Check LM Studio install, server, lms CLI, models, context, and tool/schema support.",
+    "/server": "Manage the LM Studio runtime: /server status|start|stop|daemon.",
+    "/status": "Show model, mode, permissions, workspace, routing, context, and session state.",
+    "/commands": "List slash commands grouped by workflow, including .loom/commands entries.",
+    "/help": "Show command help. Use /help <command> for one command.",
+    "/quit": "Exit the REPL.",
+    "/exit": "Exit the REPL.",
+    "/clear": "Reset the transcript for this session.",
+    "/model": "List loaded models or switch with /model <id>.",
+    "/models": "List local models on disk with loaded/tool-use markers.",
+    "/model-info": "Show adapter/tool/grammar details for the current model.",
+    "/load": "Load a model through the lms CLI: /load <model-key> [context].",
+    "/unload": "Unload a model through the lms CLI.",
+    "/autoscale": "Show or change the loaded context length for the current model.",
+    "/bash": "Toggle the run_bash tool.",
+    "/cwd": "Show or change workspace root.",
+    "/cost": "Show approximate token and elapsed-time counters.",
+    "/tasks": "Re-render the current task list.",
+    "/save": "Save the current session.",
+    "/resume": "Resume a saved session.",
+    "/sessions": "List saved sessions.",
+    "/system": "Show or replace the system prompt.",
+    "/sh": "Run a shell command yourself, outside the agent tool loop.",
+    "/yolo": "Toggle permission prompts off/on for dangerous tools.",
+    "/theme": "Switch terminal theme.",
+    "/wrap": "Toggle word-boundary wrapping.",
+    "/auto": "Toggle or set continuation budget.",
+    "/compact": "Toggle auto-compaction or force /compact now.",
+    "/undo": "Undo the last/all filesystem mutation journal entries.",
+    "/journal": "List filesystem mutations made this session.",
+    "/diff": "Show the session aggregate diff.",
+    "/test": "Toggle auto-test after filesystem mutations.",
+    "/recall": "Search local tool-result memory.",
+    "/preview": "Start/stop/show the live HTTP preview.",
+    "/branch": "Save transcript/tasks/journal as a named branch.",
+    "/branches": "List saved branches.",
+    "/checkout": "Switch to a saved branch.",
+    "/merge": "Merge another branch's latest answer/tasks as context.",
+    "/router": "Set planner/coder/explainer model overrides.",
+    "/prefetch": "Toggle speculative safe-tool prefetch.",
+    "/screenshot": "Toggle auto-screenshot after UI mutations.",
+    "/batch": "Toggle aggressive multi-step batching.",
+    "/autocommit": "Toggle git auto-commit on task completion.",
+    "/persona": "Show or load a persona.",
+    "/lsp": "Start or stop a stdio LSP server.",
+    "/watch": "Toggle workspace file watcher.",
+    "/reflect": "Toggle end-of-turn self-reflection.",
+    "/plugins": "List loaded plugin modules.",
+    "/constitution": "Show or reload workspace constitution rules.",
+    "/ship": "Run the ship_it workflow from a short spec.",
+    "/web": "Run a web_search directly.",
+    "/blocklist": "Show or edit the web host blocklist.",
+    "/hooks": "Show or reload hooks.",
+    "/wake": "List queued wakeups.",
+    "/settings": "Show or reload .loom/settings.json.",
+    "/bg": "Start/list background shells.",
+    "/mon": "Monitor a background shell.",
+    "/kill": "Kill a background shell.",
+    "/nb": "Read a Jupyter notebook.",
+    "/skill": "List or activate skills.",
+    "/memory": "Show or reload user memory.",
+    "/tools": "Switch essentials/full tool surface.",
+    "/mode": "Show or switch permission mode.",
+    "/install": "Show helper install status; /install run symlinks this CLI into ~/.local/bin.",
+}
+
+SLASH_COMMAND_GROUPS = [
+    ("LM Studio", ["/doctor", "/server", "/status", "/model", "/models", "/model-info", "/load", "/unload", "/autoscale", "/install"]),
+    ("Session", ["/commands", "/help", "/clear", "/save", "/resume", "/sessions", "/cwd", "/cost", "/theme", "/wrap", "/compact", "/quit"]),
+    ("Agent Control", ["/mode", "/bash", "/yolo", "/tools", "/auto", "/router", "/prefetch", "/batch", "/test", "/screenshot", "/autocommit"]),
+    ("Workspace", ["/tasks", "/journal", "/diff", "/undo", "/preview", "/branch", "/branches", "/checkout", "/merge", "/watch", "/lsp"]),
+    ("Extensions", ["/persona", "/skill", "/memory", "/plugins", "/constitution", "/hooks", "/settings", "/blocklist"]),
+    ("Shell and Utilities", ["/sh", "/bg", "/mon", "/kill", "/nb", "/web", "/ship", "/wake", "/reflect"]),
+]
+
+
 class SlashRouter:
     def __init__(self, state):
         self.state = state
@@ -9250,6 +9328,11 @@ class SlashRouter:
             "/models":  self.cmd_models,
             "/load":    self.cmd_load,
             "/unload":  self.cmd_unload,
+            "/doctor":  self.cmd_doctor,
+            "/server":  self.cmd_server,
+            "/status":  self.cmd_status,
+            "/commands": self.cmd_commands,
+            "/install": self.cmd_install,
         }
 
     def names(self):
@@ -9284,11 +9367,42 @@ class SlashRouter:
         return "continue"
 
     # --- handlers ---
-    def cmd_help(self, _):
+    def cmd_help(self, rest):
+        rest = rest.strip()
+        if rest:
+            name = rest if rest.startswith("/") else f"/{rest}"
+            if name in SLASH_COMMAND_HELP:
+                print(f"  {style(name, 'key')}  {style(SLASH_COMMAND_HELP[name], 'dim')}")
+                return "continue"
+            meta = self.state.slash_command_files.get(name.lstrip("/"))
+            if meta:
+                desc = meta.get("description") or "(workspace slash command)"
+                source = meta.get("path") or ""
+                print(f"  {style(name, 'key')}  {style(desc, 'dim')}")
+                if source:
+                    print(style(f"  source: {source}", "dim"))
+                return "continue"
+            print(style(f"  unknown command: {name}", "warning"))
+            return "continue"
         draw_tips()
+        return self.cmd_commands("")
+
+    def cmd_commands(self, _):
         print(style(" Slash commands", "tip"))
-        for name in self.names():
-            print(f"   {style(name, 'key')}")
+        for group, names in SLASH_COMMAND_GROUPS:
+            available = [name for name in names if name in self.commands]
+            if not available:
+                continue
+            print(style(f"  {group}", "key"))
+            for name in available:
+                desc = SLASH_COMMAND_HELP.get(name, "")
+                print(f"   {style(name.ljust(14), 'value')} {style(desc, 'dim')}")
+        if self.state.slash_command_files:
+            print(style("  Custom", "key"))
+            for name, meta in sorted(self.state.slash_command_files.items()):
+                desc = meta.get("description") or "workspace command"
+                model = f" · model {meta['model']}" if meta.get("model") else ""
+                print(f"   {style('/' + name, 'value')} {style(desc + model, 'dim')}")
         print()
         return "continue"
 
@@ -9352,6 +9466,133 @@ class SlashRouter:
                 "response text. Performance is acceptable for write_file "
                 "/ edit_file workloads but multi-tool turns may be slower.",
                 "dim"))
+        return "continue"
+
+    def cmd_doctor(self, _):
+        """One-screen health check for the whole LM Studio path."""
+        status = detect_lmstudio_installation(self.state.base_url)
+        print(style("  LM Studio doctor", "key"))
+        print(f"   base URL:       {self.state.base_url}")
+        print(f"   installed:      {'yes' if status['installed'] else 'no'}")
+        print(f"   app path:       {status['app_path'] or '-'}")
+        print(f"   lms CLI:        {status['lms_cli_path'] or '-'}")
+        print(f"   server:         {'reachable' if status['server_reachable'] else 'not reachable'}")
+
+        if status["server_reachable"]:
+            try:
+                loaded = fetch_loaded_models(self.state.base_url)
+            except Exception as e:
+                loaded = []
+                print(style(f"   models:         could not list loaded models ({e})", "warning"))
+            if loaded:
+                print(f"   loaded models:  {', '.join(loaded)}")
+            else:
+                print(style("   loaded models:  none", "warning"))
+
+            info = fetch_model_info(self.state.base_url, self.state.model)
+            if info:
+                loaded_ctx = info.get("loaded_context_length") or info.get("context_length")
+                cap = info.get("max_context_length")
+                quant = info.get("quantization") or info.get("quantization_format") or "-"
+                arch = info.get("architecture") or "-"
+                print(f"   active model:   {self.state.model}")
+                print(f"   context:        loaded={loaded_ctx or '?'} cap={cap or '?'}")
+                print(f"   model detail:   {quant} · {arch}")
+            else:
+                print(style(f"   active model:   {self.state.model} (native metadata unavailable)", "dim"))
+
+            print(f"   grammar:        {'on' if self.state.grammar_supported else 'off'}")
+            print(f"   tool surface:   {'essentials' if self.state.essential_tools_only else 'full'}")
+            print(f"   adapter:        {self.state.adapter.family} (native_tools={self.state.adapter.native_tools})")
+
+        print()
+        if not status["installed"]:
+            print(style(f"  Install LM Studio: {LMSTUDIO_DOWNLOAD_URL}", "warning"))
+        elif not status["server_reachable"]:
+            if status["lms_cli_path"]:
+                print(style("  Run /server start or /server daemon, then /doctor again.", "warning"))
+            else:
+                print(style("  Open LM Studio and enable the local server. The `lms` CLI was not found.", "warning"))
+        elif not fetch_model_context_window(self.state.base_url, self.state.model):
+            print(style("  Tip: /autoscale 32768 can reload the current model with more context.", "dim"))
+        else:
+            print(style("  LM Studio path looks usable.", "ok"))
+        return "continue"
+
+    def cmd_server(self, rest):
+        action = (rest or "status").strip().lower()
+        aliases = {"up": "daemon", "daemon-up": "daemon", "run": "start"}
+        action = aliases.get(action, action)
+        if action not in ("status", "start", "stop", "daemon"):
+            print(style("  usage: /server status|start|stop|daemon", "dim"))
+            return "continue"
+        lms_cmd = _locate_lms_cli()
+        if not lms_cmd:
+            print(style("  lms CLI not found. Open LM Studio once, then run its CLI bootstrap.", "err"))
+            return "continue"
+        argv = {
+            "status": [lms_cmd, "server", "status"],
+            "start": [lms_cmd, "server", "start"],
+            "stop": [lms_cmd, "server", "stop"],
+            "daemon": [lms_cmd, "daemon", "up"],
+        }[action]
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True, timeout=90)
+        except subprocess.TimeoutExpired:
+            print(style(f"  lms {action} timed out", "err"))
+            return "continue"
+        if proc.stdout:
+            print(proc.stdout.rstrip())
+        if proc.stderr:
+            print(style(proc.stderr.rstrip(), "err" if proc.returncode else "dim"))
+        print(style(f"  [exit {proc.returncode}]", "ok" if proc.returncode == 0 else "err"))
+        return "continue"
+
+    def cmd_status(self, _):
+        elapsed = int(time.time() - self.state.started_at)
+        mode = self.state.mode
+        print(style("  Session status", "key"))
+        print(f"   session:        {self.state.session_id}")
+        print(f"   workspace:      {self.state.workspace}")
+        print(f"   model:          {self.state.model}")
+        print(f"   adapter:        {self.state.adapter.family} (native_tools={self.state.adapter.native_tools})")
+        print(f"   mode:           {mode['label']} - {mode['blurb']}")
+        print(f"   run_bash:       {'enabled' if self.state.allow_bash else 'disabled'}")
+        print(f"   permissions:    {'yolo' if self.state.permissions.yolo else 'prompted'}")
+        print(f"   tools:          {'essentials' if self.state.essential_tools_only else 'full'}")
+        print(f"   grammar:        {'on' if self.state.grammar_supported else 'off'}")
+        print(f"   context:        {self.state.approx_tokens:,}/{self.state.context_window or '?'} tokens")
+        print(f"   routing:        planner={self.state.planner_model or '-'} coder={self.state.coder_model or '-'} explainer={self.state.explainer_model or '-'}")
+        print(f"   auto:           continue={'on' if self.state.auto_continue else 'off'} compact={'on' if self.state.auto_compact else 'off'} test={'on' if self.state.auto_test else 'off'}")
+        print(f"   background:     {len(self.state.bg_shells)} shell(s)")
+        print(f"   elapsed:        {elapsed}s")
+        return "continue"
+
+    def cmd_install(self, rest):
+        script = Path(__file__).resolve().parent / "install-lmstudio.sh"
+        target = Path.home() / ".local" / "bin" / "lmstudio"
+        print(style("  lmstudio helper install", "key"))
+        print(f"   source: {Path(__file__).resolve()}")
+        print(f"   target: {target}")
+        if target.is_symlink() or target.exists():
+            try:
+                resolved = target.resolve()
+            except OSError:
+                resolved = target
+            print(f"   current: {resolved}")
+        else:
+            print(style("   current: not installed", "warning"))
+        if rest.strip() != "run":
+            print(style("  Run /install run to update the ~/.local/bin symlink.", "dim"))
+            return "continue"
+        if not script.is_file():
+            print(style(f"  missing installer script: {script}", "err"))
+            return "continue"
+        proc = subprocess.run([str(script)], capture_output=True, text=True, timeout=20)
+        if proc.stdout:
+            print(proc.stdout.rstrip())
+        if proc.stderr:
+            print(style(proc.stderr.rstrip(), "err"))
         return "continue"
 
     def cmd_models(self, _):

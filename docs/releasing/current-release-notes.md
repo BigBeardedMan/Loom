@@ -1,7 +1,6 @@
 ## Changes
 
-- Polished the redesigned macOS workspace shell for a cleaner, tighter Testing Edition `8.1.0` experience.
-- Simplified seed workspace rows so Prompt, Ideas, and Review read as single-word destinations instead of repeating their type label.
-- Removed local limit controls and warning badges from tools that do not expose limit telemetry, including LM Studio.
-- Replaced recently closed terminal transcript sheets with an app-level preview that can close from outside click, Escape, or Done.
-- Expanded terminal click-to-position editing beyond Claude so prompt text can be repositioned by click across supported shells, AI CLIs, and common REPLs while avoiding full-screen terminal apps.
+- Added LM Studio shell diagnostics, grouped slash-command help, server controls, status checks, install guidance, and richer command documentation.
+- Added macOS terminal quick launches for LM Studio, including bash-enabled and bypass-permissions modes plus server status.
+- Fixed macOS usage dashboard timeframes so Day, Week, Month, and All show selected-window token totals instead of reusing all-time data.
+- Removed the workspace title from the top bar so the Command control moves into that space.
