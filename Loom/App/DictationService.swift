@@ -98,11 +98,12 @@ final class DictationService {
         let inputNode = audioEngine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
         inputNode.removeTap(onBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 1_024, format: format) { [weak self] buffer, _ in
-            Task { @MainActor in
-                self?.recognitionRequest?.append(buffer)
-            }
-        }
+        inputNode.installTap(
+            onBus: 0,
+            bufferSize: 1_024,
+            format: format,
+            block: Self.makeAudioTapHandler(request: request)
+        )
 
         audioEngine.prepare()
         do {
@@ -114,11 +115,10 @@ final class DictationService {
         }
 
         state = .listening
-        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            Task { @MainActor in
-                self?.handleRecognition(result: result, error: error)
-            }
-        }
+        recognitionTask = recognizer.recognitionTask(
+            with: request,
+            resultHandler: Self.makeRecognitionHandler(for: self)
+        )
     }
 
     private func requestPermissions() async -> Bool {
@@ -155,22 +155,22 @@ final class DictationService {
         }
     }
 
-    private func handleRecognition(result: SFSpeechRecognitionResult?, error: Error?) {
-        if let result {
-            liveTranscript = result.bestTranscription.formattedString
-            state = result.isFinal ? .transcribing : .listening
-            if result.isFinal {
+    private func handleRecognition(transcript: String?, isFinal: Bool, errorMessage: String?) {
+        if let transcript {
+            liveTranscript = transcript
+            state = isFinal ? .transcribing : .listening
+            if isFinal {
                 insertTranscriptIfNeeded()
                 finishAudio(cancelTask: false)
                 state = .idle
             }
         }
 
-        if let error,
+        if let errorMessage,
            !hasInsertedTranscript,
            state.isActive {
             finishAudio(cancelTask: true)
-            state = .error(error.localizedDescription)
+            state = .error(errorMessage)
         }
     }
 
@@ -206,6 +206,32 @@ final class DictationService {
             recognitionTask?.finish()
         }
         recognitionTask = nil
+    }
+
+    nonisolated private static func makeAudioTapHandler(
+        request: SFSpeechAudioBufferRecognitionRequest
+    ) -> AVAudioNodeTapBlock {
+        { buffer, _ in
+            request.append(buffer)
+        }
+    }
+
+    nonisolated private static func makeRecognitionHandler(
+        for service: DictationService
+    ) -> (SFSpeechRecognitionResult?, Error?) -> Void {
+        { [weak service] result, error in
+            let transcript = result?.bestTranscription.formattedString
+            let isFinal = result?.isFinal ?? false
+            let errorMessage = error?.localizedDescription
+
+            Task { @MainActor in
+                service?.handleRecognition(
+                    transcript: transcript,
+                    isFinal: isFinal,
+                    errorMessage: errorMessage
+                )
+            }
+        }
     }
 }
 

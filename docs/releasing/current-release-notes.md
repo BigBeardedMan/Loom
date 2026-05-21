@@ -1,5 +1,6 @@
 ## Changes
 
+- Mac dictation no longer crashes when the microphone audio tap starts under Swift 6 strict concurrency.
 - Windows Testing now uses the Mac-style shell, left navigation, workspace rows, and usage surfaces instead of the older Windows-only layout.
 - The Windows LM Studio usage view no longer shows a limits control, and recently closed prompt previews now close from outside-click or Escape.
 - Windows terminal clicks on the active input row now move the shell cursor toward the clicked character.
