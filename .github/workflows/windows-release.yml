@@ -147,16 +147,22 @@ jobs:
           Write-Host "Running updater install smoke test for $($installer.FullName)"
           $process = Start-Process -FilePath $installer.FullName -ArgumentList @("/S", "/R", "/UPDATE", "/ARGS") -PassThru
           $programFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
-          $pathsToCheck = @()
+          $exeNames = @("loom.exe", "Loom Testing Edition.exe")
+          $installDirs = @()
           if ($env:LOCALAPPDATA) {
-            $pathsToCheck += Join-Path $env:LOCALAPPDATA "Loom Testing Edition\Loom Testing Edition.exe"
-            $pathsToCheck += Join-Path $env:LOCALAPPDATA "Programs\Loom Testing Edition\Loom Testing Edition.exe"
+            $installDirs += Join-Path $env:LOCALAPPDATA "Loom Testing Edition"
+            $installDirs += Join-Path $env:LOCALAPPDATA "Programs\Loom Testing Edition"
           }
           if ($env:ProgramFiles) {
-            $pathsToCheck += Join-Path $env:ProgramFiles "Loom Testing Edition\Loom Testing Edition.exe"
+            $installDirs += Join-Path $env:ProgramFiles "Loom Testing Edition"
           }
           if ($programFilesX86) {
-            $pathsToCheck += Join-Path $programFilesX86 "Loom Testing Edition\Loom Testing Edition.exe"
+            $installDirs += Join-Path $programFilesX86 "Loom Testing Edition"
+          }
+          $pathsToCheck = foreach ($dir in $installDirs) {
+            foreach ($name in $exeNames) {
+              Join-Path $dir $name
+            }
           }
 
           $deadline = (Get-Date).AddMinutes(4)
@@ -176,6 +182,14 @@ jobs:
             if (-not $process.HasExited) {
               Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
             }
+            Write-Host "Checked install paths:"
+            $pathsToCheck | ForEach-Object { Write-Host "  $_" }
+            if ($env:LOCALAPPDATA -and (Test-Path $env:LOCALAPPDATA)) {
+              Get-ChildItem -Path $env:LOCALAPPDATA -Filter "*.exe" -Recurse -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -match "Loom|loom" } |
+                Select-Object -First 20 -ExpandProperty FullName |
+                ForEach-Object { Write-Host "Found candidate: $_" }
+            }
             throw "Installed Loom Testing Edition executable was not found after updater install"
           }
 
@@ -187,6 +201,7 @@ jobs:
             throw "Installed product version '$productVersion' does not match ${{ steps.build_code.outputs.value }}"
           }
 
+          Stop-Process -Name "loom" -Force -ErrorAction SilentlyContinue
           Stop-Process -Name "Loom Testing Edition" -Force -ErrorAction SilentlyContinue
           Start-Sleep -Seconds 2
           if (-not $process.HasExited) {

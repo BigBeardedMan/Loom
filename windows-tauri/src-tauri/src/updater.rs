@@ -502,6 +502,10 @@ pub fn update_run_installer(
             .unwrap_or_default();
         let release_url = release_url_for_installer(&installer_name);
         let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+        let app_exe_name = exe
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "loom.exe".to_string());
         let exe_path = exe.to_string_lossy().to_string();
         let parent_pid = std::process::id();
 
@@ -525,15 +529,15 @@ if not errorlevel 1 (\r\n\
 )\r\n\
 echo pid {pid} exited, settling 5s for file locks >> \"%LOGFILE%\"\r\n\
 timeout /t 5 /nobreak >nul\r\n\
-echo closing remaining Loom Testing Edition processes >> \"%LOGFILE%\"\r\n\
-taskkill /IM \"Loom Testing Edition.exe\" /T /F >> \"%LOGFILE%\" 2>&1\r\n\
+echo closing remaining {app_exe_name} processes >> \"%LOGFILE%\"\r\n\
+taskkill /IM \"{app_exe_name}\" /T /F >> \"%LOGFILE%\" 2>&1\r\n\
 echo launching: \"{installer}\" /S /R /UPDATE /ARGS >> \"%LOGFILE%\"\r\n\
 start \"\" \"{installer}\" /S /R /UPDATE /ARGS\r\n\
 set /a WAITED=0\r\n\
 :installwait\r\n\
 timeout /t 2 /nobreak >nul\r\n\
 set /a WAITED+=2\r\n\
-tasklist /FI \"IMAGENAME eq Loom Testing Edition.exe\" 2>nul | findstr /I /C:\"Loom Testing Edition.exe\" >nul\r\n\
+tasklist /FI \"IMAGENAME eq {app_exe_name}\" 2>nul | findstr /I /C:\"{app_exe_name}\" >nul\r\n\
 if not errorlevel 1 (\r\n\
     echo installer relaunched Loom after %WAITED%s >> \"%LOGFILE%\"\r\n\
     goto done\r\n\
@@ -552,7 +556,7 @@ goto installwait\r\n\
 :relaunchfallback\r\n\
 echo settling 5s before fallback relaunch >> \"%LOGFILE%\"\r\n\
 timeout /t 5 /nobreak >nul\r\n\
-tasklist /FI \"IMAGENAME eq Loom Testing Edition.exe\" 2>nul | findstr /I /C:\"Loom Testing Edition.exe\" >nul\r\n\
+tasklist /FI \"IMAGENAME eq {app_exe_name}\" 2>nul | findstr /I /C:\"{app_exe_name}\" >nul\r\n\
 if errorlevel 1 (\r\n\
     echo installer did not relaunch Loom, using fallback: \"{exe}\" >> \"%LOGFILE%\"\r\n\
     start \"\" \"{exe}\"\r\n\
@@ -566,6 +570,7 @@ echo done >> \"%LOGFILE%\"\r\n\
             pid = parent_pid,
             installer = installer_path.replace('"', ""),
             installer_name = installer_name.replace('"', ""),
+            app_exe_name = app_exe_name.replace('"', ""),
             exe = exe_path.replace('"', ""),
             release_url = release_url.replace('"', ""),
         );
