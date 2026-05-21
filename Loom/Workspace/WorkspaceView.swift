@@ -313,9 +313,6 @@ struct WorkspaceView: View {
                     .font(.system(size: 12, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .frame(maxWidth: dictation.state.isActive && !dictation.liveTranscript.isEmpty
-                        ? 190
-                        : nil)
             }
             .foregroundStyle(dictation.state.isActive || dictation.state.isError ? .white : LoomTheme.primaryText)
             .padding(.horizontal, 10)
@@ -351,7 +348,7 @@ struct WorkspaceView: View {
         case .requestingPermission, .transcribing:
             return dictation.state.label
         case .listening:
-            return dictation.liveTranscript.isEmpty ? dictation.state.label : dictation.liveTranscript
+            return dictation.state.label
         case .error:
             return "Dictation Error"
         }

@@ -67,6 +67,7 @@ final class DictationService {
     private var finalResultWatchdogTask: Task<Void, Never>?
     private var isFinishingRecognition = false
     private var hasInsertedTranscript = false
+    private var insertionTarget: DictationInsertionTarget?
 
     func toggle() {
         if state.isActive {
@@ -85,7 +86,9 @@ final class DictationService {
 
     private func start() async {
         guard !state.isActive else { return }
+        let target = FocusedTextInserter.captureTarget()
         finishAudio(cancelTask: true)
+        insertionTarget = target
 
         state = .requestingPermission
         liveTranscript = ""
@@ -227,7 +230,8 @@ final class DictationService {
         let text = liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !hasInsertedTranscript else { return false }
         hasInsertedTranscript = true
-        if !FocusedTextInserter.insert(text) {
+        if !(insertionTarget?.insert(text) ?? false),
+           !FocusedTextInserter.insert(text) {
             NotificationCenter.default.post(
                 name: .loomDictationInsertText,
                 object: nil,
@@ -247,6 +251,7 @@ final class DictationService {
             recognitionTask?.cancel()
             recognitionTask = nil
             isFinishingRecognition = false
+            insertionTarget = nil
         } else if !isFinishingRecognition {
             recognitionTask?.finish()
             isFinishingRecognition = recognitionTask != nil
@@ -271,6 +276,7 @@ final class DictationService {
         recognitionRequest = nil
         recognitionTask = nil
         isFinishingRecognition = false
+        insertionTarget = nil
     }
 
     private func startCaptureWatchdog() {
@@ -304,6 +310,7 @@ final class DictationService {
                 self.recognitionTask = nil
                 self.isFinishingRecognition = false
                 self.finalResultWatchdogTask = nil
+                self.insertionTarget = nil
 
                 if showNoSpeechError, !self.hasInsertedTranscript {
                     self.state = .error("No speech was transcribed. Check the selected Mac input device and try again.")
@@ -346,6 +353,64 @@ final class DictationService {
     }
 }
 
+@MainActor
+final class DictationTerminalTargetRegistry {
+    static let shared = DictationTerminalTargetRegistry()
+
+    private weak var terminalView: LoomTerminalView?
+    private var activatedAt: Date?
+
+    private init() {}
+
+    func noteActiveTerminal(_ terminalView: LoomTerminalView) {
+        self.terminalView = terminalView
+        activatedAt = Date()
+    }
+
+    func recentTerminal(maxAge: TimeInterval = 120) -> LoomTerminalView? {
+        guard let terminalView,
+              terminalView.window != nil,
+              let activatedAt,
+              Date().timeIntervalSince(activatedAt) <= maxAge else {
+            return nil
+        }
+        return terminalView
+    }
+}
+
+@MainActor
+private final class DictationInsertionTarget {
+    private weak var terminalView: LoomTerminalView?
+    private weak var textView: NSTextView?
+    private weak var responder: NSResponder?
+
+    init(terminalView: LoomTerminalView) {
+        self.terminalView = terminalView
+    }
+
+    init(textView: NSTextView) {
+        self.textView = textView
+    }
+
+    init(responder: NSResponder) {
+        self.responder = responder
+    }
+
+    func insert(_ text: String) -> Bool {
+        if let terminalView {
+            return terminalView.insertDictationText(text)
+        }
+        if let textView {
+            textView.insertText(text, replacementRange: textView.selectedRange())
+            return true
+        }
+        if let responder {
+            return responder.tryToPerform(#selector(NSResponder.insertText(_:)), with: text)
+        }
+        return false
+    }
+}
+
 private final class DictationCaptureMonitor: @unchecked Sendable {
     private let lock = NSLock()
     private var bufferCount = 0
@@ -374,12 +439,42 @@ private final class DictationCaptureMonitor: @unchecked Sendable {
 
 private enum FocusedTextInserter {
     @MainActor
-    static func insert(_ text: String) -> Bool {
-        guard let responder = NSApp.keyWindow?.firstResponder else { return false }
-        if let textView = responder as? NSTextView {
-            textView.insertText(text, replacementRange: textView.selectedRange())
-            return true
+    static func captureTarget() -> DictationInsertionTarget? {
+        let responder = NSApp.keyWindow?.firstResponder
+        if let responder {
+            if let terminalView = terminalView(from: responder) {
+                return DictationInsertionTarget(terminalView: terminalView)
+            }
+            if let textView = responder as? NSTextView {
+                return DictationInsertionTarget(textView: textView)
+            }
         }
-        return responder.tryToPerform(#selector(NSResponder.insertText(_:)), with: text)
+        if let terminalView = DictationTerminalTargetRegistry.shared.recentTerminal() {
+            return DictationInsertionTarget(terminalView: terminalView)
+        }
+        if let responder {
+            return DictationInsertionTarget(responder: responder)
+        }
+        return nil
+    }
+
+    @MainActor
+    static func insert(_ text: String) -> Bool {
+        captureTarget()?.insert(text) ?? false
+    }
+
+    @MainActor
+    private static func terminalView(from responder: NSResponder) -> LoomTerminalView? {
+        if let terminalView = responder as? LoomTerminalView {
+            return terminalView
+        }
+        var view = responder as? NSView
+        while let current = view {
+            if let terminalView = current as? LoomTerminalView {
+                return terminalView
+            }
+            view = current.superview
+        }
+        return nil
     }
 }

@@ -280,6 +280,7 @@ struct TerminalNSView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> LoomTerminalView {
         session.start()
+        DictationTerminalTargetRegistry.shared.noteActiveTerminal(session.terminalView)
         return session.terminalView
     }
 

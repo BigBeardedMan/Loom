@@ -340,6 +340,14 @@ final class LoomTerminalView: LocalProcessTerminalView {
         super.dataReceived(slice: slice)
     }
 
+    @MainActor
+    func insertDictationText(_ text: String) -> Bool {
+        guard window != nil, process.childfd >= 0 else { return false }
+        DictationTerminalTargetRegistry.shared.noteActiveTerminal(self)
+        send(txt: text)
+        return true
+    }
+
     // MARK: - Pasteboard
 
     /// Send the clipboard's string contents straight into the PTY without
@@ -611,6 +619,7 @@ final class LoomTerminalView: LocalProcessTerminalView {
     }
 
     @objc private func handleSingleClick(_ recognizer: NSClickGestureRecognizer) {
+        DictationTerminalTargetRegistry.shared.noteActiveTerminal(self)
         // Skip when the click had any modifier — those are reserved for
         // selection (shift), word lookup (command), etc.
         if let event = NSApp.currentEvent,
