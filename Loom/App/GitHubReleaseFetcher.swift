@@ -25,10 +25,7 @@ enum GitHubReleaseFetcher {
         /// `1.0.0`; for `testing-3.3.0` it's `3.3.0`. The result is what we
         /// compare against the running app's `CFBundleShortVersionString`.
         var versionTag: String {
-            var t = tag
-            if t.hasPrefix("testing-") { t = String(t.dropFirst("testing-".count)) }
-            if t.hasPrefix("v") { t = String(t.dropFirst()) }
-            return t
+            GitHubReleaseFetcher.releaseVersionTag(from: tag)
         }
         var assets: [Asset]
 
@@ -107,19 +104,15 @@ enum GitHubReleaseFetcher {
         }
 
         let payload = try JSONDecoder().decode(LatestReleasePayload.self, from: data)
-        let assets = payload.assets.compactMap { asset -> Asset? in
-            guard let url = URL(string: asset.browser_download_url) else { return nil }
-            return Asset(name: asset.name, url: url)
-        }
-        return Release(tag: payload.tag_name, assets: assets)
+        return release(from: payload)
     }
 
     /// Walks the most recent 30 releases (including pre-releases, which is
-    /// what `/releases/latest` deliberately excludes) and returns the first
-    /// one whose tag starts with `tagPrefix`. The Testing Edition publishes
-    /// every build as a pre-release tagged `testing-<code>`, so this is how
-    /// the Testing app finds an update without ever seeing main-line `v*`
-    /// releases. Returns nil when no matching release exists.
+    /// what `/releases/latest` deliberately excludes) and returns the highest
+    /// semver whose tag starts with `tagPrefix`. GitHub's release list is not
+    /// always ordered by publish time after release edits/reuses, so trusting
+    /// the first matching `testing-*` tag can strand clients on an older
+    /// release. Returns nil when no matching release exists.
     static func fetchLatestPrerelease(repo: String, tagPrefix: String) async throws -> Release? {
         let url = URL(string: "https://api.github.com/repos/\(repo)/releases?per_page=30")!
         var request = URLRequest(url: url)
@@ -137,9 +130,19 @@ enum GitHubReleaseFetcher {
         }
 
         let payloads = try JSONDecoder().decode([LatestReleasePayload].self, from: data)
-        guard let payload = payloads.first(where: { $0.tag_name.hasPrefix(tagPrefix) }) else {
+        let matchingPayloads = payloads.filter { $0.tag_name.hasPrefix(tagPrefix) }
+        guard let payload = matchingPayloads.max(by: { lhs, rhs in
+            isNewer(
+                tag: releaseVersionTag(from: rhs.tag_name),
+                than: releaseVersionTag(from: lhs.tag_name)
+            )
+        }) else {
             return nil
         }
+        return release(from: payload)
+    }
+
+    private static func release(from payload: LatestReleasePayload) -> Release {
         let assets = payload.assets.compactMap { asset -> Asset? in
             guard let url = URL(string: asset.browser_download_url) else { return nil }
             return Asset(name: asset.name, url: url)
@@ -167,6 +170,17 @@ enum GitHubReleaseFetcher {
         // Strip pre-release / build suffix; we only care about the numeric prefix.
         let core = s.split(whereSeparator: { $0 == "-" || $0 == "+" }).first.map(String.init) ?? s
         return core.split(separator: ".").map { Int($0) ?? 0 }
+    }
+
+    private static func releaseVersionTag(from tag: String) -> String {
+        var stripped = tag
+        if stripped.hasPrefix("testing-") {
+            stripped = String(stripped.dropFirst("testing-".count))
+        }
+        if stripped.hasPrefix("v") {
+            stripped = String(stripped.dropFirst())
+        }
+        return stripped
     }
 
     // MARK: - Stage
