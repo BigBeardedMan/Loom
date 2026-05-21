@@ -527,16 +527,30 @@ echo pid {pid} exited, settling 5s for file locks >> \"%LOGFILE%\"\r\n\
 timeout /t 5 /nobreak >nul\r\n\
 echo closing remaining Loom Testing Edition processes >> \"%LOGFILE%\"\r\n\
 taskkill /IM \"Loom Testing Edition.exe\" /T /F >> \"%LOGFILE%\" 2>&1\r\n\
-echo running: \"{installer}\" /S /R /UPDATE /ARGS >> \"%LOGFILE%\"\r\n\
-\"{installer}\" /S /R /UPDATE /ARGS >> \"%LOGFILE%\" 2>&1\r\n\
-set INSTALL_RC=%ERRORLEVEL%\r\n\
-echo installer exit code: %INSTALL_RC% >> \"%LOGFILE%\"\r\n\
-if not \"%INSTALL_RC%\"==\"0\" (\r\n\
-    echo silent install failed, opening exact release page >> \"%LOGFILE%\"\r\n\
+echo launching: \"{installer}\" /S /R /UPDATE /ARGS >> \"%LOGFILE%\"\r\n\
+start \"\" \"{installer}\" /S /R /UPDATE /ARGS\r\n\
+set /a WAITED=0\r\n\
+:installwait\r\n\
+timeout /t 2 /nobreak >nul\r\n\
+set /a WAITED+=2\r\n\
+tasklist /FI \"IMAGENAME eq Loom Testing Edition.exe\" 2>nul | findstr /I /C:\"Loom Testing Edition.exe\" >nul\r\n\
+if not errorlevel 1 (\r\n\
+    echo installer relaunched Loom after %WAITED%s >> \"%LOGFILE%\"\r\n\
+    goto done\r\n\
+)\r\n\
+tasklist /FI \"IMAGENAME eq {installer_name}\" 2>nul | findstr /I /C:\"{installer_name}\" >nul\r\n\
+if errorlevel 1 (\r\n\
+    echo installer process finished after %WAITED%s >> \"%LOGFILE%\"\r\n\
+    goto relaunchfallback\r\n\
+)\r\n\
+if %WAITED% GEQ 180 (\r\n\
+    echo installer did not finish or relaunch within 180s, opening exact release page >> \"%LOGFILE%\"\r\n\
     start \"\" \"{release_url}\"\r\n\
     goto cleanup\r\n\
 )\r\n\
-echo settling 5s for installer relaunch >> \"%LOGFILE%\"\r\n\
+goto installwait\r\n\
+:relaunchfallback\r\n\
+echo settling 5s before fallback relaunch >> \"%LOGFILE%\"\r\n\
 timeout /t 5 /nobreak >nul\r\n\
 tasklist /FI \"IMAGENAME eq Loom Testing Edition.exe\" 2>nul | findstr /I /C:\"Loom Testing Edition.exe\" >nul\r\n\
 if errorlevel 1 (\r\n\
@@ -545,11 +559,13 @@ if errorlevel 1 (\r\n\
 ) else (\r\n\
     echo installer relaunched Loom >> \"%LOGFILE%\"\r\n\
 )\r\n\
+:done\r\n\
 echo done >> \"%LOGFILE%\"\r\n\
 :cleanup\r\n\
 (goto) 2>nul & del \"%~f0\"\r\n",
             pid = parent_pid,
             installer = installer_path.replace('"', ""),
+            installer_name = installer_name.replace('"', ""),
             exe = exe_path.replace('"', ""),
             release_url = release_url.replace('"', ""),
         );
