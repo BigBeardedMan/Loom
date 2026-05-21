@@ -168,7 +168,7 @@ jobs:
           $deadline = (Get-Date).AddMinutes(4)
           $candidateRoots = @()
           while ((Get-Date) -lt $deadline) {
-            $candidateRoots = $pathsToCheck | Where-Object { $_ -and (Test-Path $_) }
+            $candidateRoots = @($pathsToCheck | Where-Object { $_ -and (Test-Path -LiteralPath $_) })
             if ($candidateRoots) {
               break
             }
@@ -193,8 +193,8 @@ jobs:
             throw "Installed Loom Testing Edition executable was not found after updater install"
           }
 
-          $exe = $candidateRoots[0]
-          $productVersion = (Get-Item $exe).VersionInfo.ProductVersion
+          $exe = @($candidateRoots)[0]
+          $productVersion = (Get-Item -LiteralPath $exe).VersionInfo.ProductVersion
           Write-Host "Installed executable: $exe"
           Write-Host "Installed product version: $productVersion"
           if ($productVersion -and -not $productVersion.StartsWith("${{ steps.build_code.outputs.value }}")) {
