@@ -33,6 +33,13 @@ final class DictationService {
             }
         }
 
+        var isError: Bool {
+            if case .error = self {
+                return true
+            }
+            return false
+        }
+
         var label: String {
             switch self {
             case .idle:
@@ -57,6 +64,8 @@ final class DictationService {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var captureWatchdogTask: Task<Void, Never>?
+    private var finalResultWatchdogTask: Task<Void, Never>?
+    private var isFinishingRecognition = false
     private var hasInsertedTranscript = false
 
     func toggle() {
@@ -119,6 +128,7 @@ final class DictationService {
             with: request,
             resultHandler: Self.makeRecognitionHandler(for: self)
         )
+        isFinishingRecognition = false
 
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(
@@ -187,7 +197,7 @@ final class DictationService {
             state = isFinal ? .transcribing : .listening
             if isFinal {
                 insertTranscriptIfNeeded()
-                finishAudio(cancelTask: false)
+                completeRecognition()
                 state = .idle
             }
         }
@@ -195,20 +205,27 @@ final class DictationService {
         if let errorMessage,
            !hasInsertedTranscript,
            state.isActive {
-            finishAudio(cancelTask: true)
+            completeRecognition()
             state = .error(errorMessage)
         }
     }
 
     private func stopAndInsert() {
-        insertTranscriptIfNeeded()
+        let insertedImmediately = insertTranscriptIfNeeded()
         finishAudio(cancelTask: false)
-        state = .idle
+        if insertedImmediately {
+            state = .idle
+            startFinalResultWatchdog(showNoSpeechError: false)
+        } else {
+            state = .transcribing
+            startFinalResultWatchdog(showNoSpeechError: true)
+        }
     }
 
-    private func insertTranscriptIfNeeded() {
+    @discardableResult
+    private func insertTranscriptIfNeeded() -> Bool {
         let text = liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !hasInsertedTranscript else { return }
+        guard !text.isEmpty, !hasInsertedTranscript else { return false }
         hasInsertedTranscript = true
         if !FocusedTextInserter.insert(text) {
             NotificationCenter.default.post(
@@ -217,9 +234,26 @@ final class DictationService {
                 userInfo: ["text": text]
             )
         }
+        return true
     }
 
     private func finishAudio(cancelTask: Bool) {
+        stopAudioCapture()
+        recognitionRequest?.endAudio()
+        recognitionRequest = nil
+        if cancelTask {
+            finalResultWatchdogTask?.cancel()
+            finalResultWatchdogTask = nil
+            recognitionTask?.cancel()
+            recognitionTask = nil
+            isFinishingRecognition = false
+        } else if !isFinishingRecognition {
+            recognitionTask?.finish()
+            isFinishingRecognition = recognitionTask != nil
+        }
+    }
+
+    private func stopAudioCapture() {
         captureWatchdogTask?.cancel()
         captureWatchdogTask = nil
         if audioEngine.isRunning {
@@ -227,14 +261,16 @@ final class DictationService {
         }
         audioEngine.reset()
         audioEngine.inputNode.removeTap(onBus: 0)
+    }
+
+    private func completeRecognition() {
+        finalResultWatchdogTask?.cancel()
+        finalResultWatchdogTask = nil
+        stopAudioCapture()
         recognitionRequest?.endAudio()
         recognitionRequest = nil
-        if cancelTask {
-            recognitionTask?.cancel()
-        } else {
-            recognitionTask?.finish()
-        }
         recognitionTask = nil
+        isFinishingRecognition = false
     }
 
     private func startCaptureWatchdog() {
@@ -251,6 +287,29 @@ final class DictationService {
                 dictationLogger.error("Dictation audio tap started but delivered no buffers")
                 self.finishAudio(cancelTask: true)
                 self.state = .error("Microphone started, but no audio arrived. Check the Mac input device and try again.")
+            }
+        }
+    }
+
+    private func startFinalResultWatchdog(showNoSpeechError: Bool) {
+        finalResultWatchdogTask?.cancel()
+        finalResultWatchdogTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard !Task.isCancelled else { return }
+
+            await MainActor.run {
+                guard let self, self.recognitionTask != nil else { return }
+                dictationLogger.error("Speech recognizer did not deliver a final result before timeout")
+                self.recognitionTask?.cancel()
+                self.recognitionTask = nil
+                self.isFinishingRecognition = false
+                self.finalResultWatchdogTask = nil
+
+                if showNoSpeechError, !self.hasInsertedTranscript {
+                    self.state = .error("No speech was transcribed. Check the selected Mac input device and try again.")
+                } else if self.state.isActive {
+                    self.state = .idle
+                }
             }
         }
     }

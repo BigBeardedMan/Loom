@@ -305,16 +305,27 @@ struct WorkspaceView: View {
             dictation.toggle()
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: dictation.state.isActive ? "mic.fill" : "mic")
+                Image(systemName: dictation.state.isError
+                    ? "exclamationmark.triangle.fill"
+                    : (dictation.state.isActive ? "mic.fill" : "mic"))
                     .font(.system(size: 11, weight: .bold))
-                Text(dictation.state.isActive ? dictation.state.label : "Dictate")
+                Text(dictationButtonTitle)
                     .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: dictation.state.isActive && !dictation.liveTranscript.isEmpty
+                        ? 190
+                        : nil)
             }
-            .foregroundStyle(dictation.state.isActive ? .white : LoomTheme.primaryText)
+            .foregroundStyle(dictation.state.isActive || dictation.state.isError ? .white : LoomTheme.primaryText)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(dictation.state.isActive ? LoomTheme.purple : LoomTheme.softPanel.opacity(0.66))
-            .overlay(Capsule().stroke(dictation.state.isActive ? LoomTheme.purple.opacity(0.5) : LoomTheme.hairline, lineWidth: 1))
+            .background(dictation.state.isError
+                ? Color.red.opacity(0.9)
+                : (dictation.state.isActive ? LoomTheme.purple : LoomTheme.softPanel.opacity(0.66)))
+            .overlay(Capsule().stroke(dictation.state.isError
+                ? Color.red.opacity(0.5)
+                : (dictation.state.isActive ? LoomTheme.purple.opacity(0.5) : LoomTheme.hairline), lineWidth: 1))
             .clipShape(Capsule())
             .overlay(alignment: .topTrailing) {
                 if dictation.state.isActive {
@@ -328,7 +339,22 @@ struct WorkspaceView: View {
         .buttonStyle(.plain)
         .pointingHandCursor()
         .help(dictationHelpText)
-        .accessibilityLabel(dictation.state.isActive ? "Stop dictation" : "Start dictation")
+        .accessibilityLabel(dictation.state.isError
+            ? "Dictation error"
+            : (dictation.state.isActive ? "Stop dictation" : "Start dictation"))
+    }
+
+    private var dictationButtonTitle: String {
+        switch dictation.state {
+        case .idle:
+            return "Dictate"
+        case .requestingPermission, .transcribing:
+            return dictation.state.label
+        case .listening:
+            return dictation.liveTranscript.isEmpty ? dictation.state.label : dictation.liveTranscript
+        case .error:
+            return "Dictation Error"
+        }
     }
 
     private var dictationHelpText: String {
