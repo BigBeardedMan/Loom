@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       build_code:
-        description: "Testing version (MAJOR.MINOR.PATCH, e.g. 8.2.73)"
+        description: "Testing version (MAJOR.MINOR.PATCH, e.g. 8.2.74)"
         required: true
 
 permissions:
@@ -101,15 +101,32 @@ jobs:
           fi
           TAURI_UPDATER_PUBLIC_KEY="$(node - <<'NODE'
             const input = process.env.TAURI_UPDATER_PUBLIC_KEY?.trim() ?? "";
-            const key = input.startsWith("untrusted comment:")
-              ? input.split(/\r?\n/).map((line) => line.trim()).find((line) => line && !line.startsWith("untrusted comment:"))
-              : input.split(/\r?\n/)[0]?.trim();
-            if (!key) throw new Error("TAURI_UPDATER_PUBLIC_KEY did not contain a minisign public key");
-            const bytes = Buffer.from(key, "base64");
-            if (bytes.length !== 42 || !((bytes[0] === 0x45 && bytes[1] === 0x64) || (bytes[0] === 0x45 && bytes[1] === 0x44))) {
-              throw new Error("TAURI_UPDATER_PUBLIC_KEY is not a valid minisign public key");
+            const rawKeyPattern = /^[A-Za-z0-9+/=]+$/;
+            const keyFromPubFile = (text) =>
+              text.split(/\r?\n/).map((line) => line.trim()).find((line) => line && !line.startsWith("untrusted comment:"));
+            const validateRawKey = (key) => {
+              if (!key || !rawKeyPattern.test(key)) return false;
+              const bytes = Buffer.from(key, "base64");
+              return bytes.length === 42 && ((bytes[0] === 0x45 && bytes[1] === 0x64) || (bytes[0] === 0x45 && bytes[1] === 0x44));
+            };
+            const encodePubFile = (text) => Buffer.from(text.endsWith("\n") ? text : `${text}\n`, "utf8").toString("base64");
+            let canonical;
+            if (input.startsWith("untrusted comment:")) {
+              const key = keyFromPubFile(input);
+              if (!validateRawKey(key)) throw new Error("TAURI_UPDATER_PUBLIC_KEY contains an invalid minisign public key file");
+              canonical = encodePubFile(input);
+            } else {
+              const compact = input.replace(/\s+/g, "");
+              const decodedText = Buffer.from(compact, "base64").toString("utf8");
+              if (decodedText.startsWith("untrusted comment:") && validateRawKey(keyFromPubFile(decodedText))) {
+                canonical = compact;
+              } else if (validateRawKey(compact)) {
+                canonical = encodePubFile(`untrusted comment: minisign public key\n${compact}`);
+              } else {
+                throw new Error("TAURI_UPDATER_PUBLIC_KEY is not a valid Tauri updater public key");
+              }
             }
-            process.stdout.write(key);
+            process.stdout.write(canonical);
           NODE
           )"
           export TAURI_UPDATER_PUBLIC_KEY
