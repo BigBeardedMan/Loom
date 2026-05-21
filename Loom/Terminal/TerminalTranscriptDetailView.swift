@@ -4,7 +4,9 @@ struct TerminalTranscriptDetailView: View {
     @Environment(TerminalTranscriptStore.self) private var store
 
     let session: TerminalTranscriptSession
-    let onStartFreshShell: () -> Void
+    let primaryActionTitle: String
+    let primaryActionSystemImage: String
+    let onPrimaryAction: () -> Void
     let onDismiss: () -> Void
 
     @State private var transcriptText: String = "Loading transcript..."
@@ -46,9 +48,9 @@ struct TerminalTranscriptDetailView: View {
             }
             Spacer()
             Button {
-                onStartFreshShell()
+                onPrimaryAction()
             } label: {
-                Label("Start Fresh Shell Here", systemImage: "plus.rectangle.on.rectangle")
+                Label(primaryActionTitle, systemImage: primaryActionSystemImage)
             }
             Button("Done") {
                 onDismiss()

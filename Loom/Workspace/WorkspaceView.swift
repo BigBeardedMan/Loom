@@ -410,10 +410,16 @@ struct WorkspaceView: View {
 
                 TerminalTranscriptDetailView(
                     session: session,
-                    onStartFreshShell: {
-                        let cwd = URL(fileURLWithPath: session.cwd)
-                        layout.addTerminalBlock(cwd: cwd)
-                        transcriptPreview = nil
+                    primaryActionTitle: session.state == .closed ? "Restore Session" : "Start Fresh Shell Here",
+                    primaryActionSystemImage: session.state == .closed ? "arrow.uturn.backward.circle" : "plus.rectangle.on.rectangle",
+                    onPrimaryAction: {
+                        if session.state == .closed {
+                            restoreClosedTerminal(session)
+                        } else {
+                            let cwd = URL(fileURLWithPath: session.cwd)
+                            layout.addTerminalBlock(cwd: cwd)
+                            transcriptPreview = nil
+                        }
                     },
                     onDismiss: {
                         transcriptPreview = nil
@@ -437,6 +443,21 @@ struct WorkspaceView: View {
         .onExitCommand {
             transcriptPreview = nil
         }
+    }
+
+    private func restoreClosedTerminal(_ session: TerminalTranscriptSession) {
+        guard let restore = terminalHistory.restoreClosedSession(
+            session,
+            fallbackCwd: layout.defaultCwd
+        ) else {
+            let cwd = URL(fileURLWithPath: session.cwd)
+            layout.addTerminalBlock(cwd: cwd)
+            transcriptPreview = nil
+            return
+        }
+        selectedUsageTool = nil
+        transcriptPreview = nil
+        layout.restoreTerminalBlock(restore)
     }
 
     private func transcriptPreviewWidth(in size: CGSize) -> CGFloat {

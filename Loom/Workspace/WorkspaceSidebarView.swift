@@ -399,10 +399,10 @@ struct WorkspaceSidebarView: View {
     private func closedTerminalRow(_ session: TerminalTranscriptSession) -> some View {
         transcriptRow(
             session,
-            icon: "clock.arrow.circlepath",
+            icon: "arrow.uturn.backward.circle",
             tint: LoomTheme.green,
             primaryAction: {
-                transcriptPreview = session
+                restoreClosedTerminal(session)
             },
             trailing: {
                 HStack(spacing: 6) {
@@ -426,6 +426,19 @@ struct WorkspaceSidebarView: View {
                 }
             }
         )
+    }
+
+    private func restoreClosedTerminal(_ session: TerminalTranscriptSession) {
+        guard let restore = terminalHistory.restoreClosedSession(
+            session,
+            fallbackCwd: layout.defaultCwd
+        ) else {
+            transcriptPreview = session
+            return
+        }
+        selectedUsageTool = nil
+        transcriptPreview = nil
+        layout.restoreTerminalBlock(restore)
     }
 
     private func deletedTerminalRow(_ session: TerminalTranscriptSession) -> some View {

@@ -33,6 +33,13 @@ struct TerminalTranscriptSession: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+struct TerminalTranscriptRestore: Sendable {
+    let sessionID: UUID
+    let cwd: URL
+    let title: String
+    let transcriptText: String
+}
+
 final class TerminalTranscriptRecorder: @unchecked Sendable {
     private let url: URL
     private let queue: DispatchQueue
@@ -223,6 +230,32 @@ final class TerminalTranscriptStore {
         save()
     }
 
+    func restoreClosedSession(
+        _ session: TerminalTranscriptSession,
+        fallbackCwd: URL
+    ) -> TerminalTranscriptRestore? {
+        guard let idx = sessions.firstIndex(where: { $0.id == session.id }),
+              sessions[idx].state == .closed else { return nil }
+
+        let saved = sessions[idx]
+        let now = Date()
+        let restore = TerminalTranscriptRestore(
+            sessionID: saved.id,
+            cwd: resolvedDirectory(saved.cwd, fallback: fallbackCwd),
+            title: saved.displayTitle,
+            transcriptText: readTranscriptText(for: saved, maxBytes: nil)
+        )
+
+        sessions[idx].state = .active
+        sessions[idx].closedAt = nil
+        sessions[idx].deletedAt = nil
+        sessions[idx].updatedAt = now
+        sessions[idx].byteCount = fileSize(at: transcriptURL(for: saved.id))
+        save()
+        refreshUsage()
+        return restore
+    }
+
     func deletePermanently(_ session: TerminalTranscriptSession) {
         try? FileManager.default.removeItem(at: transcriptURL(for: session.id))
         sessions.removeAll { $0.id == session.id }
@@ -279,14 +312,19 @@ final class TerminalTranscriptStore {
             .sorted { ($0.deletedAt ?? $0.updatedAt) > ($1.deletedAt ?? $1.updatedAt) }
     }
 
-    func readTranscriptText(for session: TerminalTranscriptSession, maxBytes: Int = 2_000_000) -> String {
+    func readTranscriptText(for session: TerminalTranscriptSession, maxBytes: Int? = 2_000_000) -> String {
         let url = transcriptURL(for: session.id)
         guard let handle = try? FileHandle(forReadingFrom: url) else {
             return "(transcript file missing)"
         }
         defer { try? handle.close() }
         let size = (try? handle.seekToEnd()) ?? 0
-        let offset = size > UInt64(maxBytes) ? size - UInt64(maxBytes) : 0
+        let offset: UInt64
+        if let maxBytes, size > UInt64(maxBytes) {
+            offset = size - UInt64(maxBytes)
+        } else {
+            offset = 0
+        }
         try? handle.seek(toOffset: offset)
         let data = (try? handle.readToEnd()) ?? Data()
         let text = TerminalTranscriptSanitizer.plainText(from: data)
@@ -370,6 +408,12 @@ final class TerminalTranscriptStore {
         guard let handle = try? FileHandle(forWritingTo: url) else { return }
         try? handle.truncate(atOffset: 0)
         try? handle.close()
+    }
+
+    private func resolvedDirectory(_ path: String, fallback: URL) -> URL {
+        var isDir: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: path, isDirectory: &isDir)
+        return exists && isDir.boolValue ? URL(fileURLWithPath: path) : fallback
     }
 }
 

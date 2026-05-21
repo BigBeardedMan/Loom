@@ -297,6 +297,23 @@ final class WorkspaceLayout {
         persistCurrent()
     }
 
+    func restoreTerminalBlock(_ restore: TerminalTranscriptRestore) {
+        var current = blocks
+        let block = WorkspaceBlock(kind: .terminal, cwd: restore.cwd)
+        block.autoTerminalIndex = Self.nextTerminalIndex(in: current)
+        block.customTitle = restore.title
+        block.terminalSessions = [
+            TerminalSession(
+                sessionID: restore.sessionID,
+                cwd: restore.cwd,
+                restoredTranscript: restore
+            )
+        ]
+        current.append(block)
+        blocksByKind[currentKind] = current
+        persistCurrent()
+    }
+
     private static func nextTerminalIndex(in blocks: [WorkspaceBlock]) -> Int {
         let used = Set(blocks.compactMap { $0.kind == .terminal ? $0.autoTerminalIndex : nil })
         var n = 1

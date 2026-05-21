@@ -11,7 +11,7 @@ import UniformTypeIdentifiers
 @Observable
 @MainActor
 final class TerminalSession: Identifiable {
-    let id = UUID()
+    let id: UUID
     var cwd: URL
     var lastReportedTitle: String = ""
 
@@ -21,10 +21,17 @@ final class TerminalSession: Identifiable {
     private let bridge: ProcessBridge
     private var transcriptStore: TerminalTranscriptStore?
     private var transcriptRecorder: TerminalTranscriptRecorder?
+    private var pendingTranscriptRestore: TerminalTranscriptRestore?
     private var hasStarted = false
 
-    init(cwd: URL = FileManager.default.homeDirectoryForCurrentUser) {
+    init(
+        sessionID: UUID = UUID(),
+        cwd: URL = FileManager.default.homeDirectoryForCurrentUser,
+        restoredTranscript: TerminalTranscriptRestore? = nil
+    ) {
+        self.id = sessionID
         self.cwd = cwd
+        self.pendingTranscriptRestore = restoredTranscript
         self.terminalView = LoomTerminalView(
             frame: NSRect(x: 0, y: 0, width: 800, height: 480)
         )
@@ -43,6 +50,7 @@ final class TerminalSession: Identifiable {
         // Pass argv[0] as "-zsh" so the shell treats itself as a login shell
         // and runs zprofile/zshrc — that's where Homebrew's PATH lands.
         let execName = "-" + (shellPath as NSString).lastPathComponent
+        feedRestoredTranscriptIfNeeded()
         terminalView.startProcess(
             executable: shellPath,
             args: ["-l"],
@@ -73,6 +81,29 @@ final class TerminalSession: Identifiable {
         } else {
             terminalView.send(txt: trimmed + "\n")
         }
+    }
+
+    private func feedRestoredTranscriptIfNeeded() {
+        guard let restore = pendingTranscriptRestore else { return }
+        pendingTranscriptRestore = nil
+
+        let body = Self.terminalOutputText(restore.transcriptText)
+        let title = restore.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayTitle = title.isEmpty ? "Terminal Session" : title
+        let header = "\u{1B}[2m--- Restored \(displayTitle) from Recently Closed ---\u{1B}[0m\r\n"
+        let footer = "\r\n\u{1B}[2m--- Fresh shell starts below. Reconnect or relaunch commands when ready. ---\u{1B}[0m\r\n"
+        terminalView.feed(text: header + body + footer)
+    }
+
+    private static func terminalOutputText(_ text: String) -> String {
+        let normalized = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let trimmed = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = trimmed.isEmpty ? "(empty transcript)" : normalized
+        return body
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .joined(separator: "\r\n")
     }
 
     /// Send a Ctrl-C to whatever is running.

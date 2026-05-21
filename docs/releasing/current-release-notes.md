@@ -1,6 +1,5 @@
 ## Changes
 
-- Added LM Studio shell diagnostics, grouped slash-command help, server controls, status checks, install guidance, and richer command documentation.
-- Added macOS terminal quick launches for LM Studio, including bash-enabled and bypass-permissions modes plus server status.
-- Fixed macOS usage dashboard timeframes so Day, Week, Month, and All show selected-window token totals instead of reusing all-time data.
-- Removed the workspace title from the top bar so the Command control moves into that space.
+- Recently closed terminal sessions now restore into a live terminal pane when clicked instead of only opening a transcript preview.
+- Restored sessions import the saved transcript back into the terminal and start a fresh shell in the same working directory so users can reconnect or relaunch their agent.
+- Transcript previews now offer Restore Session for closed terminals while deleted history still supports starting a fresh shell from that directory.
