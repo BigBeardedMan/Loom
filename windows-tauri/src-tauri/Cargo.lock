@@ -2500,7 +2500,7 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "loom"
-version = "8.2.67"
+version = "8.2.68"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2511,6 +2511,7 @@ dependencies = [
  "futures-util",
  "keyring",
  "libc",
+ "minisign-verify",
  "notify",
  "notify-debouncer-mini",
  "once_cell",

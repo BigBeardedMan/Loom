@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       build_code:
-        description: "Build code (10 char alphanumeric, e.g. f1ac68e9b2)"
+        description: "Testing version (MAJOR.MINOR.PATCH, e.g. 8.2.68)"
         required: true
 
 permissions:
@@ -87,8 +87,7 @@ jobs:
       - name: Build Tauri (${{ matrix.target }})
         env:
           # build.rs reads this into the binary as `LOOM_BUILD_CODE` so the
-          # About panel and updater show the same alphanumeric code as the
-          # tag. Cargo's version stays at the semver placeholder `1.0.0`.
+          # About panel and updater show the same semver as the tag.
           LOOM_BUILD_CODE: ${{ steps.build_code.outputs.value }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -135,6 +134,49 @@ jobs:
           pnpm tauri signer sign -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" "$out/$artifact_name"
           test -s "$out/$artifact_name.sig"
           find "$out" -maxdepth 1 -type f -print
+
+      - name: Smoke test NSIS updater install
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installer = Get-ChildItem -Path "release-artifacts" -Filter "*_${{ matrix.artifact_suffix }}-setup.exe" | Select-Object -First 1
+          if (-not $installer) {
+            throw "No ${{ matrix.artifact_suffix }} NSIS installer found in release-artifacts"
+          }
+
+          Write-Host "Running updater install smoke test for $($installer.FullName)"
+          $process = Start-Process -FilePath $installer.FullName -ArgumentList @("/S", "/R", "/UPDATE", "/ARGS") -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "NSIS updater install failed with exit code $($process.ExitCode)"
+          }
+
+          Start-Sleep -Seconds 5
+          $programFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+          $pathsToCheck = @()
+          if ($env:LOCALAPPDATA) {
+            $pathsToCheck += Join-Path $env:LOCALAPPDATA "Loom Testing Edition\Loom Testing Edition.exe"
+            $pathsToCheck += Join-Path $env:LOCALAPPDATA "Programs\Loom Testing Edition\Loom Testing Edition.exe"
+          }
+          if ($env:ProgramFiles) {
+            $pathsToCheck += Join-Path $env:ProgramFiles "Loom Testing Edition\Loom Testing Edition.exe"
+          }
+          if ($programFilesX86) {
+            $pathsToCheck += Join-Path $programFilesX86 "Loom Testing Edition\Loom Testing Edition.exe"
+          }
+          $candidateRoots = $pathsToCheck | Where-Object { $_ -and (Test-Path $_) }
+          if (-not $candidateRoots) {
+            throw "Installed Loom Testing Edition executable was not found"
+          }
+
+          $exe = $candidateRoots[0]
+          $productVersion = (Get-Item $exe).VersionInfo.ProductVersion
+          Write-Host "Installed executable: $exe"
+          Write-Host "Installed product version: $productVersion"
+          if ($productVersion -and -not $productVersion.StartsWith("${{ steps.build_code.outputs.value }}")) {
+            throw "Installed product version '$productVersion' does not match ${{ steps.build_code.outputs.value }}"
+          }
+
+          Stop-Process -Name "Loom Testing Edition" -Force -ErrorAction SilentlyContinue
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

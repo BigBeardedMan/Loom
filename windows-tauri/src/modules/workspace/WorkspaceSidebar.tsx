@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Icons } from "../../lib/icons";
-import { useApp, workspaceKindLabel } from "../../lib/store";
+import { useApp } from "../../lib/store";
 import {
   ipc,
   type CliToolUsage,
@@ -131,7 +131,7 @@ export function WorkspaceSidebar() {
         background: "transparent",
       }}
     >
-      <div className="scrollbar-thin flex-1 overflow-y-auto">
+      <div className="flex min-h-0 flex-1 flex-col">
         <SectionHeader title="Workspaces" />
         <div className="flex flex-col gap-1">
           {workspaces.length === 0 ? (
@@ -187,7 +187,7 @@ export function WorkspaceSidebar() {
         <div style={{ height: 14 }} />
 
         {workspace?.kindRaw === "ideas" ? (
-          <>
+          <div className="flex min-h-0 flex-1 flex-col">
             <SectionHeader
               title="Ideas"
               trailing={
@@ -204,20 +204,20 @@ export function WorkspaceSidebar() {
             {notes.length === 0 ? (
               <EmptyHint label="No ideas yet. Open the Notes block and capture one." />
             ) : (
-              <div className="flex flex-col gap-1">
+              <div className="scrollbar-thin flex min-h-0 flex-col gap-1 overflow-y-auto">
                 {notes.map((note) => (
                   <IdeaRow key={note.id} note={note} onDeleted={refreshSidebarData} />
                 ))}
               </div>
             )}
-          </>
+          </div>
         ) : workspace?.kindRaw === "review" || workspace?.kindRaw === "build" ? (
-          <>
+          <div className="flex min-h-0 flex-1 flex-col">
             <SectionHeader title="Sessions" />
             <EmptyHint label="Review workspaces don't have sessions yet." />
-          </>
+          </div>
         ) : showDeleted ? (
-          <>
+          <div className="flex min-h-0 flex-1 flex-col">
             <SectionHeader
               title="Recently Deleted"
               trailing={<CountBadge value={deleted.length} color="var(--color-ws-orange)" />}
@@ -233,7 +233,7 @@ export function WorkspaceSidebar() {
             {deleted.length === 0 ? (
               <EmptyHint label="Deleted terminal sessions will show up here." />
             ) : (
-              <div className="flex flex-col gap-1">
+              <div className="scrollbar-thin flex min-h-0 flex-col gap-1 overflow-y-auto">
                 {deleted.map((session) => (
                   <TranscriptRow
                     key={session.id}
@@ -267,9 +267,9 @@ export function WorkspaceSidebar() {
                 ))}
               </div>
             )}
-          </>
+          </div>
         ) : (
-          <>
+          <div className="flex min-h-0 flex-1 flex-col">
             <SectionHeader
               title="Terminal Sessions"
               trailing={
@@ -286,7 +286,7 @@ export function WorkspaceSidebar() {
             {terminalBlocks.length === 0 ? (
               <EmptyHint label="No terminal blocks open. Use +Terminal in the top bar." />
             ) : (
-              <div className="flex flex-col gap-1">
+              <div className="scrollbar-thin flex min-h-0 flex-col gap-1 overflow-y-auto">
                 {terminalBlocks.map((block, index) => (
                   <TerminalBlockRow
                     key={block.id}
@@ -308,6 +308,8 @@ export function WorkspaceSidebar() {
                 ))}
               </div>
             )}
+
+            <div className="flex-1" />
 
             {closed.length > 0 && (
               <>
@@ -347,7 +349,7 @@ export function WorkspaceSidebar() {
             )}
             <button
               onClick={() => setShowDeleted(true)}
-              className="mt-2 flex w-full items-center gap-2"
+              className="mt-2 flex w-full flex-none items-center gap-2"
               style={{
                 padding: "6px 8px",
                 borderRadius: 6,
@@ -360,7 +362,7 @@ export function WorkspaceSidebar() {
               Recently Deleted
               <Icons.chevronRight className="ml-auto" size={11} strokeWidth={2.2} />
             </button>
-          </>
+          </div>
         )}
       </div>
       {preview && (
@@ -405,6 +407,7 @@ function WorkspaceRow({
 }) {
   const color = workspaceColorVar[workspace.colorName as WorkspaceColor];
   const KindIcon = kindIconFor(workspace.kindRaw);
+  const name = workspace.name.trim() || workspaceKindFallback(workspace.kindRaw);
   return (
     <button
       onClick={onSelect}
@@ -439,9 +442,9 @@ function WorkspaceRow({
       />
       <span className="flex min-w-0 flex-1 flex-col">
         <span style={{ fontSize: 13, fontWeight: 700, color: text.primary }}>
-          {workspaceKindLabel[workspace.kindRaw]}
+          {name}
         </span>
-        {workspace.folderPath ? (
+        {workspace.folderPath && (
           <span
             className="truncate"
             style={{
@@ -451,11 +454,7 @@ function WorkspaceRow({
               fontFamily: "var(--font-mono)",
             }}
           >
-            {workspace.folderPath}
-          </span>
-        ) : (
-          <span style={{ marginTop: 2, fontSize: 10, color: text.tertiary }}>
-            Ready
+            {displayPath(workspace.folderPath)}
           </span>
         )}
       </span>
@@ -875,6 +874,19 @@ function kindIconFor(kind: IpcKind): typeof Icons.textCursor {
     case "code":
     default:
       return Icons.textCursor;
+  }
+}
+
+function workspaceKindFallback(kind: IpcKind): string {
+  switch (kind) {
+    case "ideas":
+      return "Ideas";
+    case "review":
+    case "build":
+      return "Review";
+    case "code":
+    default:
+      return "Prompt";
   }
 }
 

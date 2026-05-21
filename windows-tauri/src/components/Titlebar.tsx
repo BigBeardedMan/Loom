@@ -34,6 +34,7 @@ export function Titlebar() {
   const selectedUsageTool = useApp((s) => s.selectedUsageTool);
   const setUsageTool = useApp((s) => s.setUsageTool);
   const openPalette = useApp((s) => s.openPalette);
+  const openSettings = useApp((s) => s.openSettings);
   const workspace = workspaces.find((w) => w.id === selectedId);
   const dictation = useDictation();
 
@@ -109,6 +110,26 @@ export function Titlebar() {
         >
           Ctrl K
         </span>
+      </button>
+
+      <button
+        onClick={openSettings}
+        className="flex items-center gap-2 transition-colors"
+        style={{
+          minHeight: 30,
+          padding: "4px 10px",
+          borderRadius: radius.control,
+          background: "color-mix(in srgb, " + surface.softPanel + ", transparent 30%)",
+          border: `1px solid ${surface.hairline}`,
+          color: text.primary,
+          fontSize: 12,
+          fontWeight: 600,
+        }}
+        title="Open Settings"
+        aria-label="Open Settings"
+      >
+        <Icons.settings size={13} strokeWidth={2.2} color={text.muted as string} />
+        Settings
       </button>
 
       <div className="flex-1" />

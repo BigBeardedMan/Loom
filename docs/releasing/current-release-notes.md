@@ -1,11 +1,18 @@
 ## Changes
 
+- Windows Testing now restores the missing visible Settings button in the title bar, matching the macOS always-available settings entry point.
+- Windows Testing workspace rows now show the workspace name only, removing the duplicated Prompt, Ideas, and Review wording and the extra Ready subtitle.
+- Windows Testing now keeps Recently Deleted anchored at the bottom of the terminal sidebar section, matching the macOS terminal history layout.
+- Windows Testing updater selection now requires a strictly newer `testing-*` semver tag and a Windows installer whose filename version matches that exact tag.
+- Windows Testing now verifies the downloaded NSIS installer bytes against the embedded Tauri updater public key before staging or running it.
+- Windows Testing updater failures now open the exact GitHub release page for the installer instead of the broad prerelease search page.
+- Windows release CI now smoke-tests the NSIS updater install flags before publishing release assets.
+- Testing Edition version metadata is now 8.2.68 for both macOS and Windows.
 - Windows Testing now matches the macOS terminal history workflow with saved transcripts, Recently Closed restore, Recently Deleted recovery, bounded previews, pruning, and history-folder reveal.
 - Windows Testing now mirrors the macOS Tasks pane with Claude, Codex, and LM Studio sessions, model labels, live plan activity, clear-one, and clear-all behavior.
 - Windows terminal command cards now support per-session history, captured-output expansion, copy, and capture-aware reruns.
 - Windows terminal image handoff now saves pasted or dropped images locally and inserts editable `--image '<path>'` prompt text while preserving text paste priority.
 - Windows Code workspaces now use the macOS default terminal, tasks, and agent layout, and the sidebar exposes terminal block rename, close, restore, delete, and preview workflows.
-- Testing Edition version metadata is now 8.2.67 for both macOS and Windows.
 - Mac dictation now streams live speech text into terminal and editor inputs while recognition is still running.
 - Mac Codex limit meters now label the short window as its reported 4h or 5h limit and the longer window as Week.
 - Mac dictation now keeps the speech recognizer alive after stopping, inserts dictated text into active terminal or editor text areas, and surfaces no-speech failures visibly.
