@@ -9,7 +9,13 @@ pub async fn terminal_spawn(
     state: State<'_, AppState>,
     opts: SpawnOptions,
 ) -> Result<String, String> {
-    pty::spawn(app, &state.terminals, opts).map_err(|e| e.to_string())
+    pty::spawn(
+        app,
+        &state.terminals,
+        state.terminal_transcripts.clone(),
+        opts,
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -32,10 +38,7 @@ pub async fn terminal_resize(
 }
 
 #[tauri::command]
-pub async fn terminal_kill(
-    state: State<'_, AppState>,
-    session_id: String,
-) -> Result<(), String> {
+pub async fn terminal_kill(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
     pty::kill(&state.terminals, &session_id).map_err(|e| e.to_string())
 }
 
@@ -51,6 +54,17 @@ pub async fn terminal_set_cwd(
     cwd: String,
 ) -> Result<(), String> {
     pty::set_cwd(&state.terminals, &session_id, PathBuf::from(cwd)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn terminal_update_metadata(
+    state: State<'_, AppState>,
+    session_id: String,
+    cwd: Option<String>,
+    title: Option<String>,
+) -> Result<(), String> {
+    pty::update_metadata(&state.terminals, &session_id, cwd.map(PathBuf::from), title)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

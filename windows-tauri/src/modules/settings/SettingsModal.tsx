@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Icons } from "../../lib/icons";
 import { useApp } from "../../lib/store";
 import { ipc, type LocalEndpoint, type McpServer } from "../../lib/ipc";
@@ -105,7 +105,7 @@ export function SettingsModal() {
   );
 }
 
-function H2({ children }: { children: React.ReactNode }) {
+function H2({ children }: { children: ReactNode }) {
   return (
     <h2
       style={{
@@ -120,7 +120,7 @@ function H2({ children }: { children: React.ReactNode }) {
   );
 }
 
-function Hint({ children }: { children: React.ReactNode }) {
+function Hint({ children }: { children: ReactNode }) {
   return (
     <p style={{ fontSize: 11, color: text.muted, marginBottom: 12, lineHeight: 1.5 }}>
       {children}
@@ -692,7 +692,7 @@ const fieldStyle: React.CSSProperties = {
   outline: "none",
 };
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
       <label
@@ -973,6 +973,10 @@ function McpAddModal({
 function ShellPanel() {
   const [path, setPath] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
+  const [historyEnabled, setHistoryEnabled] = useState(true);
+  const [historyLimit, setHistoryLimit] = useState(1_073_741_824);
+  const [historyBytes, setHistoryBytes] = useState(0);
+  const [historyFolder, setHistoryFolder] = useState("");
 
   const install = async () => {
     setInstalling(true);
@@ -984,37 +988,145 @@ function ShellPanel() {
     }
   };
 
+  const refreshHistory = async () => {
+    const config = await ipc.terminalTranscripts.config();
+    setHistoryEnabled(config.enabled);
+    setHistoryLimit(config.maxBytes);
+    setHistoryBytes(config.totalBytes);
+    setHistoryFolder(config.baseDir);
+  };
+
+  useEffect(() => {
+    refreshHistory().catch(() => {});
+  }, []);
+
+  const updateHistory = async (patch: { enabled?: boolean; maxBytes?: number }) => {
+    const config = await ipc.terminalTranscripts.setConfig(patch);
+    setHistoryEnabled(config.enabled);
+    setHistoryLimit(config.maxBytes);
+    setHistoryBytes(config.totalBytes);
+    setHistoryFolder(config.baseDir);
+  };
+
+  const pruneHistory = async () => {
+    if (!confirm("Prune saved terminal history? Active terminals keep running.")) return;
+    await ipc.terminalTranscripts.prune();
+    await refreshHistory();
+  };
+
   return (
-    <div>
-      <H2>Shell Integration</H2>
-      <Hint>
-        Installs a PowerShell profile hook recording every command to{" "}
-        <code style={{ fontFamily: "var(--font-mono)" }}>%LOCALAPPDATA%\Loom Testing Edition\history.jsonl</code>{" "}
-        for the Commands pane and the agent.
-      </Hint>
-      <button
-        onClick={install}
-        disabled={installing}
-        style={{
-          background: "var(--color-loom-accent)",
-          color: "white",
-          borderRadius: 8,
-          padding: "6px 14px",
-          fontSize: 12,
-          fontWeight: 500,
-          border: "none",
-          opacity: installing ? 0.5 : 1,
-        }}
-      >
-        {installing ? "Installing…" : path ? "Reinstall" : "Install"}
-      </button>
-      {path && (
-        <div style={{ marginTop: 10, fontSize: 11, color: text.tertiary }}>
-          Wrote to <code style={{ fontFamily: "var(--font-mono)" }}>{path}</code>
+    <div className="flex flex-col gap-6">
+      <section>
+        <H2>Shell Integration</H2>
+        <Hint>
+          Installs a PowerShell profile hook recording every command to{" "}
+          <code style={{ fontFamily: "var(--font-mono)" }}>%LOCALAPPDATA%\Loom Testing Edition\history.jsonl</code>{" "}
+          for the Commands pane and the agent.
+        </Hint>
+        <button
+          onClick={install}
+          disabled={installing}
+          style={{
+            background: "var(--color-loom-accent)",
+            color: "white",
+            borderRadius: 8,
+            padding: "6px 14px",
+            fontSize: 12,
+            fontWeight: 500,
+            border: "none",
+            opacity: installing ? 0.5 : 1,
+          }}
+        >
+          {installing ? "Installing…" : path ? "Reinstall" : "Install"}
+        </button>
+        {path && (
+          <div style={{ marginTop: 10, fontSize: 11, color: text.tertiary }}>
+            Wrote to <code style={{ fontFamily: "var(--font-mono)" }}>{path}</code>
+          </div>
+        )}
+      </section>
+
+      <section>
+        <H2>Terminal History</H2>
+        <Hint>
+          Saves full local PTY transcripts for Recently Closed restore, preview, and pruning.
+        </Hint>
+        <label className="flex items-center gap-2" style={{ fontSize: 12, color: text.primary }}>
+          <input
+            type="checkbox"
+            checked={historyEnabled}
+            onChange={(e) => updateHistory({ enabled: e.target.checked })}
+            style={{ accentColor: "var(--color-loom-accent)" }}
+          />
+          Save terminal transcripts locally
+        </label>
+        <label style={{ fontSize: 11, color: text.muted, display: "block", margin: "12px 0 6px" }}>
+          Storage limit
+        </label>
+        <select
+          value={historyLimit}
+          onChange={(e) => updateHistory({ maxBytes: Number(e.target.value) })}
+          style={{
+            background: "var(--color-loom-bg-from)",
+            border: `1px solid ${surface.hairline}`,
+            borderRadius: 8,
+            padding: "6px 10px",
+            fontSize: 12,
+            color: text.primary,
+          }}
+        >
+          <option value={250_000_000}>250 MB</option>
+          <option value={500_000_000}>500 MB</option>
+          <option value={1_073_741_824}>1 GB</option>
+          <option value={2_147_483_648}>2 GB</option>
+          <option value={5_368_709_120}>5 GB</option>
+          <option value={10_737_418_240}>10 GB</option>
+        </select>
+        <div style={{ marginTop: 12, fontSize: 11, color: text.muted }}>
+          Currently saved:{" "}
+          <code style={{ fontFamily: "var(--font-mono)", color: text.primary }}>
+            {formatBytes(historyBytes)}
+          </code>
         </div>
-      )}
+        <div className="flex gap-2" style={{ marginTop: 12 }}>
+          <button
+            onClick={pruneHistory}
+            style={{
+              padding: "6px 12px",
+              borderRadius: 8,
+              background: "rgba(242,99,46,0.13)",
+              border: "1px solid rgba(242,99,46,0.32)",
+              color: "rgb(242,99,46)",
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
+            Prune Terminal History
+          </button>
+          <button
+            onClick={() => historyFolder && ipc.shell.open(historyFolder)}
+            style={{
+              padding: "6px 12px",
+              borderRadius: 8,
+              background: "rgba(255,255,255,0.06)",
+              border: `1px solid ${surface.hairline}`,
+              color: text.primary,
+              fontSize: 12,
+            }}
+          >
+            Reveal History Folder
+          </button>
+        </div>
+      </section>
     </div>
   );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GB`;
+  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
 }
 
 const STALE_OPTIONS: { secs: number; label: string }[] = [

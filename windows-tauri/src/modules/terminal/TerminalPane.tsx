@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { ipc, on, type Workspace } from "../../lib/ipc";
+import { readImage } from "@tauri-apps/plugin-clipboard-manager";
+import { BaseDirectory, mkdir, writeFile } from "@tauri-apps/plugin-fs";
+import { appLocalDataDir, join } from "@tauri-apps/api/path";
+import { ipc, on, type CommandRecord, type TerminalTranscriptRestore, type Workspace } from "../../lib/ipc";
 import { Icons } from "../../lib/icons";
 import { useApp } from "../../lib/store";
 import { surface } from "../../lib/theme";
@@ -13,6 +16,7 @@ type Session = {
   fit: FitAddon;
   title: string;
   cwd: string;
+  restoredTranscript?: TerminalTranscriptRestore;
   unlistenData?: () => void;
   unlistenExit?: () => void;
 };
@@ -48,7 +52,7 @@ export function TerminalPane({ workspace, blockId }: Props) {
       if (current < targetCount) {
         for (let i = current; i < targetCount; i++) {
           if (cancelled) return;
-          await spawnOne();
+          await spawnOne(i);
         }
       } else {
         const toClose = sessionsRef.current.slice(targetCount);
@@ -138,7 +142,13 @@ export function TerminalPane({ workspace, blockId }: Props) {
     return () => window.removeEventListener("resize", onResize);
   }, [sessions]);
 
-  const spawnOne = async () => {
+  const spawnOne = async (index: number) => {
+    const restored =
+      index === 0 && block?.restoredTranscript ? block.restoredTranscript : undefined;
+    const title =
+      restored?.title ||
+      block?.customTitle?.trim() ||
+      (index === 0 ? "Terminal" : `Terminal ${index + 1}`);
     const term = new Terminal({
       fontFamily:
         '"SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, monospace',
@@ -161,8 +171,11 @@ export function TerminalPane({ workspace, blockId }: Props) {
     let id: string;
     try {
       id = await ipc.terminal.spawn({
+        sessionId: restored?.sessionId,
         workspaceId: workspace.id,
-        cwd: workspace.folderPath || undefined,
+        workspaceName: workspace.name,
+        title,
+        cwd: restored?.cwd || workspace.folderPath || undefined,
         cols: term.cols || 80,
         rows: term.rows || 24,
       });
@@ -180,6 +193,7 @@ export function TerminalPane({ workspace, blockId }: Props) {
     });
     term.onTitleChange((title) => {
       setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, title } : s)));
+      ipc.terminal.updateMetadata(id, { title }).catch(() => {});
     });
 
     const unlistenData = await on<number[]>(`terminal://${id}/data`, (bytes) => {
@@ -196,12 +210,16 @@ export function TerminalPane({ workspace, blockId }: Props) {
       term,
       fit,
       title: "",
-      cwd: workspace.folderPath || "",
+      cwd: restored?.cwd || workspace.folderPath || "",
+      restoredTranscript: restored,
       unlistenData,
       unlistenExit,
     };
     setSessions((prev) => [...prev, next]);
     setActiveId((cur) => cur ?? id);
+    if (restored) {
+      term.write(restoredTranscriptText(restored));
+    }
   };
 
   const closeOne = async (id: string, persist: boolean) => {
@@ -231,6 +249,10 @@ export function TerminalPane({ workspace, blockId }: Props) {
 
   const sendCtrlC = (id: string) => {
     ipc.terminal.write(id, [0x03]).catch(() => {});
+  };
+
+  const writeTextToSession = (id: string, text: string) => {
+    ipc.terminal.write(id, Array.from(new TextEncoder().encode(text))).catch(() => {});
   };
 
   const gridStyle = computeGridStyle(sessions.length, axis);
@@ -308,6 +330,8 @@ export function TerminalPane({ workspace, blockId }: Props) {
             onFocus={() => setActiveId(s.id)}
             onClose={() => closeOne(s.id, true)}
             onCtrlC={() => sendCtrlC(s.id)}
+            onInsertText={(text) => writeTextToSession(s.id, text)}
+            workspacePath={workspace.folderPath}
             hostRef={(el) => {
               if (el) hostsRef.current.set(s.id, el);
               else hostsRef.current.delete(s.id);
@@ -326,6 +350,8 @@ function PaneCell({
   onFocus,
   onClose,
   onCtrlC,
+  onInsertText,
+  workspacePath,
   hostRef,
 }: {
   session: Session;
@@ -334,9 +360,12 @@ function PaneCell({
   onFocus: () => void;
   onClose: () => void;
   onCtrlC: () => void;
+  onInsertText: (text: string) => void;
+  workspacePath: string;
   hostRef: (el: HTMLDivElement | null) => void;
 }) {
   const hostElRef = useRef<HTMLDivElement | null>(null);
+  const [showCards, setShowCards] = useState(false);
   const label = session.title || displayCwd(session.cwd) || "shell";
   const focusPane = () => {
     onFocus();
@@ -350,9 +379,46 @@ function PaneCell({
     focusPane();
     moveCursorToClickedCell(session, hostElRef.current, event);
   };
+  const insertImageArgument = async (path: string) => {
+    if (!path) return;
+    onInsertText(`--image ${shellSingleQuoted(path)} `);
+  };
+  const handlePaste = async (event: React.ClipboardEvent<HTMLDivElement>) => {
+    const text = event.clipboardData.getData("text/plain");
+    if (text) return;
+    const file = Array.from(event.clipboardData.files).find(isImageFile);
+    if (file) {
+      event.preventDefault();
+      const path = await imageFilePath(file);
+      if (path) await insertImageArgument(path);
+      return;
+    }
+    try {
+      const image = await readImage();
+      event.preventDefault();
+      const path = await saveClipboardImage(image);
+      if (path) await insertImageArgument(path);
+    } catch {
+      // No image content available through the native clipboard bridge.
+    }
+  };
+  const handleDrop = async (event: React.DragEvent<HTMLDivElement>) => {
+    const file = Array.from(event.dataTransfer.files).find(isImageFile);
+    if (!file) return;
+    event.preventDefault();
+    const path = await imageFilePath(file);
+    if (path) await insertImageArgument(path);
+  };
   return (
     <div
       onClick={focusPane}
+      onPaste={handlePaste}
+      onDragOver={(e) => {
+        if (Array.from(e.dataTransfer.items).some((item) => item.type.startsWith("image/"))) {
+          e.preventDefault();
+        }
+      }}
+      onDrop={handleDrop}
       style={{
         background: "#04050A",
         display: "flex",
@@ -377,6 +443,25 @@ function PaneCell({
           strokeWidth={2}
           color={active ? "var(--color-ws-green)" : "rgba(255,255,255,0.5)"}
         />
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowCards((v) => !v);
+          }}
+          title={showCards ? "Show live terminal" : "Show command cards"}
+          aria-label={showCards ? "Show live terminal" : "Show command cards"}
+          style={{
+            padding: 2,
+            color: "rgba(255,255,255,0.55)",
+            borderRadius: 3,
+          }}
+        >
+          {showCards ? (
+            <Icons.terminal size={9} strokeWidth={2.3} />
+          ) : (
+            <Icons.listBulletRect size={9} strokeWidth={2.3} />
+          )}
+        </button>
         <span
           style={{
             fontFamily: "var(--font-mono)",
@@ -426,11 +511,288 @@ function PaneCell({
       </div>
       <div
         ref={setHost}
-        className="flex-1 min-h-0"
+        className={showCards ? "hidden" : "flex-1 min-h-0"}
         onMouseDown={onTerminalMouseDown}
       />
+      {showCards && (
+        <InlineCardsView
+          sessionId={session.id}
+          workspacePath={workspacePath}
+          onCaptureRerun={(command) => onInsertText(captureCommandText(command) + "\r")}
+        />
+      )}
     </div>
   );
+}
+
+function InlineCardsView({
+  sessionId,
+  workspacePath,
+  onCaptureRerun,
+}: {
+  sessionId: string;
+  workspacePath: string;
+  onCaptureRerun: (command: string) => void;
+}) {
+  const [records, setRecords] = useState<CommandRecord[]>([]);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [output, setOutput] = useState<Record<string, string>>({});
+
+  const load = async () => {
+    const all = await ipc.commandHistory.list(workspacePath || undefined).catch(() => []);
+    setRecords(all.filter((r) => r.sessionId === sessionId));
+  };
+
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 2000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, workspacePath]);
+
+  const copy = async (record: CommandRecord) => {
+    const mod = await import("@tauri-apps/plugin-clipboard-manager");
+    await mod.writeText(record.command);
+    setCopiedId(record.id);
+    setTimeout(() => setCopiedId((cur) => (cur === record.id ? null : cur)), 1500);
+  };
+
+  const toggle = async (record: CommandRecord) => {
+    if (expandedId === record.id) {
+      setExpandedId(null);
+      return;
+    }
+    if (record.outputPath && output[record.id] == null) {
+      const body = await ipc.commandHistory.readOutput(record.outputPath).catch((e) => String(e));
+      setOutput((prev) => ({ ...prev, [record.id]: body }));
+    }
+    setExpandedId(record.id);
+  };
+
+  if (records.length === 0) {
+    return (
+      <div
+        className="flex flex-1 flex-col items-center justify-center"
+        style={{ padding: 24, color: "rgba(255,255,255,0.45)", textAlign: "center" }}
+      >
+        <Icons.listBulletRect size={28} strokeWidth={1.2} />
+        <div style={{ fontSize: 11, marginTop: 8, color: "rgba(255,255,255,0.65)" }}>
+          No commands captured yet for this session.
+        </div>
+        <div style={{ fontSize: 10, marginTop: 4, maxWidth: 280 }}>
+          Switch to the live terminal and run something. Cards populate after the next prompt.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="scrollbar-thin flex-1 overflow-y-auto" style={{ padding: 8 }}>
+      <div className="flex flex-col gap-1.5">
+        {records.map((record) => {
+          const succeeded = record.exitCode === 0;
+          const expanded = expandedId === record.id;
+          return (
+            <div
+              key={record.id}
+              style={{
+                padding: "7px 10px",
+                background: "rgba(255,255,255,0.04)",
+                border: "1px solid rgba(255,255,255,0.10)",
+                borderRadius: 6,
+              }}
+            >
+              <div className="flex items-start gap-1.5">
+                <span
+                  style={{
+                    display: "inline-flex",
+                    color: succeeded ? "var(--color-ws-green)" : "rgb(242,99,46)",
+                    marginTop: 1,
+                  }}
+                >
+                  {succeeded ? (
+                    <Icons.checkCircle size={11} strokeWidth={2.2} />
+                  ) : (
+                    <Icons.failedCircle size={11} strokeWidth={2.2} />
+                  )}
+                </span>
+                <span
+                  style={{
+                    flex: 1,
+                    fontSize: 12,
+                    fontFamily: "var(--font-mono)",
+                    color: "rgba(255,255,255,0.92)",
+                    wordBreak: "break-word",
+                    lineHeight: 1.35,
+                  }}
+                >
+                  {record.command}
+                </span>
+                <IconButton title="Copy command" onClick={() => copy(record)}>
+                  {copiedId === record.id ? (
+                    <Icons.check size={10} strokeWidth={2.4} />
+                  ) : (
+                    <Icons.copy size={10} strokeWidth={2} />
+                  )}
+                </IconButton>
+                <IconButton title="Rerun in active terminal" onClick={() => onCaptureRerun(record.command)}>
+                  <Icons.rerunReverse size={10} strokeWidth={2} />
+                </IconButton>
+                {record.outputPath && (
+                  <IconButton title={expanded ? "Hide output" : "Show captured output"} onClick={() => toggle(record)}>
+                    {expanded ? (
+                      <Icons.chevronUp size={10} strokeWidth={2} />
+                    ) : (
+                      <Icons.chevronDown size={10} strokeWidth={2} />
+                    )}
+                  </IconButton>
+                )}
+              </div>
+              <div
+                className="flex items-center gap-1.5"
+                style={{ marginTop: 3, fontSize: 10, color: "rgba(255,255,255,0.45)" }}
+              >
+                <span style={{ fontFamily: "var(--font-mono)" }}>{displayCwd(record.cwd)}</span>
+                <span style={{ color: "rgba(255,255,255,0.25)" }}>·</span>
+                <span>{relativeTime(record.startedAt)}</span>
+                {record.durationMs >= 1000 && (
+                  <>
+                    <span style={{ color: "rgba(255,255,255,0.25)" }}>·</span>
+                    <span>{Math.floor(record.durationMs / 1000)}s</span>
+                  </>
+                )}
+                {!succeeded && (
+                  <>
+                    <span style={{ color: "rgba(255,255,255,0.25)" }}>·</span>
+                    <span style={{ color: "rgb(242,99,46)", fontWeight: 650 }}>exit {record.exitCode}</span>
+                  </>
+                )}
+              </div>
+              {expanded && (
+                <pre
+                  className="scrollbar-thin overflow-auto whitespace-pre-wrap"
+                  style={{
+                    marginTop: 6,
+                    maxHeight: 240,
+                    padding: 8,
+                    background: "rgba(0,0,0,0.30)",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    borderRadius: 4,
+                    fontSize: 11,
+                    color: "rgba(255,255,255,0.85)",
+                    fontFamily: "var(--font-mono)",
+                  }}
+                >
+                  {output[record.id] || "(empty)"}
+                </pre>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function IconButton({
+  title,
+  onClick,
+  children,
+}: {
+  title: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      aria-label={title}
+      title={title}
+      style={{ padding: 3, color: "rgba(255,255,255,0.55)", borderRadius: 4 }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function restoredTranscriptText(restore: TerminalTranscriptRestore): string {
+  const title = restore.title.trim() || "Terminal Session";
+  const header = `\x1b[2m--- Restored ${title} from Recently Closed ---\x1b[0m\r\n`;
+  const trimNotice = restore.wasTruncated
+    ? `\x1b[2m--- Imported latest ${fmtBytes(restore.importedByteLimit)} of ${fmtBytes(
+        restore.transcriptByteCount
+      )}. Open transcript preview for the saved file. ---\x1b[0m\r\n`
+    : "";
+  const body = (restore.transcriptText || "(empty transcript)")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .join("\r\n");
+  const footer = "\r\n\x1b[2m--- Fresh shell starts below. Reconnect or relaunch commands when ready. ---\x1b[0m\r\n";
+  return header + trimNotice + body + footer;
+}
+
+function captureCommandText(command: string): string {
+  return `Invoke-LoomCapture -Command ${shellSingleQuoted(command)}`;
+}
+
+function shellSingleQuoted(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function isImageFile(file: File): boolean {
+  if (file.type.startsWith("image/")) return true;
+  return /\.(avif|bmp|gif|heic|heif|ico|jpe?g|jp2|png|psd|svg|tiff?|webp)$/i.test(file.name);
+}
+
+async function imageFilePath(file: File): Promise<string | null> {
+  const path = (file as File & { path?: string }).path;
+  if (path) return path;
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const ext = imageExtension(file);
+  return saveClipboardBytes(bytes, ext);
+}
+
+function imageExtension(file: File): string {
+  const fromName = file.name.match(/\.([A-Za-z0-9]+)$/)?.[1];
+  if (fromName) return fromName.toLowerCase();
+  if (file.type === "image/jpeg") return "jpg";
+  if (file.type === "image/svg+xml") return "svg";
+  if (file.type === "image/webp") return "webp";
+  return "png";
+}
+
+async function saveClipboardImage(image: Awaited<ReturnType<typeof readImage>>): Promise<string | null> {
+  const size = await image.size();
+  const rgba = await image.rgba();
+  const png = await rgbaToPng(rgba, size.width, size.height);
+  return saveClipboardBytes(png, "png");
+}
+
+async function rgbaToPng(rgba: Uint8Array, width: number, height: number): Promise<Uint8Array> {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas context unavailable");
+  ctx.putImageData(new ImageData(new Uint8ClampedArray(rgba), width, height), 0, 0);
+  const blob = await new Promise<Blob>((resolve, reject) =>
+    canvas.toBlob((value) => (value ? resolve(value) : reject(new Error("PNG encode failed"))), "image/png")
+  );
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+async function saveClipboardBytes(bytes: Uint8Array, ext: string): Promise<string | null> {
+  const dir = "Clipboard Images";
+  await mkdir(dir, { baseDir: BaseDirectory.AppLocalData, recursive: true }).catch(() => {});
+  const filename = `clipboard-${Date.now()}-${crypto.randomUUID()}.${ext || "png"}`;
+  const relative = `${dir}/${filename}`;
+  await writeFile(relative, bytes, { baseDir: BaseDirectory.AppLocalData });
+  return join(await appLocalDataDir(), relative);
 }
 
 function moveCursorToClickedCell(
@@ -484,4 +846,22 @@ function displayCwd(p: string): string {
   const parts = p.replace(/[\\/]$/, "").split(/[\\/]/);
   const tail = parts.slice(-2).join("/");
   return tail || p;
+}
+
+function relativeTime(ms: number): string {
+  if (!ms) return "";
+  const diff = Date.now() - ms;
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+function fmtBytes(bytes: number): string {
+  if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GB`;
+  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
 }

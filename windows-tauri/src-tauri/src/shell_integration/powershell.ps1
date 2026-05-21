@@ -68,6 +68,7 @@ function Invoke-LoomRecord {
     command   = (ConvertTo-LoomRedactedCommand $Command)
     cwd       = $Cwd
     shell     = $Shell
+    session   = $env:LOOM_SESSION_ID
     exitCode  = $ExitCode
     startedAt = $StartMs
     endedAt   = $endMs
@@ -103,6 +104,7 @@ function Invoke-LoomCapture {
     command    = (ConvertTo-LoomRedactedCommand $Command)
     cwd        = (Get-Location).Path
     shell      = 'pwsh'
+    session    = $env:LOOM_SESSION_ID
     exitCode   = $exit
     startedAt  = $start
     endedAt    = $end

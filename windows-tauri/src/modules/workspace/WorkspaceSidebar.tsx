@@ -4,7 +4,9 @@ import { useApp, workspaceKindLabel } from "../../lib/store";
 import {
   ipc,
   type CliToolUsage,
+  type IdeaNote,
   type SessionInfo,
+  type TerminalTranscriptSession,
   type Workspace,
   type WorkspaceKind as IpcKind,
 } from "../../lib/ipc";
@@ -17,6 +19,7 @@ import {
   type WorkspaceColor,
 } from "../../lib/theme";
 import { toolBrandColor, toolLabel, type Tool } from "../../lib/usage";
+import type { Block } from "./LayoutPersistence";
 
 const USAGE_TOOLS: Tool[] = ["claude", "codex", "lmstudio"];
 
@@ -24,12 +27,25 @@ export function WorkspaceSidebar() {
   const workspaces = useApp((s) => s.workspaces);
   const selectedId = useApp((s) => s.selectedWorkspaceId);
   const selectWorkspace = useApp((s) => s.selectWorkspace);
+  const layout = useApp((s) => s.layout);
+  const removeBlock = useApp((s) => s.removeBlock);
+  const updateBlock = useApp((s) => s.updateBlock);
+  const restoreTerminalBlock = useApp((s) => s.restoreTerminalBlock);
   const selectedUsageTool = useApp((s) => s.selectedUsageTool);
   const setUsageTool = useApp((s) => s.setUsageTool);
   const timeframe = useApp((s) => s.usageTimeframe);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [usage, setUsage] = useState<Partial<Record<Tool, CliToolUsage>>>({});
   const [usageLoading, setUsageLoading] = useState(false);
+  const [notes, setNotes] = useState<IdeaNote[]>([]);
+  const [closed, setClosed] = useState<TerminalTranscriptSession[]>([]);
+  const [deleted, setDeleted] = useState<TerminalTranscriptSession[]>([]);
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [renamingBlock, setRenamingBlock] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [preview, setPreview] = useState<TerminalTranscriptSession | null>(null);
+  const workspace = workspaces.find((w) => w.id === selectedId) ?? null;
+  const terminalBlocks = (layout?.blocks ?? []).filter((b) => b.kind === "terminal");
 
   useEffect(() => {
     const tick = () => {
@@ -58,6 +74,54 @@ export function WorkspaceSidebar() {
     refreshUsage();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timeframe]);
+
+  const refreshSidebarData = async () => {
+    if (!workspace) return;
+    if (workspace.kindRaw === "ideas") {
+      ipc.notes.list(workspace.id).then(setNotes).catch(() => setNotes([]));
+    }
+    const [recentClosed, recentDeleted] = await Promise.all([
+      ipc.terminalTranscripts.recent("closed", workspace.id, 5).catch(() => []),
+      ipc.terminalTranscripts.recent("deleted", workspace.id, 0).catch(() => []),
+    ]);
+    setClosed(recentClosed);
+    setDeleted(recentDeleted);
+  };
+
+  useEffect(() => {
+    refreshSidebarData();
+    const id = setInterval(refreshSidebarData, 2500);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace?.id, workspace?.kindRaw]);
+
+  const restoreTranscript = async (session: TerminalTranscriptSession) => {
+    const restore = await ipc.terminalTranscripts.restore(
+      session.id,
+      workspace?.folderPath || session.cwd
+    );
+    if (!restore) {
+      setPreview(session);
+      return;
+    }
+    await restoreTerminalBlock(restore);
+    await refreshSidebarData();
+  };
+
+  const closeAllTerminals = async () => {
+    if (!confirm("Close all terminals?")) return;
+    for (const block of terminalBlocks) {
+      await removeBlock(block.id);
+    }
+  };
+
+  const clearIdeas = async () => {
+    if (!confirm("Delete all ideas in this workspace?")) return;
+    for (const note of notes) {
+      await ipc.notes.delete(note.id).catch(() => {});
+    }
+    await refreshSidebarData();
+  };
 
   return (
     <aside
@@ -122,24 +186,190 @@ export function WorkspaceSidebar() {
 
         <div style={{ height: 14 }} />
 
-        <SectionHeader
-          title="Sessions"
-          trailing={
-            sessions.length > 0 ? (
-              <CountBadge value={sessions.length} color="var(--color-ws-green)" />
-            ) : null
-          }
-        />
-        {sessions.length === 0 ? (
-          <EmptyHint label="No active terminal sessions." />
+        {workspace?.kindRaw === "ideas" ? (
+          <>
+            <SectionHeader
+              title="Ideas"
+              trailing={
+                <div className="flex items-center gap-1">
+                  <CountBadge value={notes.length} color="var(--color-ws-pink)" />
+                  {notes.length > 0 && (
+                    <TinyIconButton title="Delete all ideas" onClick={clearIdeas}>
+                      <Icons.trash size={11} strokeWidth={2} />
+                    </TinyIconButton>
+                  )}
+                </div>
+              }
+            />
+            {notes.length === 0 ? (
+              <EmptyHint label="No ideas yet. Open the Notes block and capture one." />
+            ) : (
+              <div className="flex flex-col gap-1">
+                {notes.map((note) => (
+                  <IdeaRow key={note.id} note={note} onDeleted={refreshSidebarData} />
+                ))}
+              </div>
+            )}
+          </>
+        ) : workspace?.kindRaw === "review" || workspace?.kindRaw === "build" ? (
+          <>
+            <SectionHeader title="Sessions" />
+            <EmptyHint label="Review workspaces don't have sessions yet." />
+          </>
+        ) : showDeleted ? (
+          <>
+            <SectionHeader
+              title="Recently Deleted"
+              trailing={<CountBadge value={deleted.length} color="var(--color-ws-orange)" />}
+            />
+            <button
+              onClick={() => setShowDeleted(false)}
+              className="mb-2 flex items-center gap-1"
+              style={{ padding: "4px 6px", color: text.muted, fontSize: 11 }}
+            >
+              <Icons.chevronLeft size={11} strokeWidth={2.2} />
+              Back
+            </button>
+            {deleted.length === 0 ? (
+              <EmptyHint label="Deleted terminal sessions will show up here." />
+            ) : (
+              <div className="flex flex-col gap-1">
+                {deleted.map((session) => (
+                  <TranscriptRow
+                    key={session.id}
+                    session={session}
+                    tint="var(--color-ws-orange)"
+                    icon={<Icons.trash size={12} strokeWidth={2.1} />}
+                    onPrimary={() => setPreview(session)}
+                    actions={
+                      <>
+                        <TinyIconButton
+                          title="Recover transcript"
+                          onClick={async () => {
+                            await ipc.terminalTranscripts.recoverDeleted(session.id);
+                            await refreshSidebarData();
+                          }}
+                        >
+                          <Icons.rerunReverse size={11} strokeWidth={2} />
+                        </TinyIconButton>
+                        <TinyIconButton
+                          title="Delete permanently"
+                          onClick={async () => {
+                            await ipc.terminalTranscripts.deletePermanently(session.id);
+                            await refreshSidebarData();
+                          }}
+                        >
+                          <Icons.close size={11} strokeWidth={2.4} />
+                        </TinyIconButton>
+                      </>
+                    }
+                  />
+                ))}
+              </div>
+            )}
+          </>
         ) : (
-          <div className="flex flex-col gap-1">
-            {sessions.map((session, index) => (
-              <SessionRow key={session.id} session={session} index={index} />
-            ))}
-          </div>
+          <>
+            <SectionHeader
+              title="Terminal Sessions"
+              trailing={
+                <div className="flex items-center gap-1">
+                  <CountBadge value={terminalBlocks.length} color="var(--color-ws-green)" />
+                  {terminalBlocks.length > 0 && (
+                    <TinyIconButton title="Close all terminals" onClick={closeAllTerminals}>
+                      <Icons.trash size={11} strokeWidth={2} />
+                    </TinyIconButton>
+                  )}
+                </div>
+              }
+            />
+            {terminalBlocks.length === 0 ? (
+              <EmptyHint label="No terminal blocks open. Use +Terminal in the top bar." />
+            ) : (
+              <div className="flex flex-col gap-1">
+                {terminalBlocks.map((block, index) => (
+                  <TerminalBlockRow
+                    key={block.id}
+                    block={block}
+                    index={index}
+                    isRenaming={renamingBlock === block.id}
+                    renameDraft={renameDraft}
+                    setRenameDraft={setRenameDraft}
+                    onRenameStart={() => {
+                      setRenameDraft(block.customTitle || `Terminal ${index + 1}`);
+                      setRenamingBlock(block.id);
+                    }}
+                    onRenameCommit={async () => {
+                      await updateBlock(block.id, { customTitle: renameDraft.trim() || undefined });
+                      setRenamingBlock(null);
+                    }}
+                    onClose={() => removeBlock(block.id)}
+                  />
+                ))}
+              </div>
+            )}
+
+            {closed.length > 0 && (
+              <>
+                <div style={{ height: 12 }} />
+                <SectionHeader
+                  title="Recently Closed"
+                  trailing={<CountBadge value={closed.length} color="var(--color-ws-green)" />}
+                />
+                <div className="flex flex-col gap-1">
+                  {closed.map((session) => (
+                    <TranscriptRow
+                      key={session.id}
+                      session={session}
+                      tint="var(--color-ws-green)"
+                      icon={<Icons.rerunReverse size={12} strokeWidth={2.1} />}
+                      onPrimary={() => restoreTranscript(session)}
+                      actions={
+                        <>
+                          <TinyIconButton title="Open transcript" onClick={() => setPreview(session)}>
+                            <Icons.eye size={11} strokeWidth={2} />
+                          </TinyIconButton>
+                          <TinyIconButton
+                            title="Move to Recently Deleted"
+                            onClick={async () => {
+                              await ipc.terminalTranscripts.moveToDeleted(session.id);
+                              await refreshSidebarData();
+                            }}
+                          >
+                            <Icons.trash size={11} strokeWidth={2} />
+                          </TinyIconButton>
+                        </>
+                      }
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+            <button
+              onClick={() => setShowDeleted(true)}
+              className="mt-2 flex w-full items-center gap-2"
+              style={{
+                padding: "6px 8px",
+                borderRadius: 6,
+                background: "color-mix(in srgb, " + surface.softPanel + ", transparent 55%)",
+                color: text.muted,
+                fontSize: 11,
+              }}
+            >
+              <Icons.trash size={11} strokeWidth={2} />
+              Recently Deleted
+              <Icons.chevronRight className="ml-auto" size={11} strokeWidth={2.2} />
+            </button>
+          </>
         )}
       </div>
+      {preview && (
+        <TranscriptPreviewModal
+          session={preview}
+          onClose={() => setPreview(null)}
+          onRestore={() => restoreTranscript(preview)}
+        />
+      )}
     </aside>
   );
 }
@@ -295,7 +525,26 @@ function UsageRow({
   );
 }
 
-function SessionRow({ session, index }: { session: SessionInfo; index: number }) {
+function TerminalBlockRow({
+  block,
+  index,
+  isRenaming,
+  renameDraft,
+  setRenameDraft,
+  onRenameStart,
+  onRenameCommit,
+  onClose,
+}: {
+  block: Block;
+  index: number;
+  isRenaming: boolean;
+  renameDraft: string;
+  setRenameDraft: (value: string) => void;
+  onRenameStart: () => void;
+  onRenameCommit: () => void;
+  onClose: () => void;
+}) {
+  const title = block.customTitle?.trim() || (index === 0 ? "Terminal" : `Terminal ${index + 1}`);
   return (
     <div
       className="flex items-center gap-2"
@@ -305,23 +554,262 @@ function SessionRow({ session, index }: { session: SessionInfo; index: number })
         background: "color-mix(in srgb, " + surface.softPanel + ", transparent 58%)",
         border: `1px solid ${surface.hairline}`,
       }}
-      title={session.cwd ?? session.shell}
+      onDoubleClick={onRenameStart}
+      title="Double-click to rename"
     >
       <Icons.terminal size={12} strokeWidth={2.2} color="var(--color-ws-green)" />
-      <span
-        className="truncate"
-        style={{
-          flex: 1,
-          fontSize: 11,
-          fontWeight: 650,
-          color: text.primary,
-          fontFamily: "var(--font-mono)",
+      {isRenaming ? (
+        <input
+          autoFocus
+          value={renameDraft}
+          onChange={(e) => setRenameDraft(e.target.value)}
+          onBlur={onRenameCommit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") onRenameCommit();
+            if (e.key === "Escape") e.currentTarget.blur();
+          }}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            background: "transparent",
+            border: 0,
+            outline: "none",
+            fontSize: 11,
+            fontWeight: 650,
+            color: text.primary,
+          }}
+        />
+      ) : (
+        <span
+          className="truncate"
+          style={{
+            flex: 1,
+            fontSize: 11,
+            fontWeight: 650,
+            color: text.primary,
+          }}
+        >
+          {title}
+        </span>
+      )}
+      {block.terminalCount && block.terminalCount > 1 ? (
+        <span style={{ fontSize: 10, color: text.tertiary }}>{block.terminalCount}</span>
+      ) : null}
+      <TinyIconButton title="Close terminal" onClick={onClose}>
+        <Icons.close size={10} strokeWidth={2.4} />
+      </TinyIconButton>
+    </div>
+  );
+}
+
+function IdeaRow({ note, onDeleted }: { note: IdeaNote; onDeleted: () => void }) {
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState(note.title);
+  const commit = async () => {
+    const title = draft.trim() || "Untitled";
+    await ipc.notes.upsert({ id: note.id, workspaceId: note.workspaceId, title, body: note.body });
+    setRenaming(false);
+    onDeleted();
+  };
+  return (
+    <div
+      className="flex items-center gap-2"
+      onDoubleClick={() => setRenaming(true)}
+      style={{
+        padding: "6px 9px",
+        borderRadius: radius.row,
+        background: "color-mix(in srgb, " + surface.softPanel + ", transparent 58%)",
+        border: `1px solid ${surface.hairline}`,
+      }}
+    >
+      <Icons.lightbulb size={12} strokeWidth={2.2} color="var(--color-ws-pink)" />
+      {renaming ? (
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            if (e.key === "Escape") setRenaming(false);
+          }}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            background: "transparent",
+            border: 0,
+            outline: "none",
+            fontSize: 11,
+            fontWeight: 650,
+            color: text.primary,
+          }}
+        />
+      ) : (
+        <span className="truncate" style={{ flex: 1, fontSize: 11, fontWeight: 650, color: text.primary }}>
+          {note.title || "Untitled"}
+        </span>
+      )}
+      <TinyIconButton
+        title="Delete idea"
+        onClick={async () => {
+          await ipc.notes.delete(note.id);
+          onDeleted();
         }}
       >
-        Terminal {index + 1}
-      </span>
-      <span style={{ fontSize: 10, color: text.tertiary }}>{session.pid}</span>
+        <Icons.close size={10} strokeWidth={2.4} />
+      </TinyIconButton>
     </div>
+  );
+}
+
+function TranscriptRow({
+  session,
+  tint,
+  icon,
+  onPrimary,
+  actions,
+}: {
+  session: TerminalTranscriptSession;
+  tint: string;
+  icon: ReactNode;
+  onPrimary: () => void;
+  actions: ReactNode;
+}) {
+  return (
+    <div
+      className="flex items-center gap-2"
+      onClick={onPrimary}
+      style={{
+        padding: "6px 9px",
+        borderRadius: radius.row,
+        background: "color-mix(in srgb, " + surface.softPanel + ", transparent 58%)",
+        border: `1px solid ${surface.hairline}`,
+        cursor: "pointer",
+      }}
+    >
+      <span style={{ color: tint, flex: "none" }}>{icon}</span>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate" style={{ fontSize: 11, fontWeight: 650, color: text.primary }}>
+          {session.title?.trim() || "Terminal Session"}
+        </span>
+        <span
+          className="truncate"
+          style={{ fontSize: 10, color: text.tertiary, fontFamily: "var(--font-mono)" }}
+        >
+          {displayPath(session.cwd)}
+        </span>
+      </span>
+      <span className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+        {actions}
+      </span>
+    </div>
+  );
+}
+
+function TranscriptPreviewModal({
+  session,
+  onClose,
+  onRestore,
+}: {
+  session: TerminalTranscriptSession;
+  onClose: () => void;
+  onRestore: () => void;
+}) {
+  const [body, setBody] = useState("Loading...");
+  useEffect(() => {
+    ipc.terminalTranscripts.read(session.id).then(setBody).catch((e) => setBody(String(e)));
+  }, [session.id]);
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ background: "rgba(0,0,0,0.48)" }}
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "min(980px, calc(100vw - 48px))",
+          height: "min(760px, calc(100vh - 48px))",
+          background: surface.panel,
+          border: `1px solid ${surface.hairline}`,
+          borderRadius: 14,
+          boxShadow: "0 28px 70px rgba(0,0,0,0.45)",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        <header className="flex items-center gap-2" style={{ padding: "12px 14px", borderBottom: `1px solid ${surface.hairline}` }}>
+          <Icons.terminal size={14} strokeWidth={2.2} color="var(--color-ws-green)" />
+          <div className="min-w-0 flex-1">
+            <div className="truncate" style={{ fontSize: 13, fontWeight: 700, color: text.primary }}>
+              {session.title?.trim() || "Terminal Session"}
+            </div>
+            <div className="truncate" style={{ fontSize: 11, color: text.tertiary, fontFamily: "var(--font-mono)" }}>
+              {displayPath(session.cwd)} · {fmtBytes(session.byteCount)}
+            </div>
+          </div>
+          {session.state === "closed" && (
+            <button
+              onClick={onRestore}
+              style={{
+                padding: "6px 10px",
+                borderRadius: 7,
+                background: "var(--color-loom-accent)",
+                color: "white",
+                fontSize: 12,
+                fontWeight: 650,
+              }}
+            >
+              Restore Session
+            </button>
+          )}
+          <TinyIconButton title="Reveal history folder" onClick={() => ipc.terminalTranscripts.folder().then(ipc.shell.open)}>
+            <Icons.folderOpen size={13} strokeWidth={2} />
+          </TinyIconButton>
+          <TinyIconButton title="Close" onClick={onClose}>
+            <Icons.close size={13} strokeWidth={2.4} />
+          </TinyIconButton>
+        </header>
+        <pre
+          className="scrollbar-thin flex-1 overflow-auto whitespace-pre-wrap"
+          style={{
+            margin: 0,
+            padding: 14,
+            background: "#04050A",
+            color: "rgba(255,255,255,0.88)",
+            fontSize: 12,
+            lineHeight: 1.45,
+            fontFamily: "var(--font-mono)",
+          }}
+        >
+          {body}
+        </pre>
+      </div>
+    </div>
+  );
+}
+
+function TinyIconButton({
+  title,
+  onClick,
+  children,
+}: {
+  title: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      title={title}
+      aria-label={title}
+      style={{ padding: 4, color: text.muted, borderRadius: 5, display: "inline-flex" }}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -397,6 +885,26 @@ function countSessions(sessions: SessionInfo[], folderPath: string): number {
     const cwd = (s.cwd ?? "").toLowerCase();
     return cwd === fp || cwd.startsWith(fp + "\\") || cwd.startsWith(fp + "/");
   }).length;
+}
+
+function displayPath(path: string): string {
+  if (!path) return "";
+  const normalized = path.replace(/[\\/]$/, "");
+  const home = (
+    (window as unknown as { __LOOM_HOME__?: string }).__LOOM_HOME__ ?? ""
+  ).replace(/[\\/]$/, "");
+  if (home && normalized.toLowerCase() === home.toLowerCase()) return "~";
+  if (home && normalized.toLowerCase().startsWith(home.toLowerCase() + "\\")) {
+    return "~" + normalized.slice(home.length);
+  }
+  return normalized;
+}
+
+function fmtBytes(bytes: number): string {
+  if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GB`;
+  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
 }
 
 function codexLimitSummary(data: CliToolUsage): string | null {

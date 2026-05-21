@@ -1,5 +1,11 @@
 ## Changes
 
+- Windows Testing now matches the macOS terminal history workflow with saved transcripts, Recently Closed restore, Recently Deleted recovery, bounded previews, pruning, and history-folder reveal.
+- Windows Testing now mirrors the macOS Tasks pane with Claude, Codex, and LM Studio sessions, model labels, live plan activity, clear-one, and clear-all behavior.
+- Windows terminal command cards now support per-session history, captured-output expansion, copy, and capture-aware reruns.
+- Windows terminal image handoff now saves pasted or dropped images locally and inserts editable `--image '<path>'` prompt text while preserving text paste priority.
+- Windows Code workspaces now use the macOS default terminal, tasks, and agent layout, and the sidebar exposes terminal block rename, close, restore, delete, and preview workflows.
+- Testing Edition version metadata is now 8.2.67 for both macOS and Windows.
 - Mac dictation now streams live speech text into terminal and editor inputs while recognition is still running.
 - Mac Codex limit meters now label the short window as its reported 4h or 5h limit and the longer window as Week.
 - Mac dictation now keeps the speech recognizer alive after stopping, inserts dictated text into active terminal or editor text areas, and surfaces no-speech failures visibly.

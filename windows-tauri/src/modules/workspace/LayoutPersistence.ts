@@ -5,7 +5,7 @@
 
 import { ipc } from "../../lib/ipc";
 import type { Panel } from "../../lib/store";
-import type { WorkspaceKind } from "../../lib/ipc";
+import type { TerminalTranscriptRestore, WorkspaceKind } from "../../lib/ipc";
 
 /// Edge or corner the block is anchored to on the deck. Mirrors the macOS
 /// `BlockPin` enum in WorkspaceLayout.swift.
@@ -30,6 +30,8 @@ export type Block = {
   // 2H/2V/3H/3V (quad is forced at 4). Mirrors Loom/Workspace/WorkspaceLayout.swift.
   terminalCount?: number;
   terminalAxis?: "h" | "v";
+  // Transient restore payload for a recently-closed transcript. Never persisted.
+  restoredTranscript?: TerminalTranscriptRestore;
   // Preview blocks only: defaults the URL to localhost:300X where X is the
   // 0-based index among Preview blocks. Mirrors autoPreviewIndex on Mac.
   autoPreviewIndex?: number;
@@ -63,7 +65,7 @@ export function defaultLayout(kind: WorkspaceKind): Layout {
   const kinds: Panel[] = (() => {
     switch (kind) {
       case "code":
-        return ["editor", "terminal", "tasks", "agent"];
+        return ["terminal", "tasks", "agent"];
       case "ideas":
         return ["notes", "agent"];
       case "review":
@@ -134,7 +136,10 @@ export async function saveLayout(
   workspaceId: string,
   layout: Layout
 ): Promise<void> {
-  await ipc.workspace.saveLayout(workspaceId, JSON.stringify(layout)).catch(() => {});
+  const persistable: Layout = {
+    blocks: layout.blocks.map(({ restoredTranscript: _restoredTranscript, ...block }) => block),
+  };
+  await ipc.workspace.saveLayout(workspaceId, JSON.stringify(persistable)).catch(() => {});
 }
 
 export function newBlock(kind: Panel): Block {

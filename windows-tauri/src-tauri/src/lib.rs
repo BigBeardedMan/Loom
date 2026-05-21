@@ -195,7 +195,7 @@ pub fn run() {
 
             app.manage(AppState::new(db, data_dir.clone(), logs_dir.clone()));
             app.manage(watcher_registry);
-            app.manage(agents::live_tasks::LiveTasksState::default());
+            app.manage(agents::live_tasks::LiveTasksState::new(data_dir.clone()));
             agents::live_tasks::start_poller(app.handle().clone());
 
             install_tray(app.handle())?;
@@ -230,7 +230,18 @@ pub fn run() {
             terminal::commands::terminal_kill,
             terminal::commands::terminal_list,
             terminal::commands::terminal_set_cwd,
+            terminal::commands::terminal_update_metadata,
             terminal::commands::terminal_foreground_command,
+            terminal::transcripts::terminal_transcripts_recent,
+            terminal::transcripts::terminal_transcript_read,
+            terminal::transcripts::terminal_transcript_restore,
+            terminal::transcripts::terminal_transcript_move_to_deleted,
+            terminal::transcripts::terminal_transcript_recover_deleted,
+            terminal::transcripts::terminal_transcript_delete_permanently,
+            terminal::transcripts::terminal_transcripts_prune,
+            terminal::transcripts::terminal_transcripts_config,
+            terminal::transcripts::terminal_transcripts_set_config,
+            terminal::transcripts::terminal_transcripts_folder,
             terminal::command_history::command_history_list,
             terminal::command_history::command_history_read_output,
             fs_walk::fs_walk_tree,
@@ -250,6 +261,8 @@ pub fn run() {
             agents::usage_service::usage_read,
             agents::live_tasks::live_tasks_list,
             agents::live_tasks::live_tasks_set_staleness,
+            agents::live_tasks::live_tasks_clear_group,
+            agents::live_tasks::live_tasks_clear_all,
             keychain::keychain_get,
             keychain::keychain_set,
             keychain::keychain_delete,

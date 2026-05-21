@@ -9,6 +9,7 @@ import {
   type Layout,
   defaultLayout,
 } from "../modules/workspace/LayoutPersistence";
+import type { TerminalTranscriptRestore } from "./ipc";
 import {
   WEIGHT_MIN,
   WEIGHT_MAX,
@@ -57,6 +58,7 @@ type AppState = {
   deleteWorkspace: (id: string) => Promise<void>;
   renameWorkspace: (id: string, name: string) => Promise<void>;
   addBlock: (kind: Panel) => Promise<void>;
+  restoreTerminalBlock: (restore: TerminalTranscriptRestore) => Promise<void>;
   removeBlock: (id: string) => Promise<void>;
   reorderBlocks: (newOrder: Block[]) => Promise<void>;
   swapBlocks: (a: string, b: string) => Promise<void>;
@@ -242,6 +244,19 @@ export const useApp = create<AppState>((set, get) => ({
     }
     const next: Layout = { blocks: [...current.blocks, block] };
     set({ layout: next });
+    await saveLayout(wsId, next);
+  },
+
+  restoreTerminalBlock: async (restore) => {
+    const wsId = get().selectedWorkspaceId;
+    const current = get().layout;
+    if (!wsId || !current) return;
+    const block = newBlock("terminal");
+    block.customTitle = restore.title;
+    block.terminalCount = 1;
+    block.restoredTranscript = restore;
+    const next: Layout = { blocks: [...current.blocks, block] };
+    set({ layout: next, selectedUsageTool: null });
     await saveLayout(wsId, next);
   },
 

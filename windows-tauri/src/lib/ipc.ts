@@ -107,10 +107,14 @@ export type SessionInfo = {
   shell: string;
   pid: number;
   cwd: string | null;
+  title: string;
 };
 
 export type SpawnOptions = {
+  sessionId?: string;
   workspaceId?: string;
+  workspaceName?: string;
+  title?: string;
   shell?: string;
   cwd?: string;
   cols: number;
@@ -202,6 +206,12 @@ export const ipc = {
     list: () => invoke<SessionInfo[]>("terminal_list"),
     setCwd: (sessionId: string, cwd: string) =>
       invoke<void>("terminal_set_cwd", { sessionId, cwd }),
+    updateMetadata: (sessionId: string, patch: { cwd?: string; title?: string }) =>
+      invoke<void>("terminal_update_metadata", {
+        sessionId,
+        cwd: patch.cwd,
+        title: patch.title,
+      }),
     foregroundCommand: (sessionId: string) =>
       invoke<string | null>("terminal_foreground_command", { sessionId }),
   },
@@ -275,6 +285,37 @@ export const ipc = {
       invoke<string>("command_history_read_output", { path }),
   },
 
+  terminalTranscripts: {
+    recent: (
+      transcriptState: "closed" | "deleted",
+      workspaceId?: string | null,
+      limit?: number
+    ) =>
+      invoke<TerminalTranscriptSession[]>("terminal_transcripts_recent", {
+        transcriptState,
+        workspaceId,
+        limit,
+      }),
+    read: (sessionId: string, maxBytes?: number) =>
+      invoke<string>("terminal_transcript_read", { sessionId, maxBytes }),
+    restore: (sessionId: string, fallbackCwd: string) =>
+      invoke<TerminalTranscriptRestore | null>("terminal_transcript_restore", {
+        sessionId,
+        fallbackCwd,
+      }),
+    moveToDeleted: (sessionId: string) =>
+      invoke<void>("terminal_transcript_move_to_deleted", { sessionId }),
+    recoverDeleted: (sessionId: string) =>
+      invoke<void>("terminal_transcript_recover_deleted", { sessionId }),
+    deletePermanently: (sessionId: string) =>
+      invoke<void>("terminal_transcript_delete_permanently", { sessionId }),
+    prune: () => invoke<void>("terminal_transcripts_prune"),
+    config: () => invoke<TerminalTranscriptConfig>("terminal_transcripts_config"),
+    setConfig: (patch: { enabled?: boolean; maxBytes?: number }) =>
+      invoke<TerminalTranscriptConfig>("terminal_transcripts_set_config", { patch }),
+    folder: () => invoke<string>("terminal_transcripts_folder"),
+  },
+
   endpoints: {
     list: () => invoke<LocalEndpoint[]>("endpoint_list"),
     upsert: (input: EndpointInput) =>
@@ -294,6 +335,10 @@ export const ipc = {
       invoke<LiveAgentTaskGroup[]>("live_tasks_list", { stalenessSecs }),
     setStaleness: (secs: number) =>
       invoke<void>("live_tasks_set_staleness", { secs }),
+    clearGroup: (groupId: string) =>
+      invoke<LiveAgentTaskGroup[]>("live_tasks_clear_group", { groupId }),
+    clearAll: () =>
+      invoke<LiveAgentTaskGroup[]>("live_tasks_clear_all"),
   },
 
   update: {
@@ -331,11 +376,43 @@ export type CommandRecord = {
   command: string;
   cwd: string;
   shell: string;
+  sessionId: string;
   exitCode: number;
   startedAt: number;
   endedAt: number;
   durationMs: number;
   outputPath: string | null;
+};
+
+export type TerminalTranscriptSession = {
+  id: string;
+  workspaceId: string | null;
+  workspaceName: string | null;
+  cwd: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  closedAt: number | null;
+  deletedAt: number | null;
+  state: "active" | "closed" | "deleted";
+  byteCount: number;
+};
+
+export type TerminalTranscriptRestore = {
+  sessionId: string;
+  cwd: string;
+  title: string;
+  transcriptText: string;
+  wasTruncated: boolean;
+  importedByteLimit: number;
+  transcriptByteCount: number;
+};
+
+export type TerminalTranscriptConfig = {
+  enabled: boolean;
+  maxBytes: number;
+  totalBytes: number;
+  baseDir: string;
 };
 
 export type LocalEndpoint = {
@@ -433,7 +510,8 @@ export type CliToolUsage = {
 
 export type LiveAgentTask = {
   id: string;
-  source: "claude" | "codex" | "gemini";
+  source: AgentSource;
+  modelLabel: string | null;
   sessionId: string;
   taskId: string;
   subject: string;
@@ -446,11 +524,20 @@ export type LiveAgentTask = {
 export type LiveAgentTaskGroup = {
   id: string;
   sessionId: string;
-  source: "claude" | "codex" | "gemini";
+  source: AgentSource;
+  modelLabel: string | null;
   lastActivity: string;
   headline: string | null;
   tasks: LiveAgentTask[];
 };
+
+export type AgentSource =
+  | "claude"
+  | "codex"
+  | "gemini"
+  | "lmstudio"
+  | "ollama"
+  | "openAICompatible";
 
 export type UpdateInfo = {
   version: string;
