@@ -7,7 +7,8 @@
 - Windows Testing now verifies the downloaded NSIS installer bytes against the embedded Tauri updater public key before staging or running it.
 - Windows Testing updater failures now open the exact GitHub release page for the installer instead of the broad prerelease search page.
 - Windows release CI now smoke-tests the NSIS updater install flags before publishing release assets.
-- Testing Edition version metadata is now 8.2.69 for both macOS and Windows.
+- Testing Edition version metadata is now 8.2.70 for both macOS and Windows.
+- Windows releases now include a signed recovery bridge updater that old installed builds choose before the real NSIS installer, preventing the old GitHub browser fallback during the one-time recovery update.
 - Windows in-app updates no longer fall back to opening GitHub from the pill; the helper uses Tauri's NSIS updater arguments and a legacy silent fallback.
 - Windows releases now publish legacy installer aliases so older installed builds can see and install the next Testing Edition update.
 - Windows Testing now matches the macOS terminal history workflow with saved transcripts, Recently Closed restore, Recently Deleted recovery, bounded previews, pruning, and history-folder reveal.

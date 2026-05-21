@@ -280,7 +280,7 @@ fi
 cat >>"$NOTES_FILE" <<EOF
 
 ## Install
-1. Download \`${DMG_NAME}\` (Mac) or \`LoomTestingEdition_${VERSION}_<arch>-setup.exe\` (Windows) below.
+1. Download \`${DMG_NAME}\` (Mac) or \`Loom.Testing.Edition_${VERSION}_<arch>-setup.exe\` (Windows) below.
 2. Open it and drag **Loom Testing Edition** into your Applications folder.
 3. First launch on Mac: right-click **Loom Testing Edition → Open** to bypass Gatekeeper.
 EOF

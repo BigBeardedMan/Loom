@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       build_code:
-        description: "Testing version (MAJOR.MINOR.PATCH, e.g. 8.2.69)"
+        description: "Testing version (MAJOR.MINOR.PATCH, e.g. 8.2.70)"
         required: true
 
 permissions:
@@ -141,21 +141,30 @@ jobs:
           fi
           cp "$out/$artifact_name" "$out/$legacy_name"
           cp "$out/$artifact_name.sig" "$out/$legacy_name.sig"
+
+          bridge_name="Loom.Bridge_${{ steps.build_code.outputs.value }}_${{ matrix.artifact_suffix }}-setup.exe"
+          rustc --edition=2021 --target ${{ matrix.target }} -C opt-level=2 \
+            tools/windows-updater-bridge.rs \
+            -o "$out/$bridge_name"
+          pnpm tauri signer sign -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" "$out/$bridge_name"
+          test -s "$out/$bridge_name.sig"
           find "$out" -maxdepth 1 -type f -print
 
       - name: Smoke test NSIS updater install
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $versionedInstaller = Get-ChildItem -Path "release-artifacts" -Filter "*_${{ steps.build_code.outputs.value }}_${{ matrix.artifact_suffix }}-setup.exe" | Select-Object -First 1
-          $legacyInstaller = Get-ChildItem -Path "release-artifacts" -Filter "*_${{ matrix.artifact_suffix }}-setup.exe" |
-            Where-Object { $_.Name -notmatch "_\d+\.\d+\.\d+_${{ matrix.artifact_suffix }}-setup\.exe$" } |
-            Select-Object -First 1
+          $versionedInstaller = Get-ChildItem -Path "release-artifacts" -Filter "Loom.Testing.Edition_${{ steps.build_code.outputs.value }}_${{ matrix.artifact_suffix }}-setup.exe" | Select-Object -First 1
+          $legacyInstaller = Get-ChildItem -Path "release-artifacts" -Filter "Loom.Testing.Edition_${{ matrix.artifact_suffix }}-setup.exe" | Select-Object -First 1
+          $bridgeInstaller = Get-ChildItem -Path "release-artifacts" -Filter "Loom.Bridge_${{ steps.build_code.outputs.value }}_${{ matrix.artifact_suffix }}-setup.exe" | Select-Object -First 1
           if (-not $versionedInstaller) {
             throw "No versioned ${{ matrix.artifact_suffix }} NSIS installer found in release-artifacts"
           }
           if (-not $legacyInstaller) {
             throw "No legacy ${{ matrix.artifact_suffix }} NSIS installer alias found in release-artifacts"
+          }
+          if (-not $bridgeInstaller) {
+            throw "No bridge ${{ matrix.artifact_suffix }} updater found in release-artifacts"
           }
 
           $programFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
@@ -239,6 +248,16 @@ jobs:
 
           Invoke-InstallerSmoke -Installer $legacyInstaller -Arguments @("/S") -Label "legacy silent"
           Invoke-InstallerSmoke -Installer $versionedInstaller -Arguments @("/S", "/R", "/UPDATE", "/ARGS") -Label "updater"
+          $env:LOOM_BRIDGE_LOCAL_INSTALLER = $versionedInstaller.FullName
+          $env:LOOM_BRIDGE_STRICT = "1"
+          $env:LOOM_BRIDGE_DISABLE_ELEVATION = "1"
+          try {
+            Invoke-InstallerSmoke -Installer $bridgeInstaller -Arguments @("/S") -Label "bridge recovery"
+          } finally {
+            Remove-Item Env:\LOOM_BRIDGE_LOCAL_INSTALLER -ErrorAction SilentlyContinue
+            Remove-Item Env:\LOOM_BRIDGE_STRICT -ErrorAction SilentlyContinue
+            Remove-Item Env:\LOOM_BRIDGE_DISABLE_ELEVATION -ErrorAction SilentlyContinue
+          }
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -267,8 +286,8 @@ jobs:
             exit 1
           fi
           find dist -maxdepth 3 -type f -print
-          NSIS_X64=$(find dist -name "*_${BUILD_CODE}_x64-setup.exe" | head -n1)
-          NSIS_ARM=$(find dist -name "*_${BUILD_CODE}_arm64-setup.exe" | head -n1)
+          NSIS_X64=$(find dist -name "Loom.Testing.Edition_${BUILD_CODE}_x64-setup.exe" | head -n1)
+          NSIS_ARM=$(find dist -name "Loom.Testing.Edition_${BUILD_CODE}_arm64-setup.exe" | head -n1)
           SIG_X64="${NSIS_X64}.sig"
           SIG_ARM="${NSIS_ARM}.sig"
           for file in "$NSIS_X64" "$NSIS_ARM" "$SIG_X64" "$SIG_ARM"; do
@@ -298,10 +317,19 @@ jobs:
           }
           EOF
           mv latest-windows-testing.json dist/
+      - name: Publish bridge recovery assets first
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          files: dist/**/Loom.Bridge_*-setup.exe*
+          prerelease: true
+          generate_release_notes: true
+          fail_on_unmatched_files: true
       - name: Publish pre-release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
-          files: dist/**/*
+          files: |
+            dist/latest-windows-testing.json
+            dist/**/Loom.Testing.Edition_*
           prerelease: true
           generate_release_notes: true
           # release-testing.sh creates the pre-release with the DMG; this

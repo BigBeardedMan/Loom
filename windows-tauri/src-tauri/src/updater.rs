@@ -167,7 +167,10 @@ pub async fn update_check() -> Result<Option<UpdateInfo>, String> {
         let asset = release
             .assets
             .iter()
-            .find(|asset| is_valid_installer_name(&asset.name, token, Some(version)))
+            .find(|asset| {
+                is_valid_installer_name(&asset.name, token, Some(version))
+                    && is_primary_installer_name(&asset.name)
+            })
             .cloned();
         let Some(asset) = asset else {
             continue;
@@ -250,6 +253,10 @@ fn is_valid_installer_name(name: &str, token: &str, expected_version: Option<&st
     };
     arch == token.to_ascii_lowercase()
         && expected_version.map_or(true, |expected| version == expected)
+}
+
+fn is_primary_installer_name(name: &str) -> bool {
+    name.starts_with("Loom.Testing.Edition_")
 }
 
 fn release_version_from_asset_url(asset_url: &str) -> Option<String> {
@@ -629,6 +636,17 @@ mod tests {
             "Loom.Testing.Edition_8.2.67_arm64-setup.exe",
             "x64",
             Some("8.2.67")
+        ));
+        assert!(is_valid_installer_name(
+            "Loom.Bridge_8.2.70_x64-setup.exe",
+            "x64",
+            Some("8.2.70")
+        ));
+        assert!(!is_primary_installer_name(
+            "Loom.Bridge_8.2.70_x64-setup.exe"
+        ));
+        assert!(is_primary_installer_name(
+            "Loom.Testing.Edition_8.2.70_x64-setup.exe"
         ));
     }
 
