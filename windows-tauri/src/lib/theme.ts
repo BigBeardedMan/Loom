@@ -11,12 +11,12 @@ export type WorkspaceColor =
   | "purple";
 
 export const workspaceColorHex: Record<WorkspaceColor, string> = {
-  orange: "#F24620",
-  green: "#3ADB75",
-  blue: "#2D80F5",
-  pink: "#F23388",
-  yellow: "#F5C533",
-  purple: "#9E57F0",
+  orange: "#F2632E",
+  green: "#3BDB75",
+  blue: "#2E80F5",
+  pink: "#F2338C",
+  yellow: "#F5C433",
+  purple: "#9E66F2",
 };
 
 export const workspaceColorVar: Record<WorkspaceColor, string> = {
@@ -45,23 +45,23 @@ export const text = {
 };
 
 export const radius = {
-  panel: 14,
+  panel: 12,
   row: 8,
-  control: 6,
+  control: 7,
 };
 
 export const shadow = {
-  panel: "0 12px 18px rgba(0, 0, 0, 0.28)",
-  panelDrag: "0 18px 28px rgba(0, 0, 0, 0.55)",
-  pill: "0 4px 8px rgba(58, 219, 117, 0.5)",
+  panel: "0 10px 22px rgba(0, 0, 0, 0.30)",
+  panelDrag: "0 18px 34px rgba(0, 0, 0, 0.55)",
+  pill: "0 4px 10px rgba(59, 219, 117, 0.44)",
 };
 
 export const sidebar = {
-  width: 240,
+  width: 268,
   paddingH: 12,
-  paddingV: 14,
+  paddingV: 12,
   rowPaddingH: 10,
-  rowPaddingV: 8,
+  rowPaddingV: 9,
 };
 
 export const paneTitleBar = {
@@ -77,9 +77,14 @@ export const workspaceDot = {
 
 export const cockpit = {
   gap: 12,
-  outerPadding: 14,
+  outerPadding: 12,
   minBlockWidth: 140,
   minBlockHeight: 160,
+};
+
+export const topbar = {
+  height: 38,
+  gap: 10,
 };
 
 export const modal = {

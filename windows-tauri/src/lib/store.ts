@@ -84,6 +84,52 @@ type AppState = {
 
 const SELECTED_WS_KEY = "loom.selectedWorkspaceId";
 
+const MAC_WORKSPACE_SEEDS: Array<{
+  name: string;
+  colorName: Workspace["colorName"];
+  kindRaw: Workspace["kindRaw"];
+}> = [
+  { name: "Prompt", colorName: "blue", kindRaw: "code" },
+  { name: "Ideas", colorName: "pink", kindRaw: "ideas" },
+  { name: "Review", colorName: "orange", kindRaw: "review" },
+];
+
+function matchesSeedKind(ws: Workspace, kind: Workspace["kindRaw"]) {
+  if (kind === "review") return ws.kindRaw === "review" || ws.kindRaw === "build";
+  return ws.kindRaw === kind;
+}
+
+function canonicalWorkspaceList(list: Workspace[]): Workspace[] {
+  return MAC_WORKSPACE_SEEDS.flatMap((seed) => {
+    const match = list.find((ws) => matchesSeedKind(ws, seed.kindRaw));
+    if (!match) return [];
+    return [
+      {
+        ...match,
+        name: seed.name,
+        colorName: seed.colorName,
+        kindRaw: seed.kindRaw,
+      },
+    ];
+  });
+}
+
+async function loadCanonicalWorkspaces(): Promise<Workspace[]> {
+  const list = await ipc.workspace.list();
+  const next = [...list];
+  for (const seed of MAC_WORKSPACE_SEEDS) {
+    if (next.some((ws) => matchesSeedKind(ws, seed.kindRaw))) continue;
+    const created = await ipc.workspace.create({
+      name: seed.name,
+      colorName: seed.colorName,
+      kindRaw: seed.kindRaw,
+    });
+    await saveLayout(created.id, defaultLayout(seed.kindRaw));
+    next.push(created);
+  }
+  return canonicalWorkspaceList(next);
+}
+
 export const useApp = create<AppState>((set, get) => ({
   workspaces: [],
   selectedWorkspaceId: localStorage.getItem(SELECTED_WS_KEY),
@@ -97,7 +143,7 @@ export const useApp = create<AppState>((set, get) => ({
   theme: (localStorage.getItem("loom.theme") as Theme) || "system",
 
   loadWorkspaces: async () => {
-    const list = await ipc.workspace.list();
+    const list = await loadCanonicalWorkspaces();
     set({ workspaces: list });
     const current = get().selectedWorkspaceId;
     const valid = list.find((w) => w.id === current);

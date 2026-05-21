@@ -86,8 +86,8 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
 #[tauri::command]
 fn app_version() -> &'static str {
     // Testing Edition exposes the alphanumeric LOOM_BUILD_CODE baked in by
-    // build.rs. CARGO_PKG_VERSION stays at the placeholder semver `1.0.0`
-    // because Cargo refuses non-semver, but it's never shown to the user.
+    // build.rs. Tauri/Cargo still carry the unified Testing semver for
+    // installer metadata, but the in-app build label comes from the release.
     env!("LOOM_BUILD_CODE")
 }
 

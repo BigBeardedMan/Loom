@@ -1,14 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Icons } from "../../lib/icons";
-import {
-  useApp,
-  workspaceKindLabel,
-} from "../../lib/store";
+import { useApp, workspaceKindLabel } from "../../lib/store";
 import {
   ipc,
+  type CliToolUsage,
   type SessionInfo,
   type Workspace,
-  type WorkspaceColor as IpcColor,
   type WorkspaceKind as IpcKind,
 } from "../../lib/ipc";
 import {
@@ -19,34 +16,20 @@ import {
   workspaceColorVar,
   type WorkspaceColor,
 } from "../../lib/theme";
-import { WorkspaceDot } from "../../components/WorkspaceDot";
+import { toolBrandColor, toolLabel, type Tool } from "../../lib/usage";
 
-const COLORS: WorkspaceColor[] = [
-  "blue",
-  "green",
-  "orange",
-  "pink",
-  "purple",
-  "yellow",
-];
+const USAGE_TOOLS: Tool[] = ["claude", "codex", "lmstudio"];
 
-const KINDS: { value: IpcKind; label: string }[] = [
-  { value: "code", label: workspaceKindLabel.code },
-  { value: "ideas", label: workspaceKindLabel.ideas },
-  { value: "review", label: workspaceKindLabel.review },
-];
-
-// Mirrors Loom/Workspace/WorkspaceSidebarView.swift.
-// 240 px wide, 12/14 padding, hairline right border, sectioned rows.
 export function WorkspaceSidebar() {
   const workspaces = useApp((s) => s.workspaces);
   const selectedId = useApp((s) => s.selectedWorkspaceId);
   const selectWorkspace = useApp((s) => s.selectWorkspace);
-  const createWorkspace = useApp((s) => s.createWorkspace);
-  const deleteWorkspace = useApp((s) => s.deleteWorkspace);
-  const renameWorkspace = useApp((s) => s.renameWorkspace);
-  const [creating, setCreating] = useState(false);
+  const selectedUsageTool = useApp((s) => s.selectedUsageTool);
+  const setUsageTool = useApp((s) => s.setUsageTool);
+  const timeframe = useApp((s) => s.usageTimeframe);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [usage, setUsage] = useState<Partial<Record<Tool, CliToolUsage>>>({});
+  const [usageLoading, setUsageLoading] = useState(false);
 
   useEffect(() => {
     const tick = () => {
@@ -57,139 +40,125 @@ export function WorkspaceSidebar() {
     return () => clearInterval(id);
   }, []);
 
+  const refreshUsage = async () => {
+    setUsageLoading(true);
+    try {
+      const entries = await Promise.all(
+        USAGE_TOOLS.map(async (tool) => [tool, await ipc.usage.read(tool, timeframe)] as const)
+      );
+      setUsage(Object.fromEntries(entries) as Partial<Record<Tool, CliToolUsage>>);
+    } catch {
+      // Individual CLIs can be absent; the full dashboard shows detailed errors.
+    } finally {
+      setUsageLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshUsage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeframe]);
+
   return (
     <aside
-      className="flex h-full flex-col flex-none"
+      className="flex h-full flex-col"
       style={{
-        width: sidebar.width,
-        background: surface.panel,
-        borderRight: `1px solid ${surface.hairline}`,
+        padding: sidebar.paddingV,
+        background: "transparent",
       }}
     >
-      <div
-        className="flex items-center justify-between flex-none"
-        style={{
-          padding: `${sidebar.paddingV - 4}px ${sidebar.paddingH}px`,
-          borderBottom: `1px solid ${surface.hairline}`,
-        }}
-      >
-        <span className="section-header">Workspaces</span>
-        <button
-          onClick={() => setCreating(true)}
-          className="rounded-md p-1 transition-colors"
-          style={{ color: text.muted }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.color = text.primary as string;
-            e.currentTarget.style.background = surface.softPanel as string;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.color = text.muted as string;
-            e.currentTarget.style.background = "transparent";
-          }}
-          aria-label="New workspace"
-        >
-          <Icons.plus size={13} strokeWidth={2.2} />
-        </button>
-      </div>
-
-      <div
-        className="scrollbar-thin flex-1 overflow-y-auto"
-        style={{
-          padding: `${sidebar.paddingV - 6}px ${sidebar.paddingH - 4}px`,
-        }}
-      >
-        {workspaces.length === 0 && !creating && (
-          <div
-            className="text-center"
-            style={{
-              padding: "24px 8px",
-              fontSize: 11,
-              color: text.tertiary,
-            }}
-          >
-            No workspaces yet. Click + to create one.
-          </div>
-        )}
+      <div className="scrollbar-thin flex-1 overflow-y-auto">
+        <SectionHeader title="Workspaces" />
         <div className="flex flex-col gap-1">
-          {workspaces.map((ws) => (
-            <WorkspaceRow
-              key={ws.id}
-              workspace={ws}
-              selected={ws.id === selectedId}
-              sessionCount={countSessions(sessions, ws.folderPath)}
-              onSelect={() => selectWorkspace(ws.id)}
-              onDelete={() => deleteWorkspace(ws.id)}
-              onRename={(name) => renameWorkspace(ws.id, name)}
+          {workspaces.length === 0 ? (
+            <EmptyHint label="Preparing Prompt, Ideas, and Review." />
+          ) : (
+            workspaces.map((ws) => (
+              <WorkspaceRow
+                key={ws.id}
+                workspace={ws}
+                selected={ws.id === selectedId && !selectedUsageTool}
+                sessionCount={countSessions(sessions, ws.folderPath)}
+                onSelect={() => selectWorkspace(ws.id)}
+              />
+            ))
+          )}
+        </div>
+
+        <div style={{ height: 14 }} />
+
+        <SectionHeader
+          title="Usage"
+          trailing={
+            <button
+              onClick={refreshUsage}
+              aria-label="Refresh usage"
+              title="Refresh usage"
+              style={{
+                padding: 3,
+                borderRadius: 5,
+                color: text.muted,
+              }}
+            >
+              {usageLoading ? (
+                <Icons.spinner size={12} className="animate-spin" />
+              ) : (
+                <Icons.refresh size={12} strokeWidth={2} />
+              )}
+            </button>
+          }
+        />
+        <div className="flex flex-col gap-1">
+          {USAGE_TOOLS.map((tool) => (
+            <UsageRow
+              key={tool}
+              tool={tool}
+              data={usage[tool]}
+              selected={selectedUsageTool === tool}
+              onSelect={() => setUsageTool(selectedUsageTool === tool ? null : tool)}
             />
           ))}
         </div>
 
-        {sessions.length > 0 && (
-          <div className="mt-4">
-            <div
-              className="flex items-center justify-between"
-              style={{ padding: "4px 6px 6px" }}
-            >
-              <span className="section-header">Terminal Sessions</span>
-              <span
-                className="font-mono"
-                style={{
-                  fontSize: 10,
-                  fontWeight: 700,
-                  color: text.muted,
-                  padding: "1px 6px",
-                  background: surface.softPanel,
-                  borderRadius: 999,
-                }}
-              >
-                {sessions.length}
-              </span>
-            </div>
-            <div className="flex flex-col gap-1">
-              {sessions.map((s, i) => (
-                <div
-                  key={s.id}
-                  className="flex items-center gap-2"
-                  style={{
-                    padding: "5px 8px",
-                    borderRadius: 6,
-                    background: "color-mix(in srgb, " + surface.softPanel + ", transparent 40%)",
-                    border: `1px solid ${surface.hairline}`,
-                  }}
-                >
-                  <Icons.terminal
-                    size={11}
-                    strokeWidth={2.2}
-                    color="var(--color-ws-green)"
-                  />
-                  <span
-                    className="truncate flex-1 font-mono"
-                    style={{ fontSize: 11, color: text.primary }}
-                  >
-                    Terminal {i + 1}
-                  </span>
-                </div>
-              ))}
-            </div>
+        <div style={{ height: 14 }} />
+
+        <SectionHeader
+          title="Sessions"
+          trailing={
+            sessions.length > 0 ? (
+              <CountBadge value={sessions.length} color="var(--color-ws-green)" />
+            ) : null
+          }
+        />
+        {sessions.length === 0 ? (
+          <EmptyHint label="No active terminal sessions." />
+        ) : (
+          <div className="flex flex-col gap-1">
+            {sessions.map((session, index) => (
+              <SessionRow key={session.id} session={session} index={index} />
+            ))}
           </div>
         )}
       </div>
-
-      {creating && (
-        <NewWorkspaceForm
-          onCreate={async (input) => {
-            await createWorkspace(
-              input.name,
-              input.folderPath,
-              input.color as IpcColor,
-              input.kind
-            );
-            setCreating(false);
-          }}
-          onCancel={() => setCreating(false)}
-        />
-      )}
     </aside>
+  );
+}
+
+function SectionHeader({
+  title,
+  trailing,
+}: {
+  title: string;
+  trailing?: ReactNode;
+}) {
+  return (
+    <div
+      className="flex items-center justify-between"
+      style={{ padding: "3px 6px 7px" }}
+    >
+      <span className="section-header">{title}</span>
+      {trailing}
+    </div>
   );
 }
 
@@ -198,142 +167,212 @@ function WorkspaceRow({
   selected,
   sessionCount,
   onSelect,
-  onDelete,
-  onRename,
 }: {
   workspace: Workspace;
   selected: boolean;
   sessionCount: number;
   onSelect: () => void;
-  onDelete: () => void;
-  onRename: (name: string) => void;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(workspace.name);
-
-  useEffect(() => {
-    setDraft(workspace.name);
-  }, [workspace.name]);
-
-  const commit = () => {
-    setEditing(false);
-    const next = draft.trim();
-    if (next && next !== workspace.name) onRename(next);
-    else setDraft(workspace.name);
-  };
-  const cancel = () => {
-    setEditing(false);
-    setDraft(workspace.name);
-  };
-
+  const color = workspaceColorVar[workspace.colorName as WorkspaceColor];
   const KindIcon = kindIconFor(workspace.kindRaw);
-
   return (
-    <div
-      className="group flex items-center gap-2 cursor-pointer transition-colors"
+    <button
       onClick={onSelect}
-      onDoubleClick={(e) => {
-        e.stopPropagation();
-        if (!editing) setEditing(true);
-      }}
+      className="group flex w-full items-center gap-2 text-left transition-colors"
       style={{
         padding: `${sidebar.rowPaddingV}px ${sidebar.rowPaddingH}px`,
-        borderRadius: 6,
-        background: selected ? surface.softPanel : "transparent",
+        borderRadius: radius.row,
+        background: selected
+          ? "color-mix(in srgb, " + color + ", transparent 84%)"
+          : "transparent",
+        border: `1px solid ${selected ? "color-mix(in srgb, " + color + ", transparent 55%)" : "transparent"}`,
         color: selected ? text.primary : text.muted,
       }}
-      onMouseEnter={(e) => {
-        if (!selected) {
-          e.currentTarget.style.background =
-            "color-mix(in srgb, " + surface.softPanel + ", transparent 50%)";
-          e.currentTarget.style.color = text.primary as string;
-        }
+      title={workspace.folderPath || workspace.name}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          width: 4,
+          alignSelf: "stretch",
+          minHeight: 28,
+          borderRadius: 999,
+          background: color,
+          opacity: selected ? 1 : 0.72,
+          flex: "none",
+        }}
+      />
+      <KindIcon
+        size={13}
+        strokeWidth={2.1}
+        style={{ color, flex: "none" }}
+      />
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span style={{ fontSize: 13, fontWeight: 700, color: text.primary }}>
+          {workspaceKindLabel[workspace.kindRaw]}
+        </span>
+        {workspace.folderPath ? (
+          <span
+            className="truncate"
+            style={{
+              marginTop: 2,
+              fontSize: 10,
+              color: text.tertiary,
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            {workspace.folderPath}
+          </span>
+        ) : (
+          <span style={{ marginTop: 2, fontSize: 10, color: text.tertiary }}>
+            Ready
+          </span>
+        )}
+      </span>
+      {sessionCount > 0 && (
+        <CountBadge value={sessionCount} color="var(--color-ws-green)" />
+      )}
+    </button>
+  );
+}
+
+function UsageRow({
+  tool,
+  data,
+  selected,
+  onSelect,
+}: {
+  tool: Tool;
+  data?: CliToolUsage;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const color = toolBrandColor(tool);
+  const tokens = data
+    ? data.inputTokens + data.outputTokens + data.cachedTokens
+    : 0;
+  const limit = tool === "codex" && data ? codexLimitSummary(data) : null;
+  return (
+    <button
+      onClick={onSelect}
+      className="flex w-full items-center gap-2 text-left transition-colors"
+      style={{
+        padding: "8px 10px",
+        borderRadius: radius.row,
+        background: selected
+          ? "color-mix(in srgb, " + color + ", transparent 84%)"
+          : "color-mix(in srgb, " + surface.softPanel + ", transparent 62%)",
+        border: `1px solid ${selected ? "color-mix(in srgb, " + color + ", transparent 52%)" : surface.hairline}`,
+        color: text.primary,
       }}
-      onMouseLeave={(e) => {
-        if (!selected) {
-          e.currentTarget.style.background = "transparent";
-          e.currentTarget.style.color = text.muted as string;
-        }
+      title={`Open ${toolLabel(tool)}`}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: 999,
+          background: color,
+          boxShadow: selected ? `0 0 10px ${color}` : "none",
+          flex: "none",
+        }}
+      />
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span style={{ fontSize: 12, fontWeight: 700 }}>{toolLabel(tool)}</span>
+        <span
+          className="truncate"
+          style={{ marginTop: 2, fontSize: 10, color: text.tertiary }}
+        >
+          {data
+            ? `${data.activeSessions} active · ${fmt(tokens)} tokens`
+            : "Scanning local sessions"}
+          {data?.lastActivity ? ` · ${shortAgo(data.lastActivity)}` : ""}
+        </span>
+      </span>
+      {limit ? <LimitBadge label={limit} color={color} /> : null}
+    </button>
+  );
+}
+
+function SessionRow({ session, index }: { session: SessionInfo; index: number }) {
+  return (
+    <div
+      className="flex items-center gap-2"
+      style={{
+        padding: "6px 9px",
+        borderRadius: radius.row,
+        background: "color-mix(in srgb, " + surface.softPanel + ", transparent 58%)",
+        border: `1px solid ${surface.hairline}`,
+      }}
+      title={session.cwd ?? session.shell}
+    >
+      <Icons.terminal size={12} strokeWidth={2.2} color="var(--color-ws-green)" />
+      <span
+        className="truncate"
+        style={{
+          flex: 1,
+          fontSize: 11,
+          fontWeight: 650,
+          color: text.primary,
+          fontFamily: "var(--font-mono)",
+        }}
+      >
+        Terminal {index + 1}
+      </span>
+      <span style={{ fontSize: 10, color: text.tertiary }}>{session.pid}</span>
+    </div>
+  );
+}
+
+function CountBadge({ value, color }: { value: number; color: string }) {
+  return (
+    <span
+      className="font-mono"
+      style={{
+        fontSize: 10,
+        fontWeight: 800,
+        color,
+        padding: "1px 6px",
+        borderRadius: 999,
+        background: surface.inset,
+        border: `1px solid ${surface.hairline}`,
       }}
     >
-      <WorkspaceDot color={workspace.colorName as WorkspaceColor} />
-      <KindIcon
-        size={11}
-        strokeWidth={2}
-        style={{ color: text.tertiary, flex: "none" }}
-      />
-      {editing ? (
-        <input
-          autoFocus
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onClick={(e) => e.stopPropagation()}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") commit();
-            else if (e.key === "Escape") cancel();
-          }}
-          className="flex-1"
-          style={{
-            background: "var(--color-loom-bg-from)",
-            border: `1px solid ${surface.hairline}`,
-            borderRadius: 4,
-            padding: "2px 6px",
-            fontSize: 12,
-            fontWeight: 500,
-            color: text.primary,
-            outline: "none",
-          }}
-        />
-      ) : (
-        <span
-          className="truncate flex-1"
-          style={{ fontSize: 12, fontWeight: 500 }}
-        >
-          {workspace.name}
-        </span>
-      )}
-      {sessionCount > 0 && (
-        <span
-          className="flex items-center gap-0.5"
-          title={`${sessionCount} active session${sessionCount === 1 ? "" : "s"}`}
-          style={{
-            color: "var(--color-ws-green)",
-            fontSize: 10,
-            fontWeight: 600,
-            fontFamily: "var(--font-mono)",
-          }}
-        >
-          <Icons.terminal size={10} strokeWidth={2.2} />
-          {sessionCount}
-        </span>
-      )}
-      {workspace.taskBadge > 0 && (
-        <span
-          className="font-mono"
-          style={{
-            background: surface.softPanel,
-            borderRadius: 999,
-            padding: "1px 6px",
-            fontSize: 10,
-            fontWeight: 700,
-            color: text.muted,
-          }}
-        >
-          {workspace.taskBadge}
-        </span>
-      )}
-      <button
-        className="invisible rounded p-0.5 group-hover:visible"
-        onClick={(e) => {
-          e.stopPropagation();
-          if (confirm(`Delete workspace "${workspace.name}"?`)) onDelete();
-        }}
-        style={{ color: text.tertiary }}
-        aria-label="Delete workspace"
-      >
-        <Icons.trash size={11} strokeWidth={2} />
-      </button>
+      {value}
+    </span>
+  );
+}
+
+function LimitBadge({ label, color }: { label: string; color: string }) {
+  return (
+    <span
+      style={{
+        fontSize: 10,
+        fontWeight: 800,
+        color,
+        padding: "2px 6px",
+        borderRadius: 999,
+        background: "color-mix(in srgb, " + color + ", transparent 88%)",
+        border: `1px solid color-mix(in srgb, ${color}, transparent 58%)`,
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+function EmptyHint({ label }: { label: string }) {
+  return (
+    <div
+      style={{
+        padding: "10px 8px",
+        fontSize: 11,
+        color: text.tertiary,
+        textAlign: "center",
+      }}
+    >
+      {label}
     </div>
   );
 }
@@ -360,161 +399,32 @@ function countSessions(sessions: SessionInfo[], folderPath: string): number {
   }).length;
 }
 
-function NewWorkspaceForm({
-  onCreate,
-  onCancel,
-}: {
-  onCreate: (input: {
-    name: string;
-    folderPath: string;
-    color: WorkspaceColor;
-    kind: IpcKind;
-  }) => Promise<void>;
-  onCancel: () => void;
-}) {
-  const [name, setName] = useState("");
-  const [folderPath, setFolderPath] = useState("");
-  const [color, setColor] = useState<WorkspaceColor>("blue");
-  const [kind, setKind] = useState<IpcKind>("code");
-  const [busy, setBusy] = useState(false);
+function codexLimitSummary(data: CliToolUsage): string | null {
+  if (data.rateLimitReachedType) return "Limited";
+  const peak = [
+    data.rateLimitPrimaryUsedPercent,
+    data.rateLimitSecondaryUsedPercent,
+  ]
+    .filter((v): v is number => typeof v === "number")
+    .sort((a, b) => b - a)[0];
+  if (peak == null) return null;
+  return `${Math.round(peak)}%`;
+}
 
-  const pickFolder = async () => {
-    const folder = await ipc.fs.pickFolder();
-    if (folder) setFolderPath(folder as unknown as string);
-  };
+function fmt(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + "k";
+  return String(n);
+}
 
-  const submit = async () => {
-    if (!name.trim()) return;
-    setBusy(true);
-    try {
-      await onCreate({ name: name.trim(), folderPath, color, kind });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div
-      className="flex-none space-y-2"
-      style={{
-        padding: 12,
-        borderTop: `1px solid ${surface.hairline}`,
-        background: surface.softPanel,
-      }}
-    >
-      <input
-        autoFocus
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        placeholder="Workspace name"
-        className="w-full focus:outline-none"
-        style={{
-          background: "var(--color-loom-bg-from)",
-          border: `1px solid ${surface.hairline}`,
-          borderRadius: radius.control,
-          padding: "5px 8px",
-          fontSize: 12,
-          color: text.primary,
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") submit();
-          if (e.key === "Escape") onCancel();
-        }}
-      />
-      <button
-        type="button"
-        onClick={pickFolder}
-        className="w-full truncate text-left"
-        style={{
-          background: "var(--color-loom-bg-from)",
-          border: `1px solid ${surface.hairline}`,
-          borderRadius: radius.control,
-          padding: "5px 8px",
-          fontSize: 11,
-          color: folderPath ? text.primary : text.muted,
-        }}
-      >
-        {folderPath || "Pick folder…"}
-      </button>
-      <div className="flex flex-wrap gap-1.5">
-        {COLORS.map((c) => (
-          <button
-            key={c}
-            type="button"
-            onClick={() => setColor(c)}
-            aria-label={`Color ${c}`}
-            style={{
-              width: 18,
-              height: 18,
-              borderRadius: 999,
-              background: workspaceColorVar[c],
-              boxShadow: color === c
-                ? `0 0 0 2px var(--color-loom-bg-from), 0 0 0 3px ${workspaceColorVar[c]}`
-                : "0 0 0 1px rgba(255, 255, 255, 0.08)",
-            }}
-          />
-        ))}
-      </div>
-      <div className="flex gap-1">
-        {KINDS.map((k) => (
-          <button
-            key={k.value}
-            type="button"
-            onClick={() => setKind(k.value)}
-            className="flex-1"
-            style={{
-              padding: "5px 8px",
-              borderRadius: radius.control,
-              fontSize: 11,
-              border: `1px solid ${
-                kind === k.value ? "var(--color-loom-accent)" : surface.hairline
-              }`,
-              background:
-                kind === k.value
-                  ? "color-mix(in srgb, var(--color-loom-accent) 12%, transparent)"
-                  : "transparent",
-              color: kind === k.value ? text.primary : text.muted,
-            }}
-          >
-            {k.label}
-          </button>
-        ))}
-      </div>
-      <div className="flex gap-1 pt-1">
-        <button
-          type="button"
-          onClick={onCancel}
-          disabled={busy}
-          className="flex-1"
-          style={{
-            padding: "5px 8px",
-            borderRadius: radius.control,
-            fontSize: 11,
-            border: `1px solid ${surface.hairline}`,
-            background: "transparent",
-            color: text.muted,
-          }}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          onClick={submit}
-          disabled={busy || !name.trim()}
-          className="flex-1"
-          style={{
-            padding: "5px 8px",
-            borderRadius: radius.control,
-            fontSize: 11,
-            border: "none",
-            background: "var(--color-loom-accent)",
-            color: "white",
-            opacity: busy || !name.trim() ? 0.5 : 1,
-          }}
-        >
-          Create
-        </button>
-      </div>
-    </div>
-  );
+function shortAgo(iso: string): string {
+  const t = new Date(iso).getTime();
+  if (!t) return "";
+  const diff = Date.now() - t;
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return "now";
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
 }

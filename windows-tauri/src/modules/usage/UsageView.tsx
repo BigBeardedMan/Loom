@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Icons } from "../../lib/icons";
 import {
   useUsage,
@@ -10,6 +10,7 @@ import {
   type Timeframe,
 } from "../../lib/usage";
 import { useApp } from "../../lib/store";
+import { radius, surface, text } from "../../lib/theme";
 
 const TIMEFRAMES: Timeframe[] = ["day", "week", "month", "year"];
 
@@ -22,31 +23,37 @@ export function UsageView({ tool }: Props) {
   const setTimeframe = useApp((s) => s.setUsageTimeframe);
   const { data, loading, error, refresh } = useUsage(tool, timeframe);
   const [mode, setMode] = useState<UsageMode>("usage");
+  const [preview, setPreview] = useState<UsageData["recentPrompts"][number] | null>(null);
 
   const brand = toolBrandColor(tool);
+  const canShowLimits = tool === "codex" && !!data && hasCodexLimitData(data);
+
+  useEffect(() => {
+    if (mode === "limits" && !canShowLimits) setMode("usage");
+  }, [canShowLimits, mode]);
 
   return (
     <div
       className="flex h-full w-full flex-col overflow-hidden"
-      style={{ background: "var(--color-loom-cockpit)", color: "var(--color-loom-text)" }}
+      style={{ background: surface.panel, color: text.primary }}
     >
       <header
         className="flex items-center gap-3 flex-none"
         style={{
-          padding: "12px 18px",
-          borderBottom: "1px solid rgba(255,255,255,0.08)",
-          background: "rgba(0,0,0,0.18)",
+          padding: "11px 14px",
+          borderBottom: `1px solid ${surface.hairline}`,
+          background: "color-mix(in srgb, " + surface.softPanel + ", transparent 54%)",
         }}
       >
         <div
           className="flex items-center justify-center rounded-md"
-          style={{ width: 26, height: 26, background: brand, color: "white" }}
+          style={{ width: 26, height: 26, background: brand, color: "white", borderRadius: radius.control }}
         >
           <Icons.sparkles size={14} strokeWidth={2.2} />
         </div>
         <div className="flex flex-col leading-tight">
           <span style={{ fontSize: 13, fontWeight: 600 }}>{toolLabel(tool)}</span>
-          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>
+          <span style={{ fontSize: 11, color: text.muted }}>
             {mode === "limits" ? "Limits" : timeframeHeadline(timeframe)}
             {data?.lastActivity && ` · last activity ${shortAgo(data.lastActivity)}`}
           </span>
@@ -63,39 +70,41 @@ export function UsageView({ tool }: Props) {
                 padding: "4px 10px",
                 fontSize: 11,
                 fontWeight: 500,
-                borderRadius: 6,
-                border: "1px solid rgba(255,255,255,0.10)",
-                background: mode === "usage" && tf === timeframe ? brand : "rgba(255,255,255,0.05)",
-                color: mode === "usage" && tf === timeframe ? "white" : "rgba(255,255,255,0.7)",
+                borderRadius: radius.control,
+                border: `1px solid ${surface.hairline}`,
+                background: mode === "usage" && tf === timeframe ? brand : surface.softPanel,
+                color: mode === "usage" && tf === timeframe ? "white" : text.muted,
               }}
             >
               {timeframeLabel(tf)}
             </button>
           ))}
-          <button
-            onClick={() => setMode("limits")}
-            style={{
-              padding: "4px 10px",
-              fontSize: 11,
-              fontWeight: 600,
-              borderRadius: 6,
-              border: "1px solid rgba(255,255,255,0.10)",
-              background: mode === "limits" ? brand : "rgba(255,255,255,0.05)",
-              color: mode === "limits" ? "white" : "rgba(255,255,255,0.7)",
-            }}
-          >
-            Limits
-          </button>
+          {canShowLimits && (
+            <button
+              onClick={() => setMode("limits")}
+              style={{
+                padding: "4px 10px",
+                fontSize: 11,
+                fontWeight: 600,
+                borderRadius: radius.control,
+                border: `1px solid ${surface.hairline}`,
+                background: mode === "limits" ? brand : surface.softPanel,
+                color: mode === "limits" ? "white" : text.muted,
+              }}
+            >
+              Limits
+            </button>
+          )}
           <button
             onClick={refresh}
             aria-label="Refresh"
             style={{
               marginLeft: 4,
               padding: 6,
-              borderRadius: 6,
-              border: "1px solid rgba(255,255,255,0.10)",
-              background: "rgba(255,255,255,0.05)",
-              color: "rgba(255,255,255,0.7)",
+              borderRadius: radius.control,
+              border: `1px solid ${surface.hairline}`,
+              background: surface.softPanel,
+              color: text.muted,
             }}
           >
             {loading ? (
@@ -107,7 +116,7 @@ export function UsageView({ tool }: Props) {
         </div>
       </header>
 
-      <div className="scrollbar-thin flex-1 overflow-y-auto" style={{ padding: 18 }}>
+      <div className="scrollbar-thin flex-1 overflow-y-auto" style={{ padding: 16 }}>
         {error && (
           <div
             style={{
@@ -132,7 +141,7 @@ export function UsageView({ tool }: Props) {
         )}
 
         {data && data.isInstalled && (
-          mode === "limits" ? (
+          mode === "limits" && canShowLimits ? (
             <LimitsDashboard data={data} tool={tool} brand={brand} />
           ) : (
             <>
@@ -144,12 +153,15 @@ export function UsageView({ tool }: Props) {
               )}
               <DonutsRow data={data} brand={brand} />
               <HourlyHeatmap hours={data.hourlyDistribution} brand={brand} />
-              <PromptsAndTopics data={data} />
+              <PromptsAndTopics data={data} onPreview={setPreview} />
               <ProjectsList data={data} />
             </>
           )
         )}
       </div>
+      {preview && (
+        <PromptPreviewDialog prompt={preview} onClose={() => setPreview(null)} />
+      )}
     </div>
   );
 }
@@ -157,8 +169,8 @@ export function UsageView({ tool }: Props) {
 function StatGrid({ data }: { data: UsageData }) {
   const stats: Array<[string, string]> = [
     ["Sessions today", String(data.sessionsToday)],
-    ["Sessions total", String(data.sessionsTotal)],
-    ["Total tokens", fmt(data.inputTokens + data.outputTokens + data.cachedTokens)],
+    ["All sessions", String(data.sessionsTotal)],
+    ["Window tokens", fmt(data.inputTokens + data.outputTokens + data.cachedTokens)],
     ["Input", fmt(data.inputTokens)],
     ["Output", fmt(data.outputTokens)],
     ["Cached", fmt(data.cachedTokens)],
@@ -747,7 +759,13 @@ function HourlyHeatmap({ hours, brand }: { hours: number[]; brand: string }) {
   );
 }
 
-function PromptsAndTopics({ data }: { data: UsageData }) {
+function PromptsAndTopics({
+  data,
+  onPreview,
+}: {
+  data: UsageData;
+  onPreview: (prompt: UsageData["recentPrompts"][number]) => void;
+}) {
   if (data.recentPrompts.length === 0 && data.topTopics.length === 0) return null;
   return (
     <div className="grid grid-cols-2 gap-3" style={{ marginBottom: 18 }}>
@@ -764,9 +782,22 @@ function PromptsAndTopics({ data }: { data: UsageData }) {
         </div>
         <ul style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
           {data.recentPrompts.map((p, i) => (
-            <li key={i} style={{ fontSize: 11, color: "rgba(255,255,255,0.78)" }}>
-              <span style={{ color: "rgba(255,255,255,0.4)" }}>{shortAgo(p.timestamp)} </span>
-              <span>{p.text}</span>
+            <li key={i}>
+              <button
+                onClick={() => onPreview(p)}
+                className="w-full text-left"
+                style={{
+                  fontSize: 11,
+                  color: "rgba(255,255,255,0.78)",
+                  borderRadius: 6,
+                  padding: "4px 6px",
+                  background: "transparent",
+                }}
+                title="Preview prompt"
+              >
+                <span style={{ color: "rgba(255,255,255,0.4)" }}>{shortAgo(p.timestamp)} </span>
+                <span>{p.text}</span>
+              </button>
             </li>
           ))}
           {data.recentPrompts.length === 0 && (
@@ -838,6 +869,116 @@ function ProjectsList({ data }: { data: UsageData }) {
         ))}
       </div>
     </Section>
+  );
+}
+
+function PromptPreviewDialog({
+  prompt,
+  onClose,
+}: {
+  prompt: UsageData["recentPrompts"][number];
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{
+        background: "rgba(0,0,0,0.48)",
+        backdropFilter: "blur(18px) saturate(180%)",
+        WebkitBackdropFilter: "blur(18px) saturate(180%)",
+      }}
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[70vh] flex-col overflow-hidden"
+        style={{
+          width: "min(680px, calc(100vw - 48px))",
+          background: surface.panel,
+          border: `1px solid ${surface.hairline}`,
+          borderRadius: radius.panel,
+          boxShadow: "0 24px 52px rgba(0,0,0,0.48)",
+        }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header
+          className="flex items-center gap-3"
+          style={{
+            padding: "12px 14px",
+            borderBottom: `1px solid ${surface.hairline}`,
+            background: "color-mix(in srgb, " + surface.softPanel + ", transparent 44%)",
+          }}
+        >
+          <div className="flex min-w-0 flex-1 flex-col">
+            <span style={{ fontSize: 13, fontWeight: 700, color: text.primary }}>
+              Prompt
+            </span>
+            <span
+              className="truncate"
+              style={{ marginTop: 2, fontSize: 11, color: text.muted }}
+            >
+              {prompt.project || "Local session"} · {shortDateTime(prompt.timestamp)}
+            </span>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close prompt preview"
+            style={{
+              padding: 5,
+              borderRadius: radius.control,
+              color: text.muted,
+            }}
+          >
+            <Icons.close size={14} strokeWidth={2.2} />
+          </button>
+        </header>
+        <div className="scrollbar-thin overflow-y-auto" style={{ padding: 16 }}>
+          <pre
+            className="whitespace-pre-wrap break-words"
+            style={{
+              margin: 0,
+              color: text.primary,
+              fontSize: 13,
+              lineHeight: 1.55,
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            {prompt.text}
+          </pre>
+        </div>
+        <footer
+          className="flex justify-end"
+          style={{
+            padding: "10px 14px",
+            borderTop: `1px solid ${surface.hairline}`,
+          }}
+        >
+          <button
+            onClick={onClose}
+            style={{
+              padding: "5px 12px",
+              borderRadius: 999,
+              background: surface.softPanel,
+              border: `1px solid ${surface.hairline}`,
+              color: text.primary,
+              fontSize: 12,
+              fontWeight: 700,
+            }}
+          >
+            Done
+          </button>
+        </footer>
+      </div>
+    </div>
   );
 }
 

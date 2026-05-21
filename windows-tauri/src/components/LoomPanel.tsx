@@ -11,7 +11,7 @@ type Props = {
 };
 
 // Mirrors LoomPanel view in Loom/Workspace/WorkspaceView.swift (lines 480-560).
-// 14 px rounded card with hairline border and macOS-spec drop shadow.
+// 12 px rounded panel with hairline border and macOS-spec drop shadow.
 // Drag state swaps shadow + adds scale + glow border.
 export function LoomPanel({
   children,

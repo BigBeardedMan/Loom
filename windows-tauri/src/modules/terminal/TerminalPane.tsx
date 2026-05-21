@@ -336,10 +336,23 @@ function PaneCell({
   onCtrlC: () => void;
   hostRef: (el: HTMLDivElement | null) => void;
 }) {
+  const hostElRef = useRef<HTMLDivElement | null>(null);
   const label = session.title || displayCwd(session.cwd) || "shell";
+  const focusPane = () => {
+    onFocus();
+    session.term.focus();
+  };
+  const setHost = (el: HTMLDivElement | null) => {
+    hostElRef.current = el;
+    hostRef(el);
+  };
+  const onTerminalMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
+    focusPane();
+    moveCursorToClickedCell(session, hostElRef.current, event);
+  };
   return (
     <div
-      onClick={onFocus}
+      onClick={focusPane}
       style={{
         background: "#04050A",
         display: "flex",
@@ -411,9 +424,44 @@ function PaneCell({
           </button>
         )}
       </div>
-      <div ref={hostRef} className="flex-1 min-h-0" />
+      <div
+        ref={setHost}
+        className="flex-1 min-h-0"
+        onMouseDown={onTerminalMouseDown}
+      />
     </div>
   );
+}
+
+function moveCursorToClickedCell(
+  session: Session,
+  host: HTMLDivElement | null,
+  event: React.MouseEvent<HTMLDivElement>
+) {
+  if (event.button !== 0 || event.altKey || event.metaKey || event.ctrlKey) return;
+  const rowsEl = host?.querySelector(".xterm-rows") as HTMLElement | null;
+  if (!rowsEl) return;
+  const rect = rowsEl.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return;
+  const colWidth = rect.width / Math.max(1, session.term.cols);
+  const rowHeight = rect.height / Math.max(1, session.term.rows);
+  const col = Math.max(
+    0,
+    Math.min(session.term.cols - 1, Math.floor((event.clientX - rect.left) / colWidth))
+  );
+  const row = Math.max(
+    0,
+    Math.min(session.term.rows - 1, Math.floor((event.clientY - rect.top) / rowHeight))
+  );
+  const cursorRow = session.term.buffer.active.cursorY;
+  if (row !== cursorRow) return;
+  const delta = col - session.term.buffer.active.cursorX;
+  if (delta === 0) return;
+  event.preventDefault();
+  const distance = Math.min(Math.abs(delta), session.term.cols);
+  const sequence = delta > 0 ? `\x1b[${distance}C` : `\x1b[${distance}D`;
+  const bytes = Array.from(new TextEncoder().encode(sequence));
+  ipc.terminal.write(session.id, bytes).catch(() => {});
 }
 
 function computeGridStyle(count: number, axis: "h" | "v"): React.CSSProperties {
