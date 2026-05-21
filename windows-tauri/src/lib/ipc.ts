@@ -325,6 +325,19 @@ export const ipc = {
       invoke<EndpointTestResult>("endpoint_test", { id, authToken }),
   },
 
+  lmStudio: {
+    models: (endpointId: string) =>
+      invoke<LmStudioModel[]>("lmstudio_models", { endpointId }),
+    runtimeStatus: (endpointId?: string) =>
+      invoke<LmStudioRuntimeStatus>("lmstudio_runtime_status", { endpointId }),
+    prepare: (args: {
+      endpointId: string;
+      preferredModel?: string;
+      contextTarget?: number;
+      autoScale?: boolean;
+    }) => invoke<LmStudioRuntimeStatus>("lmstudio_prepare", { args }),
+  },
+
   usage: {
     read: (tool: "claude" | "codex" | "lmstudio", timeframe: "day" | "week" | "month" | "year") =>
       invoke<CliToolUsage>("usage_read", { tool, timeframe }),
@@ -419,7 +432,7 @@ export type LocalEndpoint = {
   id: string;
   name: string;
   baseUrl: string;
-  kind: "ollama" | "openai-compat";
+  kind: EndpointKind;
   defaultModel: string;
   requiresAuth: boolean;
   createdAt: number;
@@ -430,15 +443,37 @@ export type EndpointInput = {
   id?: string;
   name: string;
   baseUrl: string;
-  kind: "ollama" | "openai-compat";
+  kind: EndpointKind;
   defaultModel?: string;
   requiresAuth?: boolean;
 };
+
+export type EndpointKind = "ollama" | "openai-compat" | "lmstudio";
 
 export type EndpointTestResult = {
   ok: boolean;
   status: number;
   message: string;
+};
+
+export type LmStudioModel = {
+  id: string;
+  loaded: boolean;
+  contextLength: number | null;
+  quantization: string | null;
+  architecture: string | null;
+  trainedForToolUse: boolean | null;
+  schemaSupported: boolean | null;
+  detail: string;
+};
+
+export type LmStudioRuntimeStatus = {
+  cliInstalled: boolean;
+  serverReachable: boolean;
+  state: "no-endpoint" | "missing-cli" | "stopped" | "running" | string;
+  models: LmStudioModel[];
+  recommendedModelId: string | null;
+  lastError: string | null;
 };
 
 export type UsageBucket = {

@@ -14,7 +14,8 @@ Empty state shows a hint pointing at Add.
 If LM Studio's default server is already running on `localhost:1234` and no
 LM Studio endpoint exists yet, Loom shows an **LM Studio server detected**
 callout. Click **Add LM Studio** to save the standard local endpoint in one
-step.
+step. Windows also keeps an **Add LM Studio** shortcut in the endpoint toolbar
+so the standard `http://localhost:1234/v1` endpoint is one click away.
 
 ## Adding an endpoint
 
@@ -38,6 +39,8 @@ Click **Test connection** before saving:
 
 For LM Studio, the model menu lists loaded models first and includes available
 context length, quantization, and architecture details from `/api/v0/models`.
+On Windows, the Agent pane can also start the `lms` server and load the selected
+model from the LM Studio runtime strip.
 
 Test does **not** save the endpoint. You still have to click Save.
 
@@ -56,7 +59,7 @@ The trash icon:
 ## Storage
 
 - Endpoint metadata: `UserDefaults` under key `loom.localEndpoints`, JSON-encoded `[LocalEndpoint]`.
-- Auth tokens: macOS Keychain, service `com.chasesims.Loom`, account `local_endpoint_<UUID>`.
+- Auth tokens: macOS Keychain or Windows Credential Manager, scoped to the endpoint UUID.
 
 See [Keychain keys](../reference/keychain-keys.md).
 

@@ -38,6 +38,7 @@ export function TerminalPane({ workspace, blockId }: Props) {
 
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [showLaunchMenu, setShowLaunchMenu] = useState(false);
   const hostsRef = useRef<Map<string, HTMLDivElement>>(new Map());
   const sessionsRef = useRef<Session[]>([]);
   sessionsRef.current = sessions;
@@ -255,6 +256,13 @@ export function TerminalPane({ workspace, blockId }: Props) {
     ipc.terminal.write(id, Array.from(new TextEncoder().encode(text))).catch(() => {});
   };
 
+  const insertActiveCommand = (command: string) => {
+    const targetId = activeId || sessions[0]?.id;
+    if (!targetId) return;
+    writeTextToSession(targetId, `${command}\r`);
+    setShowLaunchMenu(false);
+  };
+
   const gridStyle = computeGridStyle(sessions.length, axis);
 
   return (
@@ -276,7 +284,62 @@ export function TerminalPane({ workspace, blockId }: Props) {
           {sessions.length >= 2 && axis === "v" && " · stacked"}
           {sessions.length === MAX_PANES && " · quad"}
         </span>
-        <div className="ml-auto flex items-center gap-1">
+        <div className="relative ml-auto flex items-center gap-1">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowLaunchMenu((open) => !open);
+            }}
+            disabled={sessions.length === 0}
+            title="Launch agent command"
+            aria-label="Launch agent command"
+            style={{
+              padding: 3,
+              color: "rgba(255,255,255,0.55)",
+              borderRadius: 4,
+              opacity: sessions.length === 0 ? 0.45 : 1,
+            }}
+          >
+            <Icons.sparkles size={11} strokeWidth={2} />
+          </button>
+          {showLaunchMenu && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: "absolute",
+                top: 22,
+                right: 0,
+                zIndex: 20,
+                width: 220,
+                padding: 7,
+                background: "rgba(13, 17, 24, 0.98)",
+                border: "1px solid rgba(255,255,255,0.12)",
+                borderRadius: 8,
+                boxShadow: "0 14px 32px rgba(0,0,0,0.45)",
+              }}
+            >
+              <LaunchMenuSection label="LM Studio">
+                <LaunchCommand label="lmstudio" onClick={() => insertActiveCommand("lmstudio")} />
+                <LaunchCommand
+                  label="lmstudio --allow-bash"
+                  onClick={() => insertActiveCommand("lmstudio --allow-bash")}
+                />
+                <LaunchCommand
+                  label="lmstudio --bypass-permissions"
+                  onClick={() => insertActiveCommand("lmstudio --bypass-permissions")}
+                />
+                <LaunchCommand
+                  label="lms server status"
+                  onClick={() => insertActiveCommand("lms server status")}
+                />
+              </LaunchMenuSection>
+              <LaunchMenuSection label="Other CLIs">
+                <LaunchCommand label="claude" onClick={() => insertActiveCommand("claude")} />
+                <LaunchCommand label="codex" onClick={() => insertActiveCommand("codex")} />
+                <LaunchCommand label="gemini" onClick={() => insertActiveCommand("gemini")} />
+              </LaunchMenuSection>
+            </div>
+          )}
           {sessions.length >= 2 && sessions.length < MAX_PANES && (
             <button
               onClick={toggleAxis}
@@ -715,6 +778,51 @@ function IconButton({
       style={{ padding: 3, color: "rgba(255,255,255,0.55)", borderRadius: 4 }}
     >
       {children}
+    </button>
+  );
+}
+
+function LaunchMenuSection({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div style={{ paddingBottom: 5 }}>
+      <div
+        style={{
+          padding: "4px 6px 3px",
+          fontSize: 9,
+          fontWeight: 700,
+          letterSpacing: 0.6,
+          textTransform: "uppercase",
+          color: "rgba(255,255,255,0.40)",
+        }}
+      >
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function LaunchCommand({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="w-full text-left"
+      style={{
+        display: "block",
+        padding: "5px 7px",
+        borderRadius: 5,
+        fontSize: 11,
+        color: "rgba(255,255,255,0.84)",
+        fontFamily: "var(--font-mono)",
+      }}
+    >
+      {label}
     </button>
   );
 }

@@ -1,5 +1,7 @@
 ## Changes
 
+- Windows Testing now treats LM Studio as a first-class Agent Pane provider with saved LM Studio endpoints, native `/api/v0/models` discovery, loaded-model prioritization, server status, runtime prepare, auto-scale controls, and terminal launch shortcuts.
+- macOS Testing Edition version metadata is now 8.2.77 to stay aligned with the Windows Testing release.
 - Windows Testing now restores the missing visible Settings button in the title bar, matching the macOS always-available settings entry point.
 - Windows Testing now moves the Settings close button to the top-right corner of the Settings panel for update-pill verification.
 - Windows Testing now normalizes updater public keys from either raw minisign keys or full `minisign.pub` contents before embedding and verifying installer signatures.
@@ -10,7 +12,7 @@
 - Windows Testing now verifies the downloaded NSIS installer bytes against the embedded Tauri updater public key before staging or running it.
 - Windows Testing updater failures now open the exact GitHub release page for the installer instead of the broad prerelease search page.
 - Windows release CI now smoke-tests the NSIS updater install flags before publishing release assets.
-- Windows Testing version metadata is now 8.2.76 for the next update-pill verification build.
+- Windows Testing version metadata is now 8.2.77 for the next update-pill verification build.
 - Windows releases now include a signed recovery bridge updater that old installed builds choose before the real NSIS installer, preventing the old GitHub browser fallback during the one-time recovery update.
 - Windows in-app updates no longer fall back to opening GitHub from the pill; the helper uses Tauri's NSIS updater arguments and a legacy silent fallback.
 - Windows releases now publish legacy installer aliases so older installed builds can see and install the next Testing Edition update.

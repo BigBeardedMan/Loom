@@ -6,10 +6,11 @@
 // data: { delta: { text: <chunk> } } }` envelope the Anthropic path emits,
 // so AgentPane's existing event handler works untouched.
 
+use crate::agents::lmstudio;
 use crate::db::endpoints;
 use crate::state::AppState;
-use keyring::Entry;
 use futures_util::StreamExt;
+use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
@@ -56,15 +57,22 @@ pub async fn agent_openai_send(
         None
     };
 
+    let mut args = args;
+    if endpoint.kind == "lmstudio" && args.model.trim().is_empty() {
+        let models = lmstudio::fetch_models(&endpoint.base_url)
+            .await
+            .map_err(|e| format!("Could not discover LM Studio models: {e}"))?;
+        let model = lmstudio::choose_model(&models, Some(endpoint.default_model.as_str()))
+            .ok_or_else(|| "No local LM Studio models were found.".to_string())?;
+        args.model = model.id.clone();
+    }
+
     let stream_id = Uuid::new_v4().to_string();
     let app_clone = app.clone();
     let stream_id_clone = stream_id.clone();
 
     tokio::spawn(async move {
-        let url = format!(
-            "{}/v1/chat/completions",
-            endpoint.base_url.trim_end_matches('/')
-        );
+        let url = lmstudio::chat_completions_url(&endpoint.base_url);
 
         let mut messages = args.messages.clone();
         if let Some(system) = args.system.as_deref().filter(|s| !s.is_empty()) {
@@ -101,6 +109,9 @@ pub async fn agent_openai_send(
             .post(&url)
             .header("content-type", "application/json")
             .header("accept", "text/event-stream");
+        if endpoint.kind == "lmstudio" {
+            req = req.bearer_auth("lm-studio");
+        }
         if let Some(token) = auth_token.as_deref() {
             req = req.bearer_auth(token);
         }
@@ -116,7 +127,11 @@ pub async fn agent_openai_send(
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            emit_error(&app_clone, &stream_id_clone, format!("HTTP {status}: {text}"));
+            emit_error(
+                &app_clone,
+                &stream_id_clone,
+                format!("HTTP {status}: {text}"),
+            );
             return;
         }
 

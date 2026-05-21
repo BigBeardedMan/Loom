@@ -50,6 +50,13 @@ Loom offers an **Add LM Studio** shortcut that creates this endpoint for you.
 Loaded models appear first in the Agent picker with their context and
 quantization details.
 
+On Windows, the Agent pane also exposes a compact LM Studio runtime strip. Use
+**Refresh** to re-read `/api/v0/models`, **Prepare** to start the `lms` server
+and load the selected or recommended model, and **Auto-scale** to request the
+target context size with `--parallel 1 --gpu max`. The terminal launch menu can
+insert `lmstudio`, `lmstudio --allow-bash`, `lmstudio --bypass-permissions`, or
+`lms server status` into the active shell.
+
 > Prefer a terminal? The [`lmstudio` CLI](lmstudio-cli.md) ships with Loom and gives you a `claude`-style agent loop in any terminal, backed by the same LM Studio server. Tasks flow into Loom's Tasks pane automatically.
 
 ## OpenAI-compatible setup (llama.cpp, Jan, vLLM)
@@ -74,7 +81,10 @@ Same shape: configure **Base URL** to wherever the server listens (commonly `htt
 
 ## Auth tokens
 
-Some local servers (or the LAN proxies in front of them) want a bearer token. Toggle **Requires auth** in the editor and paste the token. It's stored in macOS Keychain under account `local_endpoint_<UUID>` and sent as `Authorization: Bearer <token>` on every request.
+Some local servers (or the LAN proxies in front of them) want a bearer token.
+Toggle **Requires auth** in the editor and paste the token. It's stored in
+macOS Keychain or Windows Credential Manager and sent as
+`Authorization: Bearer <token>` on every request.
 
 ## Streaming and cancel
 

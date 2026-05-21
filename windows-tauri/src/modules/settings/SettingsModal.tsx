@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Icons } from "../../lib/icons";
 import { useApp } from "../../lib/store";
-import { ipc, type LocalEndpoint, type McpServer } from "../../lib/ipc";
+import { ipc, type EndpointKind, type LocalEndpoint, type McpServer } from "../../lib/ipc";
 import { modal, radius, surface, text } from "../../lib/theme";
 
 type Tab = "appearance" | "providers" | "mcp" | "shell" | "tasks" | "advanced" | "about";
@@ -134,6 +134,49 @@ function Hint({ children }: { children: ReactNode }) {
       {children}
     </p>
   );
+}
+
+const ENDPOINT_KINDS: { value: EndpointKind; label: string }[] = [
+  { value: "ollama", label: "Ollama" },
+  { value: "lmstudio", label: "LM Studio" },
+  { value: "openai-compat", label: "OpenAI-compatible" },
+];
+
+function endpointKindLabel(kind: EndpointKind): string {
+  return ENDPOINT_KINDS.find((entry) => entry.value === kind)?.label ?? kind;
+}
+
+function defaultBaseUrl(kind: EndpointKind): string {
+  switch (kind) {
+    case "ollama":
+      return "http://localhost:11434";
+    case "lmstudio":
+      return "http://localhost:1234/v1";
+    case "openai-compat":
+      return "https://api.example.com";
+  }
+}
+
+function defaultEndpointName(kind: EndpointKind): string {
+  switch (kind) {
+    case "ollama":
+      return "Local Ollama";
+    case "lmstudio":
+      return "LM Studio";
+    case "openai-compat":
+      return "OpenAI-compatible";
+  }
+}
+
+function defaultModelPlaceholder(kind: EndpointKind): string {
+  switch (kind) {
+    case "ollama":
+      return "llama3.2";
+    case "lmstudio":
+      return "auto-discovered via /api/v0/models";
+    case "openai-compat":
+      return "gpt-4o-mini";
+  }
 }
 
 function AppearancePanel() {
@@ -281,8 +324,8 @@ function ProvidersPanel() {
           <button
             onClick={() =>
               setEditing({
-                name: "",
-                baseUrl: "",
+                name: defaultEndpointName("ollama"),
+                baseUrl: defaultBaseUrl("ollama"),
                 kind: "ollama",
                 defaultModel: "",
                 requiresAuth: false,
@@ -301,10 +344,32 @@ function ProvidersPanel() {
           >
             + Add endpoint
           </button>
+          <button
+            onClick={() =>
+              setEditing({
+                name: defaultEndpointName("lmstudio"),
+                baseUrl: defaultBaseUrl("lmstudio"),
+                kind: "lmstudio",
+                defaultModel: "",
+                requiresAuth: false,
+                authToken: "",
+              })
+            }
+            style={{
+              padding: "4px 10px",
+              fontSize: 11,
+              borderRadius: 6,
+              background: "rgba(255,255,255,0.06)",
+              color: text.primary,
+              border: `1px solid ${surface.hairline}`,
+            }}
+          >
+            Add LM Studio
+          </button>
         </div>
         <Hint>
-          Add an Ollama (<code>http://localhost:11434</code>) or any OpenAI-compatible base URL.
-          Auth tokens (if any) live in Credential Manager.
+          Add Ollama, LM Studio (<code>http://localhost:1234/v1</code>), or any
+          OpenAI-compatible base URL. Auth tokens (if any) live in Credential Manager.
         </Hint>
         {endpoints.length === 0 ? (
           <div
@@ -361,7 +426,7 @@ type EndpointDraft = {
   id?: string;
   name: string;
   baseUrl: string;
-  kind: "ollama" | "openai-compat";
+  kind: EndpointKind;
   defaultModel: string;
   requiresAuth: boolean;
   authToken: string;
@@ -418,7 +483,7 @@ function EndpointRow({
             fontWeight: 600,
           }}
         >
-          {endpoint.kind}
+          {endpointKindLabel(endpoint.kind)}
         </span>
         <button
           onClick={test}
@@ -500,7 +565,7 @@ function EndpointEditor({
 }) {
   const [name, setName] = useState(draft.name);
   const [baseUrl, setBaseUrl] = useState(draft.baseUrl);
-  const [kind, setKind] = useState<"ollama" | "openai-compat">(draft.kind);
+  const [kind, setKind] = useState<EndpointKind>(draft.kind);
   const [defaultModel, setDefaultModel] = useState(draft.defaultModel);
   const [requiresAuth, setRequiresAuth] = useState(draft.requiresAuth);
   const [authToken, setAuthToken] = useState(draft.authToken);
@@ -536,6 +601,18 @@ function EndpointEditor({
     }
   };
 
+  const changeKind = (next: EndpointKind) => {
+    const previousDefaultName = defaultEndpointName(kind);
+    const previousDefaultBaseUrl = defaultBaseUrl(kind);
+    setKind(next);
+    if (!name.trim() || name === previousDefaultName) {
+      setName(defaultEndpointName(next));
+    }
+    if (!baseUrl.trim() || baseUrl === previousDefaultBaseUrl) {
+      setBaseUrl(defaultBaseUrl(next));
+    }
+  };
+
   return (
     <div
       role="dialog"
@@ -565,16 +642,16 @@ function EndpointEditor({
               autoFocus
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Local Ollama"
+              placeholder={defaultEndpointName(kind)}
               style={fieldStyle}
             />
           </Field>
           <Field label="Kind">
             <div className="flex gap-1.5">
-              {(["ollama", "openai-compat"] as const).map((k) => (
+              {ENDPOINT_KINDS.map(({ value: k, label }) => (
                 <button
                   key={k}
-                  onClick={() => setKind(k)}
+                  onClick={() => changeKind(k)}
                   style={{
                     flex: 1,
                     padding: "5px 8px",
@@ -590,7 +667,7 @@ function EndpointEditor({
                     color: k === kind ? text.primary : text.muted,
                   }}
                 >
-                  {k === "ollama" ? "Ollama" : "OpenAI-compatible"}
+                  {label}
                 </button>
               ))}
             </div>
@@ -599,9 +676,7 @@ function EndpointEditor({
             <input
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder={
-                kind === "ollama" ? "http://localhost:11434" : "https://api.example.com"
-              }
+              placeholder={defaultBaseUrl(kind)}
               style={fieldStyle}
             />
           </Field>
@@ -609,7 +684,7 @@ function EndpointEditor({
             <input
               value={defaultModel}
               onChange={(e) => setDefaultModel(e.target.value)}
-              placeholder={kind === "ollama" ? "llama3.2" : "gpt-4o-mini"}
+              placeholder={defaultModelPlaceholder(kind)}
               style={fieldStyle}
             />
           </Field>

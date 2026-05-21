@@ -1,7 +1,7 @@
 #![cfg(target_os = "windows")]
 
 //! Walks a process tree to detect when a CLI agent (claude.exe, codex.exe,
-//! gemini.exe, ollama.exe) is the foreground descendant of a given shell PID.
+//! gemini.exe, ollama.exe, lmstudio.exe) is the foreground descendant of a given shell PID.
 //! This is the Windows replacement for the macOS `tcgetpgrp`-based detection
 //! in Loom's terminal foreground-command logic.
 
@@ -18,6 +18,10 @@ const AGENT_BINARIES: &[&str] = &[
     "codex.exe",
     "gemini.exe",
     "ollama.exe",
+    "lmstudio.exe",
+    "lmstudio.cmd",
+    "lmstudio.bat",
+    "lms.exe",
     "node.exe",
     "python.exe",
     "python3.exe",

@@ -1,9 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import { Icons } from "../../lib/icons";
 import { useApp } from "../../lib/store";
-import { ipc, on, type LocalEndpoint, type Workspace } from "../../lib/ipc";
+import {
+  ipc,
+  on,
+  type LmStudioModel,
+  type LmStudioRuntimeStatus,
+  type LocalEndpoint,
+  type Workspace,
+} from "../../lib/ipc";
 
-type Vendor = "claude" | "codex" | "gemini" | "ollama" | "anthropic" | "openai-compat";
+type Vendor =
+  | "claude"
+  | "codex"
+  | "gemini"
+  | "ollama"
+  | "lmstudio"
+  | "anthropic"
+  | "openai-compat";
 
 type Turn = {
   id: string;
@@ -18,9 +32,12 @@ const VENDORS: { value: Vendor; label: string }[] = [
   { value: "codex", label: "Codex" },
   { value: "gemini", label: "Gemini" },
   { value: "ollama", label: "Ollama" },
+  { value: "lmstudio", label: "LM Studio" },
   { value: "openai-compat", label: "OpenAI-compatible" },
   { value: "anthropic", label: "Anthropic API" },
 ];
+
+const LOCAL_HTTP_VENDORS = new Set<Vendor>(["ollama", "lmstudio", "openai-compat"]);
 
 type Props = { workspace: Workspace; blockId?: string };
 
@@ -43,6 +60,17 @@ export function AgentPane({ workspace, blockId }: Props) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [lmModels, setLmModels] = useState<LmStudioModel[]>([]);
+  const [lmRuntime, setLmRuntime] = useState<LmStudioRuntimeStatus | null>(null);
+  const [lmModelsLoading, setLmModelsLoading] = useState(false);
+  const [lmBusy, setLmBusy] = useState(false);
+  const [lmAutoScale, setLmAutoScale] = useState(
+    () => localStorage.getItem(`loom.lmstudio.autoScale.${workspace.id}`) !== "false"
+  );
+  const [lmContextTarget, setLmContextTarget] = useState(() => {
+    const saved = Number(localStorage.getItem(`loom.lmstudio.context.${workspace.id}`));
+    return Number.isFinite(saved) && saved >= 4096 ? saved : 65536;
+  });
   const cleanupRef = useRef<(() => void) | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -59,14 +87,39 @@ export function AgentPane({ workspace, blockId }: Props) {
   }, [endpointId, workspace.id]);
 
   useEffect(() => {
+    localStorage.setItem(
+      `loom.lmstudio.autoScale.${workspace.id}`,
+      lmAutoScale ? "true" : "false"
+    );
+  }, [lmAutoScale, workspace.id]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      `loom.lmstudio.context.${workspace.id}`,
+      String(lmContextTarget)
+    );
+  }, [lmContextTarget, workspace.id]);
+
+  useEffect(() => {
     ipc.endpoints.list().then(setEndpoints).catch(() => {});
   }, []);
 
-  const matchingEndpoints = endpoints.filter((e) =>
-    vendor === "ollama" ? e.kind === "ollama" : vendor === "openai-compat" ? e.kind === "openai-compat" : false
-  );
+  const matchingEndpoints = endpoints.filter((e) => {
+    if (vendor === "ollama") return e.kind === "ollama";
+    if (vendor === "lmstudio") return e.kind === "lmstudio";
+    if (vendor === "openai-compat") return e.kind === "openai-compat";
+    return false;
+  });
   const activeEndpoint =
     matchingEndpoints.find((e) => e.id === endpointId) ?? matchingEndpoints[0];
+  const usesEndpoint = LOCAL_HTTP_VENDORS.has(vendor);
+
+  useEffect(() => {
+    if (!usesEndpoint || matchingEndpoints.length === 0) return;
+    if (!matchingEndpoints.some((endpoint) => endpoint.id === endpointId)) {
+      setEndpointId(matchingEndpoints[0].id);
+    }
+  }, [endpointId, matchingEndpoints, usesEndpoint]);
 
   useEffect(() => {
     if (!blockId) return;
@@ -89,6 +142,109 @@ export function AgentPane({ workspace, blockId }: Props) {
     scrollRef.current?.scrollTo({ top: 99999, behavior: "smooth" });
   }, [turns]);
 
+  useEffect(() => {
+    if (vendor !== "lmstudio" || !activeEndpoint) {
+      setLmModels([]);
+      setLmRuntime(null);
+      setLmModelsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLmModelsLoading(true);
+    Promise.all([
+      ipc.lmStudio.models(activeEndpoint.id).catch(() => [] as LmStudioModel[]),
+      ipc.lmStudio.runtimeStatus(activeEndpoint.id),
+    ])
+      .then(([models, runtime]) => {
+        if (cancelled) return;
+        setLmModels(models);
+        setLmRuntime(runtime);
+        const recommended =
+          runtime.recommendedModelId ||
+          models.find((entry) => entry.loaded)?.id ||
+          models[0]?.id ||
+          activeEndpoint.defaultModel;
+        if (recommended && (!model.trim() || !models.some((entry) => entry.id === model))) {
+          setModel(recommended);
+        }
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setLmRuntime({
+          cliInstalled: false,
+          serverReachable: false,
+          state: "stopped",
+          models: [],
+          recommendedModelId: null,
+          lastError: String(e),
+        });
+      })
+      .finally(() => {
+        if (!cancelled) setLmModelsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeEndpoint?.id, vendor]);
+
+  const refreshLmStudio = async () => {
+    if (!activeEndpoint) return;
+    setLmModelsLoading(true);
+    try {
+      const runtime = await ipc.lmStudio.runtimeStatus(activeEndpoint.id);
+      setLmRuntime(runtime);
+      setLmModels(runtime.models);
+      const recommended =
+        runtime.recommendedModelId ||
+        runtime.models.find((entry) => entry.loaded)?.id ||
+        runtime.models[0]?.id ||
+        activeEndpoint.defaultModel;
+      if (recommended && (!model.trim() || !runtime.models.some((entry) => entry.id === model))) {
+        setModel(recommended);
+      }
+    } catch (e) {
+      setLmRuntime((current) => ({
+        cliInstalled: current?.cliInstalled ?? false,
+        serverReachable: current?.serverReachable ?? false,
+        state: current?.state ?? "stopped",
+        models: current?.models ?? [],
+        recommendedModelId: current?.recommendedModelId ?? null,
+        lastError: String(e),
+      }));
+    } finally {
+      setLmModelsLoading(false);
+    }
+  };
+
+  const prepareLmStudio = async () => {
+    if (!activeEndpoint) return;
+    setLmBusy(true);
+    try {
+      const runtime = await ipc.lmStudio.prepare({
+        endpointId: activeEndpoint.id,
+        preferredModel: model || activeEndpoint.defaultModel || undefined,
+        contextTarget: lmContextTarget,
+        autoScale: lmAutoScale,
+      });
+      setLmRuntime(runtime);
+      setLmModels(runtime.models);
+      if (runtime.recommendedModelId) setModel(runtime.recommendedModelId);
+    } catch (e) {
+      setLmRuntime((current) => ({
+        cliInstalled: current?.cliInstalled ?? false,
+        serverReachable: current?.serverReachable ?? false,
+        state: current?.state ?? "stopped",
+        models: current?.models ?? [],
+        recommendedModelId: current?.recommendedModelId ?? null,
+        lastError: String(e),
+      }));
+    } finally {
+      setLmBusy(false);
+    }
+  };
+
   const submit = async () => {
     const prompt = draft.trim();
     if (!prompt || busy) return;
@@ -107,7 +263,11 @@ export function AgentPane({ workspace, blockId }: Props) {
 
     try {
       if (vendor === "anthropic") await runAnthropic(prompt, asstId);
-      else if (vendor === "openai-compat" || (vendor === "ollama" && activeEndpoint))
+      else if (
+        vendor === "openai-compat" ||
+        vendor === "lmstudio" ||
+        (vendor === "ollama" && activeEndpoint)
+      )
         await runOpenAi(prompt, asstId);
       else await runCli(prompt, asstId);
     } catch (e) {
@@ -156,9 +316,13 @@ export function AgentPane({ workspace, blockId }: Props) {
       throw new Error("No endpoint configured. Open Settings → AI Providers to add one.");
     }
     const messages = [{ role: "user", content: prompt }];
+    const selectedModel =
+      vendor === "lmstudio"
+        ? model || lmRuntime?.recommendedModelId || activeEndpoint.defaultModel || ""
+        : model || activeEndpoint.defaultModel || "";
     const streamId = await ipc.agents.openaiSend({
       endpointId: activeEndpoint.id,
-      model: model || activeEndpoint.defaultModel || "",
+      model: selectedModel,
       messages,
       maxTokens: 4096,
     });
@@ -296,7 +460,7 @@ export function AgentPane({ workspace, blockId }: Props) {
             }}
           />
         )}
-        {(vendor === "ollama" || vendor === "openai-compat") && (
+        {usesEndpoint && (
           <>
             {matchingEndpoints.length > 0 ? (
               <select
@@ -324,27 +488,174 @@ export function AgentPane({ workspace, blockId }: Props) {
                 Add one in Settings → AI Providers
               </span>
             )}
-            {(vendor === "openai-compat" || (vendor === "ollama" && activeEndpoint)) && (
-              <input
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder={activeEndpoint?.defaultModel || "model"}
-                className="focus:outline-none"
-                style={{
-                  background: "rgba(255, 255, 255, 0.06)",
-                  border: "1px solid rgba(255, 255, 255, 0.10)",
-                  borderRadius: 4,
-                  padding: "3px 8px",
-                  fontSize: 11,
-                  width: 140,
-                  color: "rgba(255, 255, 255, 0.9)",
-                  fontFamily: "var(--font-mono)",
-                }}
-              />
+            {activeEndpoint && (
+              vendor === "lmstudio" && lmModels.length > 0 ? (
+                <select
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  className="focus:outline-none"
+                  style={{
+                    background: "rgba(255, 255, 255, 0.06)",
+                    border: "1px solid rgba(255, 255, 255, 0.10)",
+                    borderRadius: 4,
+                    padding: "3px 8px",
+                    fontSize: 11,
+                    width: 220,
+                    color: "rgba(255, 255, 255, 0.9)",
+                    fontFamily: "var(--font-mono)",
+                  }}
+                >
+                  {lmModels.map((entry) => (
+                    <option key={entry.id} value={entry.id}>
+                      {entry.loaded ? "Loaded · " : ""}
+                      {entry.id}
+                      {entry.detail ? ` · ${entry.detail}` : ""}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder={
+                    vendor === "lmstudio"
+                      ? activeEndpoint.defaultModel || "auto-discover model"
+                      : activeEndpoint.defaultModel || "model"
+                  }
+                  className="focus:outline-none"
+                  style={{
+                    background: "rgba(255, 255, 255, 0.06)",
+                    border: "1px solid rgba(255, 255, 255, 0.10)",
+                    borderRadius: 4,
+                    padding: "3px 8px",
+                    fontSize: 11,
+                    width: 140,
+                    color: "rgba(255, 255, 255, 0.9)",
+                    fontFamily: "var(--font-mono)",
+                  }}
+                />
+              )
             )}
           </>
         )}
       </div>
+
+      {vendor === "lmstudio" && (
+        <div
+          className="flex items-center gap-2 flex-none"
+          style={{
+            padding: "7px 12px",
+            background: "rgba(255, 255, 255, 0.035)",
+            borderBottom: "1px solid rgba(255, 255, 255, 0.08)",
+            color: "rgba(255, 255, 255, 0.74)",
+            fontSize: 11,
+          }}
+        >
+          <Icons.cpu
+            size={13}
+            strokeWidth={2}
+            color={lmRuntime?.serverReachable ? "var(--color-ws-green)" : "rgba(255,255,255,0.5)"}
+          />
+          <span style={{ fontWeight: 650, color: "rgba(255,255,255,0.88)" }}>
+            {lmRuntimeLabel(lmRuntime, activeEndpoint)}
+          </span>
+          {lmRuntime?.recommendedModelId && (
+            <span
+              style={{
+                maxWidth: 280,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                fontFamily: "var(--font-mono)",
+              }}
+              title={lmRuntime.recommendedModelId}
+            >
+              {lmRuntime.recommendedModelId}
+            </span>
+          )}
+          <button
+            onClick={refreshLmStudio}
+            disabled={!activeEndpoint || lmModelsLoading || lmBusy}
+            title="Refresh LM Studio"
+            aria-label="Refresh LM Studio"
+            style={{
+              marginLeft: "auto",
+              padding: 3,
+              borderRadius: 4,
+              color: "rgba(255,255,255,0.58)",
+              opacity: !activeEndpoint || lmModelsLoading || lmBusy ? 0.5 : 1,
+            }}
+          >
+            <Icons.refresh
+              size={11}
+              strokeWidth={2}
+              className={lmModelsLoading ? "animate-spin" : undefined}
+            />
+          </button>
+          <label className="flex items-center gap-1.5" style={{ whiteSpace: "nowrap" }}>
+            <input
+              type="checkbox"
+              checked={lmAutoScale}
+              onChange={(e) => setLmAutoScale(e.target.checked)}
+              style={{ accentColor: "var(--color-loom-accent)" }}
+            />
+            Auto-scale
+          </label>
+          <input
+            type="number"
+            min={4096}
+            max={131072}
+            step={4096}
+            value={lmContextTarget}
+            onChange={(e) => setLmContextTarget(Number(e.target.value) || 65536)}
+            title="Context target"
+            aria-label="LM Studio context target"
+            style={{
+              width: 78,
+              background: "rgba(255, 255, 255, 0.06)",
+              border: "1px solid rgba(255, 255, 255, 0.10)",
+              borderRadius: 4,
+              padding: "3px 6px",
+              color: "rgba(255,255,255,0.88)",
+              fontSize: 11,
+              fontFamily: "var(--font-mono)",
+            }}
+          />
+          <button
+            onClick={prepareLmStudio}
+            disabled={!activeEndpoint || lmBusy}
+            className="flex items-center gap-1"
+            style={{
+              padding: "4px 9px",
+              borderRadius: 5,
+              background: "var(--color-loom-accent)",
+              color: "white",
+              opacity: !activeEndpoint || lmBusy ? 0.55 : 1,
+            }}
+          >
+            {lmBusy ? (
+              <Icons.spinner size={11} strokeWidth={2} className="animate-spin" />
+            ) : (
+              <Icons.server size={11} strokeWidth={2} />
+            )}
+            Prepare
+          </button>
+          {lmRuntime?.lastError && (
+            <span
+              style={{
+                color: "rgb(242,99,46)",
+                maxWidth: 260,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+              title={lmRuntime.lastError}
+            >
+              {lmRuntime.lastError}
+            </span>
+          )}
+        </div>
+      )}
 
       <div
         ref={scrollRef}
@@ -482,4 +793,17 @@ export function AgentPane({ workspace, blockId }: Props) {
       </div>
     </div>
   );
+}
+
+function lmRuntimeLabel(
+  runtime: LmStudioRuntimeStatus | null,
+  endpoint?: LocalEndpoint
+): string {
+  if (!endpoint) return "No LM Studio endpoint";
+  if (!runtime) return "Checking LM Studio";
+  if (runtime.state === "missing-cli") return "LM Studio CLI missing";
+  if (runtime.state === "running") return "LM Studio running";
+  if (runtime.state === "stopped") return "LM Studio stopped";
+  if (runtime.state === "no-endpoint") return "No LM Studio endpoint";
+  return runtime.state;
 }
