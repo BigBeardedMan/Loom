@@ -1,13 +1,14 @@
 ## Changes
 
 - Windows Testing now restores the missing visible Settings button in the title bar, matching the macOS always-available settings entry point.
+- Windows Testing updater helper scripts now strip Windows extended-length `\\?\` path prefixes before invoking staged installers, fixing the silent install failure where `cmd.exe` reported "The system cannot find the path specified."
 - Windows Testing workspace rows now show the workspace name only, removing the duplicated Prompt, Ideas, and Review wording and the extra Ready subtitle.
 - Windows Testing now keeps Recently Deleted anchored at the bottom of the terminal sidebar section, matching the macOS terminal history layout.
 - Windows Testing updater selection now requires a strictly newer `testing-*` semver tag and a Windows installer whose filename version matches that exact tag.
 - Windows Testing now verifies the downloaded NSIS installer bytes against the embedded Tauri updater public key before staging or running it.
 - Windows Testing updater failures now open the exact GitHub release page for the installer instead of the broad prerelease search page.
 - Windows release CI now smoke-tests the NSIS updater install flags before publishing release assets.
-- Testing Edition version metadata is now 8.2.70 for both macOS and Windows.
+- Testing Edition version metadata is now 8.2.71 for both macOS and Windows.
 - Windows releases now include a signed recovery bridge updater that old installed builds choose before the real NSIS installer, preventing the old GitHub browser fallback during the one-time recovery update.
 - Windows in-app updates no longer fall back to opening GitHub from the pill; the helper uses Tauri's NSIS updater arguments and a legacy silent fallback.
 - Windows releases now publish legacy installer aliases so older installed builds can see and install the next Testing Edition update.

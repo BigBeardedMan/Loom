@@ -330,6 +330,14 @@ fn verify_installer_signature(installer: &[u8], sig_asset: &[u8]) -> Result<(), 
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
+fn windows_cmd_path(path: &str) -> String {
+    path.strip_prefix(r"\\?\UNC\")
+        .map(|rest| format!(r"\\{rest}"))
+        .or_else(|| path.strip_prefix(r"\\?\").map(str::to_string))
+        .unwrap_or_else(|| path.to_string())
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
 fn windows_update_helper_script(
     parent_pid: u32,
     installer_path: &str,
@@ -379,9 +387,9 @@ echo done >> \"%LOGFILE%\"\r\n\
 :cleanup\r\n\
 (goto) 2>nul & del \"%~f0\"\r\n",
         pid = parent_pid,
-        installer = installer_path.replace('"', ""),
+        installer = windows_cmd_path(installer_path).replace('"', ""),
         app_exe_name = app_exe_name.replace('"', ""),
-        exe = exe_path.replace('"', ""),
+        exe = windows_cmd_path(exe_path).replace('"', ""),
     )
 }
 
@@ -532,13 +540,13 @@ pub fn update_run_installer(
     // and intentionally never opens GitHub from an in-app update attempt.
     #[cfg(windows)]
     {
-        let installer_path = path.to_string_lossy().to_string();
+        let installer_path = windows_cmd_path(&path.to_string_lossy());
         let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
         let app_exe_name = exe
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "loom.exe".to_string());
-        let exe_path = exe.to_string_lossy().to_string();
+        let exe_path = windows_cmd_path(&exe.to_string_lossy());
         let parent_pid = std::process::id();
 
         let temp = std::env::temp_dir();
@@ -702,5 +710,41 @@ QtKMXWyYcwdpZAlPF7tE2ENJkRd1ujvKjlj1m9RtHTBnZPa5WKU5uWRs5GoP5M/VqE81QFuMKI5k/SfN
         assert!(script.contains("\" /S\r\n"));
         assert!(!script.contains("github.com"));
         assert!(!script.contains("release page"));
+    }
+
+    #[test]
+    fn windows_cmd_path_strips_extended_length_prefixes_for_batch_commands() {
+        assert_eq!(
+            windows_cmd_path(
+                r"\\?\C:\Users\Chase\AppData\Roaming\com.chasesims.LoomTestingEdition\staging\Loom.Bridge_8.2.70_arm64-setup.exe"
+            ),
+            r"C:\Users\Chase\AppData\Roaming\com.chasesims.LoomTestingEdition\staging\Loom.Bridge_8.2.70_arm64-setup.exe"
+        );
+        assert_eq!(
+            windows_cmd_path(r"\\?\UNC\server\share\Loom.Testing.Edition_8.2.71_x64-setup.exe"),
+            r"\\server\share\Loom.Testing.Edition_8.2.71_x64-setup.exe"
+        );
+        assert_eq!(
+            windows_cmd_path(r"C:\Users\Chase\Downloads\Loom.exe"),
+            r"C:\Users\Chase\Downloads\Loom.exe"
+        );
+    }
+
+    #[test]
+    fn windows_helper_never_writes_extended_length_paths_to_batch() {
+        let script = windows_update_helper_script(
+            628,
+            r"\\?\C:\Users\Chase\AppData\Roaming\com.chasesims.LoomTestingEdition\staging\Loom.Bridge_8.2.70_arm64-setup.exe",
+            "Loom Testing Edition.exe",
+            r"\\?\C:\Users\Chase\AppData\Local\Loom Testing Edition\Loom Testing Edition.exe",
+        );
+
+        assert!(!script.contains(r"\\?\"));
+        assert!(script.contains(
+            r"C:\Users\Chase\AppData\Roaming\com.chasesims.LoomTestingEdition\staging\Loom.Bridge_8.2.70_arm64-setup.exe"
+        ));
+        assert!(script.contains(
+            r"C:\Users\Chase\AppData\Local\Loom Testing Edition\Loom Testing Edition.exe"
+        ));
     }
 }
