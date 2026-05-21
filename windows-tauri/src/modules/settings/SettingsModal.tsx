@@ -26,7 +26,7 @@ export function SettingsModal() {
       onClick={close}
     >
       <div
-        className="flex overflow-hidden"
+        className="relative flex overflow-hidden"
         style={{
           width: modal.settings.width,
           height: modal.settings.height,
@@ -37,6 +37,22 @@ export function SettingsModal() {
         }}
         onClick={(e) => e.stopPropagation()}
       >
+        <button
+          onClick={close}
+          className="absolute rounded p-1 transition-colors"
+          style={{
+            top: 10,
+            right: 10,
+            zIndex: 2,
+            color: text.muted,
+            background: surface.inset,
+            border: `1px solid ${surface.hairline}`,
+          }}
+          aria-label="Close settings"
+          title="Close settings"
+        >
+          <Icons.close size={13} strokeWidth={2} />
+        </button>
         <aside
           className="flex flex-col flex-none"
           style={{
@@ -46,19 +62,8 @@ export function SettingsModal() {
             borderRight: `1px solid ${surface.hairline}`,
           }}
         >
-          <div
-            className="flex items-center justify-between"
-            style={{ padding: "4px 6px 8px" }}
-          >
+          <div className="flex items-center" style={{ padding: "4px 6px 8px" }}>
             <span className="section-header">Settings</span>
-            <button
-              onClick={close}
-              className="rounded p-0.5"
-              style={{ color: text.muted }}
-              aria-label="Close"
-            >
-              <Icons.close size={12} strokeWidth={2} />
-            </button>
           </div>
           {(
             [
@@ -91,7 +96,10 @@ export function SettingsModal() {
             </button>
           ))}
         </aside>
-        <main className="flex-1 overflow-y-auto scrollbar-thin" style={{ padding: 24 }}>
+        <main
+          className="flex-1 overflow-y-auto scrollbar-thin"
+          style={{ padding: "28px 24px 24px" }}
+        >
           {tab === "appearance" && <AppearancePanel />}
           {tab === "providers" && <ProvidersPanel />}
           {tab === "mcp" && <McpPanel />}
