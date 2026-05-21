@@ -1,5 +1,6 @@
 ## Changes
 
+- Mac dictation now starts the speech task before microphone capture and reports a clear error if the mic tap delivers no audio.
 - Mac dictation no longer crashes when the microphone audio tap starts under Swift 6 strict concurrency.
 - Windows Testing now uses the Mac-style shell, left navigation, workspace rows, and usage surfaces instead of the older Windows-only layout.
 - The Windows LM Studio usage view no longer shows a limits control, and recently closed prompt previews now close from outside-click or Escape.

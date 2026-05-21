@@ -2,11 +2,17 @@ import AppKit
 import AVFoundation
 import Foundation
 import Observation
+import OSLog
 import Speech
 
 extension Notification.Name {
     static let loomDictationInsertText = Notification.Name("loomDictationInsertText")
 }
+
+private let dictationLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "com.chasesims.Loom",
+    category: "Dictation"
+)
 
 @Observable
 @MainActor
@@ -47,8 +53,10 @@ final class DictationService {
     private(set) var liveTranscript: String = ""
 
     private let audioEngine = AVAudioEngine()
+    private let captureMonitor = DictationCaptureMonitor()
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
+    private var captureWatchdogTask: Task<Void, Never>?
     private var hasInsertedTranscript = false
 
     func toggle() {
@@ -68,9 +76,12 @@ final class DictationService {
 
     private func start() async {
         guard !state.isActive else { return }
+        finishAudio(cancelTask: true)
+
         state = .requestingPermission
         liveTranscript = ""
         hasInsertedTranscript = false
+        captureMonitor.reset()
 
         let allowed = await requestPermissions()
         guard allowed else {
@@ -91,34 +102,49 @@ final class DictationService {
             return
         }
         request.shouldReportPartialResults = true
+        request.taskHint = .dictation
         if #available(macOS 13.0, *) {
             request.addsPunctuation = true
         }
 
         let inputNode = audioEngine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
+        guard format.channelCount > 0, format.sampleRate > 0 else {
+            state = .error("No microphone input format is available. Check the selected Mac input device.")
+            recognitionRequest = nil
+            return
+        }
+
+        recognitionTask = recognizer.recognitionTask(
+            with: request,
+            resultHandler: Self.makeRecognitionHandler(for: self)
+        )
+
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(
             onBus: 0,
             bufferSize: 1_024,
             format: format,
-            block: Self.makeAudioTapHandler(request: request)
+            block: Self.makeAudioTapHandler(request: request, monitor: captureMonitor)
         )
 
         audioEngine.prepare()
         do {
             try audioEngine.start()
+            startCaptureWatchdog()
+            dictationLogger.debug(
+                "Started dictation capture, sampleRate=\(format.sampleRate, privacy: .public), channels=\(format.channelCount, privacy: .public)"
+            )
         } catch {
             inputNode.removeTap(onBus: 0)
+            recognitionTask?.cancel()
+            recognitionTask = nil
+            recognitionRequest = nil
             state = .error("Could not start microphone capture: \(error.localizedDescription)")
             return
         }
 
         state = .listening
-        recognitionTask = recognizer.recognitionTask(
-            with: request,
-            resultHandler: Self.makeRecognitionHandler(for: self)
-        )
     }
 
     private func requestPermissions() async -> Bool {
@@ -194,9 +220,12 @@ final class DictationService {
     }
 
     private func finishAudio(cancelTask: Bool) {
+        captureWatchdogTask?.cancel()
+        captureWatchdogTask = nil
         if audioEngine.isRunning {
             audioEngine.stop()
         }
+        audioEngine.reset()
         audioEngine.inputNode.removeTap(onBus: 0)
         recognitionRequest?.endAudio()
         recognitionRequest = nil
@@ -208,10 +237,30 @@ final class DictationService {
         recognitionTask = nil
     }
 
+    private func startCaptureWatchdog() {
+        captureWatchdogTask?.cancel()
+        let monitor = captureMonitor
+        captureWatchdogTask = Task { [weak self, monitor] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled else { return }
+            let snapshot = monitor.snapshot()
+            guard snapshot.bufferCount == 0 else { return }
+
+            await MainActor.run {
+                guard let self, self.state.isActive else { return }
+                dictationLogger.error("Dictation audio tap started but delivered no buffers")
+                self.finishAudio(cancelTask: true)
+                self.state = .error("Microphone started, but no audio arrived. Check the Mac input device and try again.")
+            }
+        }
+    }
+
     nonisolated private static func makeAudioTapHandler(
-        request: SFSpeechAudioBufferRecognitionRequest
+        request: SFSpeechAudioBufferRecognitionRequest,
+        monitor: DictationCaptureMonitor
     ) -> AVAudioNodeTapBlock {
         { buffer, _ in
+            monitor.markBuffer(frameLength: buffer.frameLength)
             request.append(buffer)
         }
     }
@@ -223,6 +272,9 @@ final class DictationService {
             let transcript = result?.bestTranscription.formattedString
             let isFinal = result?.isFinal ?? false
             let errorMessage = error?.localizedDescription
+            if let errorMessage {
+                dictationLogger.error("Speech recognizer error: \(errorMessage, privacy: .public)")
+            }
 
             Task { @MainActor in
                 service?.handleRecognition(
@@ -231,6 +283,32 @@ final class DictationService {
                     errorMessage: errorMessage
                 )
             }
+        }
+    }
+}
+
+private final class DictationCaptureMonitor: @unchecked Sendable {
+    private let lock = NSLock()
+    private var bufferCount = 0
+    private var lastFrameLength: AVAudioFrameCount = 0
+
+    func reset() {
+        lock.withLock {
+            bufferCount = 0
+            lastFrameLength = 0
+        }
+    }
+
+    func markBuffer(frameLength: AVAudioFrameCount) {
+        lock.withLock {
+            bufferCount += 1
+            lastFrameLength = frameLength
+        }
+    }
+
+    func snapshot() -> (bufferCount: Int, lastFrameLength: AVAudioFrameCount) {
+        lock.withLock {
+            (bufferCount, lastFrameLength)
         }
     }
 }
