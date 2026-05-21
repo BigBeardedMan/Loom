@@ -1,7 +1,7 @@
 {
   "name": "loom-testing-edition",
   "private": true,
-  "version": "8.2.68",
+  "version": "8.2.69",
   "type": "module",
   "scripts": {
     "dev": "vite",

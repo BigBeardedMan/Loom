@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       build_code:
-        description: "Testing version (MAJOR.MINOR.PATCH, e.g. 8.2.68)"
+        description: "Testing version (MAJOR.MINOR.PATCH, e.g. 8.2.69)"
         required: true
 
 permissions:
@@ -133,19 +133,31 @@ jobs:
           cp "${installers[0]}" "$out/$artifact_name"
           pnpm tauri signer sign -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" "$out/$artifact_name"
           test -s "$out/$artifact_name.sig"
+
+          legacy_name="${artifact_name/_${{ steps.build_code.outputs.value }}_${{ matrix.artifact_suffix }}-setup.exe/_${{ matrix.artifact_suffix }}-setup.exe}"
+          if [[ "$legacy_name" == "$artifact_name" ]]; then
+            echo "could not derive legacy installer alias from $artifact_name" >&2
+            exit 1
+          fi
+          cp "$out/$artifact_name" "$out/$legacy_name"
+          cp "$out/$artifact_name.sig" "$out/$legacy_name.sig"
           find "$out" -maxdepth 1 -type f -print
 
       - name: Smoke test NSIS updater install
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $installer = Get-ChildItem -Path "release-artifacts" -Filter "*_${{ matrix.artifact_suffix }}-setup.exe" | Select-Object -First 1
-          if (-not $installer) {
-            throw "No ${{ matrix.artifact_suffix }} NSIS installer found in release-artifacts"
+          $versionedInstaller = Get-ChildItem -Path "release-artifacts" -Filter "*_${{ steps.build_code.outputs.value }}_${{ matrix.artifact_suffix }}-setup.exe" | Select-Object -First 1
+          $legacyInstaller = Get-ChildItem -Path "release-artifacts" -Filter "*_${{ matrix.artifact_suffix }}-setup.exe" |
+            Where-Object { $_.Name -notmatch "_\d+\.\d+\.\d+_${{ matrix.artifact_suffix }}-setup\.exe$" } |
+            Select-Object -First 1
+          if (-not $versionedInstaller) {
+            throw "No versioned ${{ matrix.artifact_suffix }} NSIS installer found in release-artifacts"
+          }
+          if (-not $legacyInstaller) {
+            throw "No legacy ${{ matrix.artifact_suffix }} NSIS installer alias found in release-artifacts"
           }
 
-          Write-Host "Running updater install smoke test for $($installer.FullName)"
-          $process = Start-Process -FilePath $installer.FullName -ArgumentList @("/S", "/R", "/UPDATE", "/ARGS") -PassThru
           $programFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
           $exeNames = @("loom.exe", "Loom Testing Edition.exe")
           $installDirs = @()
@@ -165,48 +177,68 @@ jobs:
             }
           }
 
-          $deadline = (Get-Date).AddMinutes(4)
-          $candidateRoots = @()
-          while ((Get-Date) -lt $deadline) {
-            $candidateRoots = @($pathsToCheck | Where-Object { $_ -and (Test-Path -LiteralPath $_) })
-            if ($candidateRoots) {
-              break
-            }
-            if ($process.HasExited -and $process.ExitCode -ne 0) {
-              throw "NSIS updater install failed with exit code $($process.ExitCode)"
-            }
-            Start-Sleep -Seconds 5
+          function Stop-LoomProcesses {
+            Stop-Process -Name "loom" -Force -ErrorAction SilentlyContinue
+            Stop-Process -Name "Loom Testing Edition" -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
           }
 
-          if (-not $candidateRoots) {
+          function Invoke-InstallerSmoke {
+            param(
+              [Parameter(Mandatory = $true)] [System.IO.FileInfo] $Installer,
+              [Parameter(Mandatory = $true)] [string[]] $Arguments,
+              [Parameter(Mandatory = $true)] [string] $Label
+            )
+
+            Write-Host "Running $Label smoke test for $($Installer.FullName) $($Arguments -join ' ')"
+            $process = Start-Process -FilePath $Installer.FullName -ArgumentList $Arguments -PassThru
+            $deadline = (Get-Date).AddMinutes(4)
+            $candidateRoots = @()
+            while ((Get-Date) -lt $deadline) {
+              $candidateRoots = @($pathsToCheck | Where-Object { $_ -and (Test-Path -LiteralPath $_) })
+              if ($candidateRoots -and $process.HasExited) {
+                if ($process.ExitCode -ne 0) {
+                  throw "$Label install failed with exit code $($process.ExitCode)"
+                }
+                break
+              }
+              if ($process.HasExited -and $process.ExitCode -ne 0) {
+                throw "$Label install failed with exit code $($process.ExitCode)"
+              }
+              Start-Sleep -Seconds 5
+            }
+
+            if (-not $candidateRoots) {
+              if (-not $process.HasExited) {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+              }
+              Write-Host "Checked install paths:"
+              $pathsToCheck | ForEach-Object { Write-Host "  $_" }
+              if ($env:LOCALAPPDATA -and (Test-Path $env:LOCALAPPDATA)) {
+                Get-ChildItem -Path $env:LOCALAPPDATA -Filter "*.exe" -Recurse -ErrorAction SilentlyContinue |
+                  Where-Object { $_.FullName -match "Loom|loom" } |
+                  Select-Object -First 20 -ExpandProperty FullName |
+                  ForEach-Object { Write-Host "Found candidate: $_" }
+              }
+              throw "Installed Loom Testing Edition executable was not found after $Label install"
+            }
+
+            $exe = @($candidateRoots)[0]
+            $productVersion = (Get-Item -LiteralPath $exe).VersionInfo.ProductVersion
+            Write-Host "Installed executable: $exe"
+            Write-Host "Installed product version: $productVersion"
+            if ($productVersion -and -not $productVersion.StartsWith("${{ steps.build_code.outputs.value }}")) {
+              throw "Installed product version '$productVersion' does not match ${{ steps.build_code.outputs.value }}"
+            }
+
+            Stop-LoomProcesses
             if (-not $process.HasExited) {
               Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
             }
-            Write-Host "Checked install paths:"
-            $pathsToCheck | ForEach-Object { Write-Host "  $_" }
-            if ($env:LOCALAPPDATA -and (Test-Path $env:LOCALAPPDATA)) {
-              Get-ChildItem -Path $env:LOCALAPPDATA -Filter "*.exe" -Recurse -ErrorAction SilentlyContinue |
-                Where-Object { $_.FullName -match "Loom|loom" } |
-                Select-Object -First 20 -ExpandProperty FullName |
-                ForEach-Object { Write-Host "Found candidate: $_" }
-            }
-            throw "Installed Loom Testing Edition executable was not found after updater install"
           }
 
-          $exe = @($candidateRoots)[0]
-          $productVersion = (Get-Item -LiteralPath $exe).VersionInfo.ProductVersion
-          Write-Host "Installed executable: $exe"
-          Write-Host "Installed product version: $productVersion"
-          if ($productVersion -and -not $productVersion.StartsWith("${{ steps.build_code.outputs.value }}")) {
-            throw "Installed product version '$productVersion' does not match ${{ steps.build_code.outputs.value }}"
-          }
-
-          Stop-Process -Name "loom" -Force -ErrorAction SilentlyContinue
-          Stop-Process -Name "Loom Testing Edition" -Force -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 2
-          if (-not $process.HasExited) {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-          }
+          Invoke-InstallerSmoke -Installer $legacyInstaller -Arguments @("/S") -Label "legacy silent"
+          Invoke-InstallerSmoke -Installer $versionedInstaller -Arguments @("/S", "/R", "/UPDATE", "/ARGS") -Label "updater"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -235,8 +267,8 @@ jobs:
             exit 1
           fi
           find dist -maxdepth 3 -type f -print
-          NSIS_X64=$(find dist -name "*x64-setup.exe" | head -n1)
-          NSIS_ARM=$(find dist -name "*arm64-setup.exe" | head -n1)
+          NSIS_X64=$(find dist -name "*_${BUILD_CODE}_x64-setup.exe" | head -n1)
+          NSIS_ARM=$(find dist -name "*_${BUILD_CODE}_arm64-setup.exe" | head -n1)
           SIG_X64="${NSIS_X64}.sig"
           SIG_ARM="${NSIS_ARM}.sig"
           for file in "$NSIS_X64" "$NSIS_ARM" "$SIG_X64" "$SIG_ARM"; do

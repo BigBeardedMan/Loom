@@ -244,11 +244,6 @@ fn installer_parts(name: &str) -> Option<(String, String)> {
     Some((version.to_string(), arch))
 }
 
-#[cfg_attr(not(windows), allow(dead_code))]
-fn installer_version_from_name(name: &str) -> Option<String> {
-    installer_parts(name).map(|(version, _)| version)
-}
-
 fn is_valid_installer_name(name: &str, token: &str, expected_version: Option<&str>) -> bool {
     let Some((version, arch)) = installer_parts(name) else {
         return false;
@@ -328,15 +323,59 @@ fn verify_installer_signature(installer: &[u8], sig_asset: &[u8]) -> Result<(), 
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
-fn release_url_for_installer(installer_name: &str) -> String {
-    installer_version_from_name(installer_name)
-        .map(|version| {
-            format!(
-                "https://github.com/{}/{}/releases/tag/testing-{}",
-                REPO_OWNER, REPO_NAME, version
-            )
-        })
-        .unwrap_or_else(|| format!("https://github.com/{}/{}/releases", REPO_OWNER, REPO_NAME))
+fn windows_update_helper_script(
+    parent_pid: u32,
+    installer_path: &str,
+    app_exe_name: &str,
+    exe_path: &str,
+) -> String {
+    format!(
+        "@echo off\r\n\
+set LOGFILE=%TEMP%\\loom-update-{pid}.log\r\n\
+echo === loom updater %DATE% %TIME% === > \"%LOGFILE%\"\r\n\
+echo waiting for pid {pid} to exit >> \"%LOGFILE%\"\r\n\
+:waitloop\r\n\
+tasklist /FI \"PID eq {pid}\" 2>nul | findstr /C:\" {pid} \" >nul\r\n\
+if not errorlevel 1 (\r\n\
+    timeout /t 1 /nobreak >nul\r\n\
+    goto waitloop\r\n\
+)\r\n\
+echo pid {pid} exited, settling 5s for file locks >> \"%LOGFILE%\"\r\n\
+timeout /t 5 /nobreak >nul\r\n\
+echo closing remaining {app_exe_name} processes >> \"%LOGFILE%\"\r\n\
+taskkill /IM \"{app_exe_name}\" /T /F >> \"%LOGFILE%\" 2>&1\r\n\
+echo running updater mode: \"{installer}\" /S /R /UPDATE /ARGS >> \"%LOGFILE%\"\r\n\
+start \"\" /wait \"{installer}\" /S /R /UPDATE /ARGS\r\n\
+set INSTALL_RC=%ERRORLEVEL%\r\n\
+echo updater-mode exit code: %INSTALL_RC% >> \"%LOGFILE%\"\r\n\
+if \"%INSTALL_RC%\"==\"0\" goto relaunchfallback\r\n\
+echo updater mode failed, trying legacy silent mode >> \"%LOGFILE%\"\r\n\
+start \"\" /wait \"{installer}\" /S\r\n\
+set INSTALL_RC=%ERRORLEVEL%\r\n\
+echo legacy-mode exit code: %INSTALL_RC% >> \"%LOGFILE%\"\r\n\
+if not \"%INSTALL_RC%\"==\"0\" (\r\n\
+    echo installer failed in both modes; relaunching current app without opening browser >> \"%LOGFILE%\"\r\n\
+    start \"\" \"{exe}\"\r\n\
+    goto cleanup\r\n\
+)\r\n\
+:relaunchfallback\r\n\
+echo settling 5s before fallback relaunch >> \"%LOGFILE%\"\r\n\
+timeout /t 5 /nobreak >nul\r\n\
+tasklist /FI \"IMAGENAME eq {app_exe_name}\" 2>nul | findstr /I /C:\"{app_exe_name}\" >nul\r\n\
+if errorlevel 1 (\r\n\
+    echo installer did not relaunch Loom, using fallback: \"{exe}\" >> \"%LOGFILE%\"\r\n\
+    start \"\" \"{exe}\"\r\n\
+) else (\r\n\
+    echo installer relaunched Loom >> \"%LOGFILE%\"\r\n\
+)\r\n\
+echo done >> \"%LOGFILE%\"\r\n\
+:cleanup\r\n\
+(goto) 2>nul & del \"%~f0\"\r\n",
+        pid = parent_pid,
+        installer = installer_path.replace('"', ""),
+        app_exe_name = app_exe_name.replace('"', ""),
+        exe = exe_path.replace('"', ""),
+    )
 }
 
 fn ensure_staged_installer(app: &AppHandle, installer_path: &str) -> Result<PathBuf, String> {
@@ -480,27 +519,13 @@ pub fn update_run_installer(
 ) -> Result<(), String> {
     let path = ensure_staged_installer(&app, &installer_path)?;
 
-    // Goal: one-click in-place update. Spawn a detached helper that
-    // (1) waits for this Loom.exe to exit so NSIS can overwrite the binary,
-    // (2) runs the NSIS installer silently with Tauri's updater args,
-    // (3) lets NSIS relaunch the freshly-installed app and falls back to
-    // the current exe path if it does not.
-    //
-    // Everything the helper does is mirrored to %TEMP%\loom-update-<pid>.log
-    // so when (not if) it fails on someone else's machine we can ask for the
-    // log instead of guessing. Two reliability tweaks past the v3.1.1 helper:
-    // a longer post-exit settle (5s) so Loom.exe's handles fully release
-    // before NSIS overwrites it, and a fallback that opens the GitHub
-    // release page in the user's browser if the silent installer returns a
-    // non-zero exit code (most often UAC denied or AV quarantined).
+    // Spawn a detached helper that waits for this process to exit, runs the
+    // NSIS installer with Tauri's official updater arguments, and falls back
+    // to relaunching the app. The helper logs to %TEMP%\loom-update-<pid>.log
+    // and intentionally never opens GitHub from an in-app update attempt.
     #[cfg(windows)]
     {
         let installer_path = path.to_string_lossy().to_string();
-        let installer_name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let release_url = release_url_for_installer(&installer_name);
         let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
         let app_exe_name = exe
             .file_name()
@@ -516,64 +541,8 @@ pub fn update_run_installer(
             uuid::Uuid::new_v4()
         ));
 
-        let script = format!(
-            "@echo off\r\n\
-set LOGFILE=%TEMP%\\loom-update-{pid}.log\r\n\
-echo === loom updater %DATE% %TIME% === > \"%LOGFILE%\"\r\n\
-echo waiting for pid {pid} to exit >> \"%LOGFILE%\"\r\n\
-:waitloop\r\n\
-tasklist /FI \"PID eq {pid}\" 2>nul | findstr /C:\" {pid} \" >nul\r\n\
-if not errorlevel 1 (\r\n\
-    timeout /t 1 /nobreak >nul\r\n\
-    goto waitloop\r\n\
-)\r\n\
-echo pid {pid} exited, settling 5s for file locks >> \"%LOGFILE%\"\r\n\
-timeout /t 5 /nobreak >nul\r\n\
-echo closing remaining {app_exe_name} processes >> \"%LOGFILE%\"\r\n\
-taskkill /IM \"{app_exe_name}\" /T /F >> \"%LOGFILE%\" 2>&1\r\n\
-echo launching: \"{installer}\" /S /R /UPDATE /ARGS >> \"%LOGFILE%\"\r\n\
-start \"\" \"{installer}\" /S /R /UPDATE /ARGS\r\n\
-set /a WAITED=0\r\n\
-:installwait\r\n\
-timeout /t 2 /nobreak >nul\r\n\
-set /a WAITED+=2\r\n\
-tasklist /FI \"IMAGENAME eq {app_exe_name}\" 2>nul | findstr /I /C:\"{app_exe_name}\" >nul\r\n\
-if not errorlevel 1 (\r\n\
-    echo installer relaunched Loom after %WAITED%s >> \"%LOGFILE%\"\r\n\
-    goto done\r\n\
-)\r\n\
-tasklist /FI \"IMAGENAME eq {installer_name}\" 2>nul | findstr /I /C:\"{installer_name}\" >nul\r\n\
-if errorlevel 1 (\r\n\
-    echo installer process finished after %WAITED%s >> \"%LOGFILE%\"\r\n\
-    goto relaunchfallback\r\n\
-)\r\n\
-if %WAITED% GEQ 180 (\r\n\
-    echo installer did not finish or relaunch within 180s, opening exact release page >> \"%LOGFILE%\"\r\n\
-    start \"\" \"{release_url}\"\r\n\
-    goto cleanup\r\n\
-)\r\n\
-goto installwait\r\n\
-:relaunchfallback\r\n\
-echo settling 5s before fallback relaunch >> \"%LOGFILE%\"\r\n\
-timeout /t 5 /nobreak >nul\r\n\
-tasklist /FI \"IMAGENAME eq {app_exe_name}\" 2>nul | findstr /I /C:\"{app_exe_name}\" >nul\r\n\
-if errorlevel 1 (\r\n\
-    echo installer did not relaunch Loom, using fallback: \"{exe}\" >> \"%LOGFILE%\"\r\n\
-    start \"\" \"{exe}\"\r\n\
-) else (\r\n\
-    echo installer relaunched Loom >> \"%LOGFILE%\"\r\n\
-)\r\n\
-:done\r\n\
-echo done >> \"%LOGFILE%\"\r\n\
-:cleanup\r\n\
-(goto) 2>nul & del \"%~f0\"\r\n",
-            pid = parent_pid,
-            installer = installer_path.replace('"', ""),
-            installer_name = installer_name.replace('"', ""),
-            app_exe_name = app_exe_name.replace('"', ""),
-            exe = exe_path.replace('"', ""),
-            release_url = release_url.replace('"', ""),
-        );
+        let script =
+            windows_update_helper_script(parent_pid, &installer_path, &app_exe_name, &exe_path);
 
         {
             let mut helper = fs::OpenOptions::new()
@@ -700,5 +669,20 @@ QtKMXWyYcwdpZAlPF7tE2ENJkRd1ujvKjlj1m9RtHTBnZPa5WKU5uWRs5GoP5M/VqE81QFuMKI5k/SfN
             signature.trusted_comment(),
             "timestamp:1555779966\tfile:test"
         );
+    }
+
+    #[test]
+    fn windows_helper_uses_installer_modes_without_browser_fallback() {
+        let script = windows_update_helper_script(
+            1234,
+            r"C:\Users\runner\AppData\Roaming\Loom\staging\Loom.Testing.Edition_8.2.69_x64-setup.exe",
+            "loom.exe",
+            r"C:\Users\runner\AppData\Local\Loom Testing Edition\loom.exe",
+        );
+        assert!(script.contains("/S /R /UPDATE /ARGS"));
+        assert!(script.contains("trying legacy silent mode"));
+        assert!(script.contains("\" /S\r\n"));
+        assert!(!script.contains("github.com"));
+        assert!(!script.contains("release page"));
     }
 }
