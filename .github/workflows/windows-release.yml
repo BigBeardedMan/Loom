@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       build_code:
-        description: "Testing version (MAJOR.MINOR.PATCH, e.g. 8.2.74)"
+        description: "Testing version (MAJOR.MINOR.PATCH, e.g. 8.2.75)"
         required: true
 
 permissions:
