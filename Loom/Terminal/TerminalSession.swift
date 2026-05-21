@@ -348,6 +348,34 @@ final class LoomTerminalView: LocalProcessTerminalView {
         return true
     }
 
+    @MainActor
+    func replaceDictationText(previous: String, next: String) -> Bool {
+        guard window != nil, process.childfd >= 0 else { return false }
+        DictationTerminalTargetRegistry.shared.noteActiveTerminal(self)
+
+        let sharedPrefix = Self.commonPrefixLength(previous, next)
+        let deleteCount = previous.dropFirst(sharedPrefix).count
+        let suffix = String(next.dropFirst(sharedPrefix))
+        guard deleteCount > 0 || !suffix.isEmpty else { return true }
+
+        send(txt: String(repeating: "\u{7F}", count: deleteCount) + suffix)
+        return true
+    }
+
+    private static func commonPrefixLength(_ lhs: String, _ rhs: String) -> Int {
+        var count = 0
+        var lhsIndex = lhs.startIndex
+        var rhsIndex = rhs.startIndex
+        while lhsIndex < lhs.endIndex,
+              rhsIndex < rhs.endIndex,
+              lhs[lhsIndex] == rhs[rhsIndex] {
+            count += 1
+            lhs.formIndex(after: &lhsIndex)
+            rhs.formIndex(after: &rhsIndex)
+        }
+        return count
+    }
+
     // MARK: - Pasteboard
 
     /// Send the clipboard's string contents straight into the PTY without

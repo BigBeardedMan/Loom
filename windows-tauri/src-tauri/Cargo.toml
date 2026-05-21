@@ -1,6 +1,6 @@
 [package]
 name = "loom"
-version = "8.1.9"
+version = "8.1.10"
 description = "Loom Testing Edition for Windows: pre-release workspace cockpit, alphanumeric build code per cut."
 authors = ["BigBeardedMan"]
 edition = "2021"

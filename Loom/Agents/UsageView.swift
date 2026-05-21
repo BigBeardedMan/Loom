@@ -847,13 +847,13 @@ struct UsageView: View {
     private func limitRows(_ snapshot: UsageLimitSnapshot) -> [LimitMeterRow] {
         [
             LimitMeterRow(
-                label: "Primary",
+                label: primaryLimitLabel(windowMinutes: snapshot.primaryWindowMinutes),
                 usedPercent: snapshot.primaryUsedPercent,
                 windowMinutes: snapshot.primaryWindowMinutes,
                 resetsAt: snapshot.primaryResetsAt
             ),
             LimitMeterRow(
-                label: "Secondary",
+                label: "Week",
                 usedPercent: snapshot.secondaryUsedPercent,
                 windowMinutes: snapshot.secondaryWindowMinutes,
                 resetsAt: snapshot.secondaryResetsAt
@@ -861,6 +861,11 @@ struct UsageView: View {
         ].filter {
             $0.usedPercent != nil || $0.windowMinutes != nil || $0.resetsAt != nil
         }
+    }
+
+    private func primaryLimitLabel(windowMinutes: Int?) -> String {
+        guard let windowMinutes else { return "Primary limit" }
+        return "\(formatLimitDuration(windowMinutes)) limit"
     }
 
     private func limitPressure(for tool: CLIToolUsage) -> LimitPressure {
@@ -976,6 +981,17 @@ struct UsageView: View {
             return "\(minutes / 60)h window"
         }
         return "\(minutes)m window"
+    }
+
+    private func formatLimitDuration(_ minutes: Int) -> String {
+        if minutes >= 1_440, minutes % 1_440 == 0 {
+            let days = minutes / 1_440
+            return days == 7 ? "Week" : "\(days)d"
+        }
+        if minutes >= 60, minutes % 60 == 0 {
+            return "\(minutes / 60)h"
+        }
+        return "\(minutes)m"
     }
 
     private func formatCredits(_ value: Double) -> String {

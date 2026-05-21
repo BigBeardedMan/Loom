@@ -197,6 +197,9 @@ final class DictationService {
     private func handleRecognition(transcript: String?, isFinal: Bool, errorMessage: String?) {
         if let transcript {
             liveTranscript = transcript
+            if !isFinal {
+                updateLiveTranscript(transcript)
+            }
             state = isFinal ? .transcribing : .listening
             if isFinal {
                 insertTranscriptIfNeeded()
@@ -206,10 +209,9 @@ final class DictationService {
         }
 
         if let errorMessage,
-           !hasInsertedTranscript,
            state.isActive {
             completeRecognition()
-            state = .error(errorMessage)
+            state = hasInsertedTranscript ? .idle : .error(errorMessage)
         }
     }
 
@@ -228,7 +230,11 @@ final class DictationService {
     @discardableResult
     private func insertTranscriptIfNeeded() -> Bool {
         let text = liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !hasInsertedTranscript else { return false }
+        if hasInsertedTranscript {
+            _ = insertionTarget?.replaceLiveTranscript(with: text)
+            return true
+        }
+        guard !text.isEmpty else { return false }
         hasInsertedTranscript = true
         if !(insertionTarget?.insert(text) ?? false),
            !FocusedTextInserter.insert(text) {
@@ -241,6 +247,16 @@ final class DictationService {
         return true
     }
 
+    private func updateLiveTranscript(_ transcript: String) {
+        let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty,
+              let insertionTarget,
+              insertionTarget.replaceLiveTranscript(with: text) else {
+            return
+        }
+        hasInsertedTranscript = true
+    }
+
     private func finishAudio(cancelTask: Bool) {
         stopAudioCapture()
         recognitionRequest?.endAudio()
@@ -248,6 +264,7 @@ final class DictationService {
         if cancelTask {
             finalResultWatchdogTask?.cancel()
             finalResultWatchdogTask = nil
+            insertionTarget?.clearLiveTranscript()
             recognitionTask?.cancel()
             recognitionTask = nil
             isFinishingRecognition = false
@@ -383,6 +400,8 @@ private final class DictationInsertionTarget {
     private weak var terminalView: LoomTerminalView?
     private weak var textView: NSTextView?
     private weak var responder: NSResponder?
+    private var liveTranscript = ""
+    private var textViewLiveRange: NSRange?
 
     init(terminalView: LoomTerminalView) {
         self.terminalView = terminalView
@@ -390,6 +409,7 @@ private final class DictationInsertionTarget {
 
     init(textView: NSTextView) {
         self.textView = textView
+        self.textViewLiveRange = textView.selectedRange()
     }
 
     init(responder: NSResponder) {
@@ -397,17 +417,56 @@ private final class DictationInsertionTarget {
     }
 
     func insert(_ text: String) -> Bool {
+        if !liveTranscript.isEmpty {
+            return replaceLiveTranscript(with: text)
+        }
         if let terminalView {
-            return terminalView.insertDictationText(text)
+            guard terminalView.insertDictationText(text) else { return false }
+            liveTranscript = text
+            return true
         }
         if let textView {
-            textView.insertText(text, replacementRange: textView.selectedRange())
+            let range = textView.selectedRange()
+            textView.insertText(text, replacementRange: range)
+            textViewLiveRange = NSRange(location: range.location, length: (text as NSString).length)
+            liveTranscript = text
             return true
         }
         if let responder {
-            return responder.tryToPerform(#selector(NSResponder.insertText(_:)), with: text)
+            guard responder.tryToPerform(#selector(NSResponder.insertText(_:)), with: text) else { return false }
+            liveTranscript = text
+            return true
         }
         return false
+    }
+
+    func replaceLiveTranscript(with text: String) -> Bool {
+        if let terminalView {
+            guard terminalView.replaceDictationText(previous: liveTranscript, next: text) else { return false }
+            liveTranscript = text
+            return true
+        }
+        if let textView {
+            let range = textViewLiveRange ?? textView.selectedRange()
+            guard range.location != NSNotFound else { return false }
+            textView.replaceCharacters(in: range, with: text)
+            let nextRange = NSRange(location: range.location, length: (text as NSString).length)
+            textViewLiveRange = nextRange
+            textView.setSelectedRange(NSRange(location: nextRange.upperBound, length: 0))
+            liveTranscript = text
+            return true
+        }
+        if liveTranscript.isEmpty, let responder {
+            guard responder.tryToPerform(#selector(NSResponder.insertText(_:)), with: text) else { return false }
+            liveTranscript = text
+            return true
+        }
+        return false
+    }
+
+    func clearLiveTranscript() {
+        guard !liveTranscript.isEmpty else { return }
+        _ = replaceLiveTranscript(with: "")
     }
 }
 

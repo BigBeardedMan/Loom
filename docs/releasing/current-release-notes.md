@@ -1,5 +1,7 @@
 ## Changes
 
+- Mac dictation now streams live speech text into terminal and editor inputs while recognition is still running.
+- Mac Codex limit meters now label the short window as its reported 4h or 5h limit and the longer window as Week.
 - Mac dictation now keeps the speech recognizer alive after stopping, inserts dictated text into active terminal or editor text areas, and surfaces no-speech failures visibly.
 - Mac dictation now starts the speech task before microphone capture and reports a clear error if the mic tap delivers no audio.
 - Mac dictation no longer crashes when the microphone audio tap starts under Swift 6 strict concurrency.
