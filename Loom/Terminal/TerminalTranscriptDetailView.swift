@@ -48,14 +48,26 @@ struct TerminalTranscriptDetailView: View {
             }
             Spacer()
             Button {
+                store.revealTranscript(session)
+            } label: {
+                Label("Reveal File", systemImage: "doc.text.magnifyingglass")
+            }
+            .help("Reveal the saved transcript file in Finder")
+            .accessibilityLabel("Reveal transcript file in Finder")
+
+            Button {
                 onPrimaryAction()
             } label: {
                 Label(primaryActionTitle, systemImage: primaryActionSystemImage)
             }
+            .help(primaryActionTitle)
+            .accessibilityLabel(primaryActionTitle)
+
             Button("Done") {
                 onDismiss()
             }
             .keyboardShortcut(.cancelAction)
+            .accessibilityLabel("Close transcript preview")
         }
         .padding(14)
     }

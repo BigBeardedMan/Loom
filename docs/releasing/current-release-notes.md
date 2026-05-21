@@ -1,5 +1,7 @@
 ## Changes
 
-- Recently closed terminal sessions now restore into a live terminal pane when clicked instead of only opening a transcript preview.
-- Restored sessions import the saved transcript back into the terminal and start a fresh shell in the same working directory so users can reconnect or relaunch their agent.
-- Transcript previews now offer Restore Session for closed terminals while deleted history still supports starting a fresh shell from that directory.
+- Recently closed terminal restores now bound the imported terminal scrollback so large transcripts cannot stall the app.
+- Transcript previews can reveal the saved transcript file in Finder when the full history is larger than the in-app preview.
+- Usage dashboards now carry their selected Day, Week, Month, or Year range through the snapshot and show range-specific session counts.
+- Notes editing now debounces SwiftData saves instead of saving on every keystroke.
+- Sidebar and transcript controls now include clearer accessibility labels.

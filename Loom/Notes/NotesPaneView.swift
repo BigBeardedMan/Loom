@@ -1,5 +1,8 @@
 import SwiftUI
 import SwiftData
+import os
+
+private let notesLog = Logger(subsystem: "com.chasesims.LoomTestingEdition", category: "notes")
 
 struct NotesPaneView: View {
     @Environment(\.modelContext) private var context
@@ -10,6 +13,7 @@ struct NotesPaneView: View {
 
     @State private var selectedNoteID: UUID?
     @State private var renamingID: UUID?
+    @State private var noteSaveGeneration: Int = 0
     @FocusState private var renameFocused: Bool
 
     private var notes: [IdeaNote] {
@@ -36,7 +40,10 @@ struct NotesPaneView: View {
             ensureSelection()
             publishContext()
         }
-        .onDisappear { clearPublishedContext() }
+        .onDisappear {
+            flushPendingNoteSave()
+            clearPublishedContext()
+        }
         .onChange(of: workspaceID) { _, _ in
             selectedNoteID = nil
             ensureSelection()
@@ -73,6 +80,7 @@ struct NotesPaneView: View {
             }
             .buttonStyle(.plain)
             .help("New idea")
+            .accessibilityLabel("New idea")
             .padding(.trailing, 8)
         }
         .padding(.vertical, 6)
@@ -115,6 +123,7 @@ struct NotesPaneView: View {
             }
             .buttonStyle(.plain)
             .help("Delete idea")
+            .accessibilityLabel("Delete idea")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
@@ -151,7 +160,7 @@ struct NotesPaneView: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Color.white.opacity(0.9))
-                    .onChange(of: note.title) { _, _ in note.updatedAt = .now; try? context.save() }
+                    .onChange(of: note.title) { _, _ in scheduleNoteSave(for: note) }
 
                 Spacer()
 
@@ -170,7 +179,7 @@ struct NotesPaneView: View {
                 .padding(.horizontal, 12)
                 .padding(.bottom, 12)
                 .background(Color(red: 0.035, green: 0.04, blue: 0.045))
-                .onChange(of: note.body) { _, _ in note.updatedAt = .now; try? context.save() }
+                .onChange(of: note.body) { _, _ in scheduleNoteSave(for: note) }
         }
     }
 
@@ -202,7 +211,7 @@ struct NotesPaneView: View {
         else { return }
         let note = IdeaNote(title: "Untitled", workspace: workspace)
         context.insert(note)
-        try? context.save()
+        saveContext(label: "add note")
         selectedNoteID = note.id
         renamingID = note.id
     }
@@ -210,7 +219,7 @@ struct NotesPaneView: View {
     private func deleteNote(_ note: IdeaNote) {
         if selectedNoteID == note.id { selectedNoteID = nil }
         context.delete(note)
-        try? context.save()
+        saveContext(label: "delete note")
         ensureSelection()
     }
 
@@ -221,9 +230,34 @@ struct NotesPaneView: View {
     private func commitRename(_ note: IdeaNote) {
         let trimmed = note.title.trimmingCharacters(in: .whitespacesAndNewlines)
         note.title = trimmed.isEmpty ? "Untitled" : trimmed
-        try? context.save()
+        note.updatedAt = .now
+        saveContext(label: "rename note")
         renamingID = nil
         renameFocused = false
+    }
+
+    private func scheduleNoteSave(for note: IdeaNote) {
+        note.updatedAt = .now
+        noteSaveGeneration &+= 1
+        let generation = noteSaveGeneration
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(650))
+            guard !Task.isCancelled, generation == noteSaveGeneration else { return }
+            saveContext(label: "edit note")
+        }
+    }
+
+    private func flushPendingNoteSave() {
+        noteSaveGeneration &+= 1
+        saveContext(label: "flush note edits")
+    }
+
+    private func saveContext(label: String) {
+        do {
+            try context.save()
+        } catch {
+            notesLog.error("Failed to save \(label, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private func timestamp(_ note: IdeaNote) -> String {
@@ -288,7 +322,7 @@ struct NotesPaneView: View {
         let prefix = note.body.isEmpty || note.body.hasSuffix("\n") ? "" : "\n"
         note.body += prefix + bullets + "\n"
         note.updatedAt = .now
-        try? context.save()
+        saveContext(label: "append agent note items")
     }
 
     private func createNoteTabsForItems(_ items: [String]) {
@@ -303,7 +337,7 @@ struct NotesPaneView: View {
             context.insert(note)
             if firstNew == nil { firstNew = note }
         }
-        try? context.save()
+        saveContext(label: "create agent note tabs")
         if let firstNew {
             selectedNoteID = firstNew.id
         }

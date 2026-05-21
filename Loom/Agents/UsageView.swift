@@ -84,12 +84,14 @@ struct UsageView: View {
     }
 
     private var toolDashboard: some View {
-        let resolved = usage.tools.first(where: { $0.tool == tool }) ?? .unavailable(tool)
+        let resolved = usage.tools.first(where: { $0.tool == tool })
+            ?? .unavailable(tool, timeframe: usage.timeframe)
         return headlineColumn(title: "\(tool.label) Usage", tool: resolved)
     }
 
     private var limitsDashboard: some View {
-        let resolved = usage.tools.first(where: { $0.tool == tool }) ?? .unavailable(tool)
+        let resolved = usage.tools.first(where: { $0.tool == tool })
+            ?? .unavailable(tool, timeframe: usage.timeframe)
         return limitsColumn(title: "\(tool.label) Limits", tool: resolved)
     }
 
@@ -586,6 +588,7 @@ struct UsageView: View {
         }
         .buttonStyle(.plain)
         .help(title == "Limits" ? "Show local limit signals" : "Show \(title.lowercased()) usage")
+        .accessibilityLabel(title == "Limits" ? "Show local limit signals" : "Show \(title) usage")
     }
 
     private var placeholder: some View {
@@ -610,9 +613,9 @@ struct UsageView: View {
             return Text("Awaiting first session")
         }
         if let last = tool.lastActivity {
-            return Text("Last activity \(relativeTime(last))")
+            return Text("\(tool.timeframe.headlineLabel) - last activity \(relativeTime(last))")
         }
-        return Text("No usage recorded yet")
+        return Text("\(tool.timeframe.headlineLabel) - no usage recorded")
     }
 
     private func statGrid(_ tool: CLIToolUsage) -> some View {
@@ -622,7 +625,7 @@ struct UsageView: View {
             GridItem(.flexible(), alignment: .leading)
         ]
         return LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
-            statCell("Sessions today",  formatCount(tool.sessionsToday))
+            statCell("\(tool.timeframe.label) sessions", formatCount(tool.windowSessions))
             statCell("All sessions",    formatCount(tool.sessionsTotal))
             statCell("Window tokens",   formatTokens(tool.totalTokens))
             statCell("Input",           formatTokens(tool.inputTokens))
@@ -756,7 +759,7 @@ struct UsageView: View {
         let peak = max(buckets.map(\.tokens).max() ?? 0, 1)
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(usage.timeframe.headlineLabel)
+                Text(tool.timeframe.headlineLabel)
                     .font(.system(size: 9, weight: .bold))
                     .tracking(0.5)
                     .foregroundStyle(LoomTheme.mutedText)

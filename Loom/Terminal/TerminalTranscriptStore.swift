@@ -38,6 +38,9 @@ struct TerminalTranscriptRestore: Sendable {
     let cwd: URL
     let title: String
     let transcriptText: String
+    let wasTruncated: Bool
+    let importedByteLimit: Int
+    let transcriptByteCount: Int64
 }
 
 final class TerminalTranscriptRecorder: @unchecked Sendable {
@@ -91,6 +94,8 @@ final class TerminalTranscriptStore {
     nonisolated static let enabledDefaultsKey = "loom.terminalHistory.enabled"
     nonisolated static let maxBytesDefaultsKey = "loom.terminalHistory.maxBytes"
     nonisolated static let defaultStorageLimitBytes: Double = 1_073_741_824
+    nonisolated static let defaultPreviewLimitBytes = 2_000_000
+    nonisolated static let restoreImportLimitBytes = 10_000_000
 
     var sessions: [TerminalTranscriptSession] = []
     var totalBytes: Int64 = 0
@@ -239,18 +244,26 @@ final class TerminalTranscriptStore {
 
         let saved = sessions[idx]
         let now = Date()
+        let byteCount = fileSize(at: transcriptURL(for: saved.id))
         let restore = TerminalTranscriptRestore(
             sessionID: saved.id,
             cwd: resolvedDirectory(saved.cwd, fallback: fallbackCwd),
             title: saved.displayTitle,
-            transcriptText: readTranscriptText(for: saved, maxBytes: nil)
+            transcriptText: readTranscriptText(
+                for: saved,
+                maxBytes: Self.restoreImportLimitBytes,
+                includeTrimNotice: false
+            ),
+            wasTruncated: byteCount > Int64(Self.restoreImportLimitBytes),
+            importedByteLimit: Self.restoreImportLimitBytes,
+            transcriptByteCount: byteCount
         )
 
         sessions[idx].state = .active
         sessions[idx].closedAt = nil
         sessions[idx].deletedAt = nil
         sessions[idx].updatedAt = now
-        sessions[idx].byteCount = fileSize(at: transcriptURL(for: saved.id))
+        sessions[idx].byteCount = byteCount
         save()
         refreshUsage()
         return restore
@@ -312,7 +325,11 @@ final class TerminalTranscriptStore {
             .sorted { ($0.deletedAt ?? $0.updatedAt) > ($1.deletedAt ?? $1.updatedAt) }
     }
 
-    func readTranscriptText(for session: TerminalTranscriptSession, maxBytes: Int? = 2_000_000) -> String {
+    func readTranscriptText(
+        for session: TerminalTranscriptSession,
+        maxBytes: Int? = TerminalTranscriptStore.defaultPreviewLimitBytes,
+        includeTrimNotice: Bool = true
+    ) -> String {
         let url = transcriptURL(for: session.id)
         guard let handle = try? FileHandle(forReadingFrom: url) else {
             return "(transcript file missing)"
@@ -328,10 +345,15 @@ final class TerminalTranscriptStore {
         try? handle.seek(toOffset: offset)
         let data = (try? handle.readToEnd()) ?? Data()
         let text = TerminalTranscriptSanitizer.plainText(from: data)
-        if offset > 0 {
+        if includeTrimNotice, offset > 0 {
             return "... earlier transcript trimmed in this viewer; the saved file is larger\n\n" + text
         }
         return text.isEmpty ? "(empty transcript)" : text
+    }
+
+    func revealTranscript(_ session: TerminalTranscriptSession) {
+        ensureDirectories()
+        NSWorkspace.shared.activateFileViewerSelecting([transcriptURL(for: session.id)])
     }
 
     func revealHistoryFolder() {

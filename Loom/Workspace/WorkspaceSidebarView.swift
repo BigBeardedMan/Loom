@@ -159,6 +159,7 @@ struct WorkspaceSidebarView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Refresh usage")
+                .accessibilityLabel("Refresh usage")
             })
 
             VStack(spacing: 6) {
@@ -171,7 +172,8 @@ struct WorkspaceSidebarView: View {
 
     private func usageRow(_ tool: CLITool) -> some View {
         let isSelected = selectedUsageTool == tool
-        let resolved = usage.tools.first(where: { $0.tool == tool }) ?? .unavailable(tool)
+        let resolved = usage.tools.first(where: { $0.tool == tool })
+            ?? .unavailable(tool, timeframe: usage.timeframe)
         let hasWarning = tool.supportsLimitSignals && usage.hasUnacknowledgedLimitWarning(for: tool)
 
         return Button {
@@ -218,6 +220,7 @@ struct WorkspaceSidebarView: View {
         .buttonStyle(.plain)
         .pointingHandCursor()
         .help(isSelected ? "Return to workspace" : "Open \(tool.label) usage")
+        .accessibilityLabel(isSelected ? "Return to workspace" : "Open \(tool.label) usage")
     }
 
     private func usageSummary(for tool: CLIToolUsage, warning: Bool) -> String {
@@ -414,6 +417,7 @@ struct WorkspaceSidebarView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Open transcript")
+                    .accessibilityLabel("Open transcript")
 
                     Button {
                         terminalHistory.moveToDeleted(session)
@@ -423,6 +427,7 @@ struct WorkspaceSidebarView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Move to Recently Deleted")
+                    .accessibilityLabel("Move terminal transcript to Recently Deleted")
                 }
             }
         )
@@ -459,6 +464,7 @@ struct WorkspaceSidebarView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Recover")
+                    .accessibilityLabel("Recover terminal transcript")
 
                     Button(role: .destructive) {
                         terminalHistory.deletePermanently(session)
@@ -468,6 +474,7 @@ struct WorkspaceSidebarView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Delete permanently")
+                    .accessibilityLabel("Delete terminal transcript permanently")
                 }
             }
         )
@@ -560,6 +567,7 @@ struct WorkspaceSidebarView: View {
             }
             .buttonStyle(.plain)
             .help("Close terminal")
+            .accessibilityLabel("Close terminal")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
@@ -672,6 +680,7 @@ struct WorkspaceSidebarView: View {
             }
             .buttonStyle(.plain)
             .help("Delete idea")
+            .accessibilityLabel("Delete idea")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
@@ -784,6 +793,7 @@ struct WorkspaceSidebarView: View {
         }
         .buttonStyle(.plain)
         .help("Clear all")
+        .accessibilityLabel("Clear all")
     }
 
     private func emptyHint(_ text: String) -> some View {

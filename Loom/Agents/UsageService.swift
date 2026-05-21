@@ -4,7 +4,7 @@ import SwiftUI
 
 /// CLI agent we know how to read on-disk usage from. Add a case here to
 /// surface a new vendor in the Usage view.
-enum CLITool: String, CaseIterable, Identifiable, Hashable {
+enum CLITool: String, CaseIterable, Identifiable, Hashable, Sendable {
     case claude
     case codex
     case lmstudio
@@ -51,7 +51,7 @@ enum CLITool: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
-enum UsageTimeframe: String, CaseIterable, Identifiable, Hashable {
+enum UsageTimeframe: String, CaseIterable, Identifiable, Hashable, Sendable {
     case day, week, month, year
 
     var id: String { rawValue }
@@ -145,13 +145,13 @@ enum UsageTimeframe: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
-struct BucketBoundary: Hashable {
+struct BucketBoundary: Hashable, Sendable {
     let start: Date
     let end: Date
     let label: String
 }
 
-struct UsageBucket: Identifiable, Hashable {
+struct UsageBucket: Identifiable, Hashable, Sendable {
     let start: Date
     let end: Date
     let tokens: Int
@@ -160,7 +160,7 @@ struct UsageBucket: Identifiable, Hashable {
     var id: Date { start }
 }
 
-struct ProjectUsage: Hashable, Identifiable {
+struct ProjectUsage: Hashable, Identifiable, Sendable {
     let displayName: String
     let path: String
     let sessions: Int
@@ -169,7 +169,7 @@ struct ProjectUsage: Hashable, Identifiable {
     var id: String { path }
 }
 
-struct ModelUsage: Hashable, Identifiable {
+struct ModelUsage: Hashable, Identifiable, Sendable {
     let model: String
     let tokens: Int
 
@@ -187,7 +187,7 @@ struct ModelUsage: Hashable, Identifiable {
     }
 }
 
-struct ProjectTokenSlice: Hashable, Identifiable {
+struct ProjectTokenSlice: Hashable, Identifiable, Sendable {
     let displayName: String
     let path: String
     let tokens: Int
@@ -195,14 +195,14 @@ struct ProjectTokenSlice: Hashable, Identifiable {
     var id: String { path }
 }
 
-struct PromptTopic: Hashable, Identifiable {
+struct PromptTopic: Hashable, Identifiable, Sendable {
     let keyword: String
     let count: Int
 
     var id: String { keyword }
 }
 
-struct PromptPreview: Hashable, Identifiable {
+struct PromptPreview: Hashable, Identifiable, Sendable {
     let text: String
     let timestamp: Date
     let project: String
@@ -210,7 +210,7 @@ struct PromptPreview: Hashable, Identifiable {
     var id: String { "\(timestamp.timeIntervalSince1970)-\(text.prefix(20))" }
 }
 
-struct UsageLimitSnapshot: Hashable {
+struct UsageLimitSnapshot: Hashable, Sendable {
     let primaryUsedPercent: Double?
     let primaryWindowMinutes: Int?
     let primaryResetsAt: Date?
@@ -223,7 +223,7 @@ struct UsageLimitSnapshot: Hashable {
     let observedAt: Date?
 }
 
-struct UsageLimitWarning: Hashable, Identifiable {
+struct UsageLimitWarning: Hashable, Identifiable, Sendable {
     let id: String
     let tool: CLITool
     let peakUsedPercent: Double?
@@ -231,13 +231,17 @@ struct UsageLimitWarning: Hashable, Identifiable {
     let observedAt: Date?
 }
 
-struct CLIToolUsage: Identifiable, Hashable {
+struct CLIToolUsage: Identifiable, Hashable, Sendable {
     let tool: CLITool
     let isInstalled: Bool
+    let timeframe: UsageTimeframe
+    let windowStart: Date
+    let windowEnd: Date
     /// Sessions whose log file has been touched within the "live" window.
     let activeSessions: Int
     let sessionsToday: Int
     let sessionsTotal: Int
+    let windowSessions: Int
     let inputTokens: Int
     let outputTokens: Int
     let cachedTokens: Int
@@ -269,13 +273,21 @@ struct CLIToolUsage: Identifiable, Hashable {
 
     var totalTokens: Int { inputTokens + outputTokens + cachedTokens }
 
-    static func unavailable(_ tool: CLITool) -> CLIToolUsage {
+    static func unavailable(
+        _ tool: CLITool,
+        timeframe: UsageTimeframe = .day,
+        referenceDate: Date = .now
+    ) -> CLIToolUsage {
         CLIToolUsage(
             tool: tool,
             isInstalled: false,
+            timeframe: timeframe,
+            windowStart: referenceDate.addingTimeInterval(-timeframe.totalSpan),
+            windowEnd: referenceDate,
             activeSessions: 0,
             sessionsToday: 0,
             sessionsTotal: 0,
+            windowSessions: 0,
             inputTokens: 0,
             outputTokens: 0,
             cachedTokens: 0,
@@ -426,8 +438,10 @@ final class UsageService {
         let claudeRoot = claudeProjectsRoot
         let codexRoot = codexSessionsRoot
         let lmStudioRoot = lmStudioSessionsRoot
-        let boundaries = timeframe.boundaries()
-        let span = timeframe.totalSpan
+        let requestedTimeframe = timeframe
+        let referenceDate = Date()
+        let boundaries = requestedTimeframe.boundaries(now: referenceDate)
+        let windowStart = referenceDate.addingTimeInterval(-requestedTimeframe.totalSpan)
         isRefreshing = true
         refreshTask = Task { [weak self] in
             let snapshot = await Task.detached(priority: .utility) {
@@ -436,8 +450,10 @@ final class UsageService {
                     codexRoot: codexRoot,
                     lmStudioRoot: lmStudioRoot,
                     liveWindow: live,
+                    timeframe: requestedTimeframe,
                     boundaries: boundaries,
-                    timeframeSpan: span
+                    windowStart: windowStart,
+                    windowEnd: referenceDate
                 )
             }.value
             guard let self else { return }
@@ -668,34 +684,41 @@ final class UsageService {
         codexRoot: URL,
         lmStudioRoot: URL,
         liveWindow: TimeInterval,
+        timeframe: UsageTimeframe,
         boundaries: [BucketBoundary],
-        timeframeSpan: TimeInterval
+        windowStart: Date,
+        windowEnd: Date
     ) -> [CLIToolUsage] {
         let cutoff = Date().addingTimeInterval(-liveWindow)
         let calendar = Calendar.current
         let startOfToday = calendar.startOfDay(for: .now)
-        let windowStart = Date().addingTimeInterval(-timeframeSpan)
 
         let claude = readClaudeUsage(
             root: claudeRoot,
             liveCutoff: cutoff,
             startOfToday: startOfToday,
+            timeframe: timeframe,
             boundaries: boundaries,
-            windowStart: windowStart
+            windowStart: windowStart,
+            windowEnd: windowEnd
         )
         let codex = readCodexUsage(
             root: codexRoot,
             liveCutoff: cutoff,
             startOfToday: startOfToday,
+            timeframe: timeframe,
             boundaries: boundaries,
-            windowStart: windowStart
+            windowStart: windowStart,
+            windowEnd: windowEnd
         )
         let lmStudio = readLMStudioUsage(
             root: lmStudioRoot,
             liveCutoff: cutoff,
             startOfToday: startOfToday,
+            timeframe: timeframe,
             boundaries: boundaries,
-            windowStart: windowStart
+            windowStart: windowStart,
+            windowEnd: windowEnd
         )
         return [claude, codex, lmStudio]
     }
@@ -706,17 +729,20 @@ final class UsageService {
         root: URL,
         liveCutoff: Date,
         startOfToday: Date,
+        timeframe: UsageTimeframe,
         boundaries: [BucketBoundary],
-        windowStart: Date
+        windowStart: Date,
+        windowEnd: Date
     ) -> CLIToolUsage {
         let fm = FileManager.default
         guard fm.fileExists(atPath: root.path) else {
-            return .unavailable(.claude)
+            return .unavailable(.claude, timeframe: timeframe, referenceDate: windowEnd)
         }
 
         var sessionsTotal = 0
         var sessionsToday = 0
         var activeSessions = 0
+        var windowSessions = 0
         var inputTokens = 0
         var outputTokens = 0
         var cachedTokens = 0
@@ -755,7 +781,8 @@ final class UsageService {
                 if mtime >= liveCutoff   { activeSessions += 1 }
                 if lastActivity == nil || mtime > lastActivity! { lastActivity = mtime }
 
-                if mtime >= windowStart {
+                if mtime >= windowStart, mtime <= windowEnd {
+                    windowSessions += 1
                     projectSessionCount[projectDir, default: 0] += 1
                     if let prev = projectLastActivity[projectDir] {
                         if mtime > prev { projectLastActivity[projectDir] = mtime }
@@ -841,9 +868,13 @@ final class UsageService {
         return CLIToolUsage(
             tool: .claude,
             isInstalled: true,
+            timeframe: timeframe,
+            windowStart: windowStart,
+            windowEnd: windowEnd,
             activeSessions: activeSessions,
             sessionsToday: sessionsToday,
             sessionsTotal: sessionsTotal,
+            windowSessions: windowSessions,
             inputTokens: inputTokens,
             outputTokens: outputTokens,
             cachedTokens: cachedTokens,
@@ -1174,17 +1205,20 @@ final class UsageService {
         root: URL,
         liveCutoff: Date,
         startOfToday: Date,
+        timeframe: UsageTimeframe,
         boundaries: [BucketBoundary],
-        windowStart: Date
+        windowStart: Date,
+        windowEnd: Date
     ) -> CLIToolUsage {
         let fm = FileManager.default
         guard fm.fileExists(atPath: root.path) else {
-            return .unavailable(.codex)
+            return .unavailable(.codex, timeframe: timeframe, referenceDate: windowEnd)
         }
 
         var sessionsTotal = 0
         var sessionsToday = 0
         var activeSessions = 0
+        var windowSessions = 0
         var inputTokens = 0
         var outputTokens = 0
         var cachedTokens = 0
@@ -1207,7 +1241,7 @@ final class UsageService {
             includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
             options: [.skipsHiddenFiles]
         ) else {
-            return .unavailable(.codex)
+            return .unavailable(.codex, timeframe: timeframe, referenceDate: windowEnd)
         }
 
         for case let url as URL in enumerator {
@@ -1306,7 +1340,8 @@ final class UsageService {
 
             if sessionStartedAt >= startOfToday { sessionsToday += 1 }
             if lastActivity == nil || sessionActivity > lastActivity! { lastActivity = sessionActivity }
-            if sessionActivity >= windowStart {
+            if sessionActivity >= windowStart, sessionActivity <= windowEnd {
+                windowSessions += 1
                 projectSessionCount[sessionProject, default: 0] += 1
                 if let prev = projectLastActivity[sessionProject] {
                     if sessionActivity > prev { projectLastActivity[sessionProject] = sessionActivity }
@@ -1351,9 +1386,13 @@ final class UsageService {
         return CLIToolUsage(
             tool: .codex,
             isInstalled: true,
+            timeframe: timeframe,
+            windowStart: windowStart,
+            windowEnd: windowEnd,
             activeSessions: activeSessions,
             sessionsToday: sessionsToday,
             sessionsTotal: sessionsTotal,
+            windowSessions: windowSessions,
             inputTokens: inputTokens,
             outputTokens: outputTokens,
             cachedTokens: cachedTokens,
@@ -1713,8 +1752,10 @@ final class UsageService {
         root: URL,
         liveCutoff: Date,
         startOfToday: Date,
+        timeframe: UsageTimeframe,
         boundaries: [BucketBoundary],
-        windowStart: Date
+        windowStart: Date,
+        windowEnd: Date
     ) -> CLIToolUsage {
         let fm = FileManager.default
         let urls = (try? fm.contentsOfDirectory(
@@ -1726,6 +1767,7 @@ final class UsageService {
         var sessionsTotal = 0
         var sessionsToday = 0
         var activeSessions = 0
+        var windowSessions = 0
         var inputTokens = 0
         var outputTokens = 0
         var lastActivity: Date?
@@ -1761,7 +1803,8 @@ final class UsageService {
             if lastActivity == nil || updatedAt > lastActivity! { lastActivity = updatedAt }
 
             projectNames[workspaceKey] = workspaceName
-            if updatedAt >= windowStart {
+            if updatedAt >= windowStart, updatedAt <= windowEnd {
+                windowSessions += 1
                 projectSessions[workspaceKey, default: 0] += 1
                 if let prev = projectLastActivity[workspaceKey] {
                     if updatedAt > prev { projectLastActivity[workspaceKey] = updatedAt }
@@ -1854,9 +1897,13 @@ final class UsageService {
         return CLIToolUsage(
             tool: .lmstudio,
             isInstalled: true,
+            timeframe: timeframe,
+            windowStart: windowStart,
+            windowEnd: windowEnd,
             activeSessions: activeSessions,
             sessionsToday: sessionsToday,
             sessionsTotal: sessionsTotal,
+            windowSessions: windowSessions,
             inputTokens: inputTokens,
             outputTokens: outputTokens,
             cachedTokens: 0,

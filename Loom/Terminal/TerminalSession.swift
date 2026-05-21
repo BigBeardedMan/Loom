@@ -91,8 +91,22 @@ final class TerminalSession: Identifiable {
         let title = restore.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let displayTitle = title.isEmpty ? "Terminal Session" : title
         let header = "\u{1B}[2m--- Restored \(displayTitle) from Recently Closed ---\u{1B}[0m\r\n"
+        let trimNotice = Self.restoreTrimNotice(restore)
         let footer = "\r\n\u{1B}[2m--- Fresh shell starts below. Reconnect or relaunch commands when ready. ---\u{1B}[0m\r\n"
-        terminalView.feed(text: header + body + footer)
+        terminalView.feed(text: header + trimNotice + body + footer)
+    }
+
+    private static func restoreTrimNotice(_ restore: TerminalTranscriptRestore) -> String {
+        guard restore.wasTruncated else { return "" }
+        let imported = ByteCountFormatter.string(
+            fromByteCount: Int64(restore.importedByteLimit),
+            countStyle: .file
+        )
+        let total = ByteCountFormatter.string(
+            fromByteCount: restore.transcriptByteCount,
+            countStyle: .file
+        )
+        return "\u{1B}[2m--- Imported latest \(imported) of \(total). Open transcript preview for the saved file. ---\u{1B}[0m\r\n"
     }
 
     private static func terminalOutputText(_ text: String) -> String {
