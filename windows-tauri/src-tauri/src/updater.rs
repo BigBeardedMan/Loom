@@ -293,12 +293,46 @@ fn is_valid_release_asset_url(asset_url: &str, asset_name: &str, expected_versio
     )) && (path.ends_with(&format!("/{asset_name}")) || path.ends_with(&format!("/{encoded_name}")))
 }
 
+fn normalize_minisign_public_key(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    for line in trimmed.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with("untrusted comment:") {
+            continue;
+        }
+        if PublicKey::from_base64(line).is_ok() {
+            return Some(line.to_string());
+        }
+    }
+    if let Ok(decoded) = STANDARD.decode(trimmed) {
+        if decoded.len() == 42 && PublicKey::from_base64(trimmed).is_ok() {
+            return Some(trimmed.to_string());
+        }
+        if let Ok(decoded_text) = String::from_utf8(decoded) {
+            return normalize_minisign_public_key(&decoded_text);
+        }
+    }
+    None
+}
+
+fn parse_updater_public_key(key: &str) -> Result<PublicKey, String> {
+    let Some(normalized) = normalize_minisign_public_key(key) else {
+        return Err(
+            "invalid updater public key: expected a raw minisign key or minisign.pub contents"
+                .into(),
+        );
+    };
+    PublicKey::from_base64(&normalized).map_err(|e| format!("invalid updater public key: {e}"))
+}
+
 fn updater_public_key() -> Result<PublicKey, String> {
     let key = option_env!("TAURI_UPDATER_PUBLIC_KEY").unwrap_or("").trim();
     if key.is_empty() {
         return Err("updater public key is not embedded in this build".into());
     }
-    PublicKey::from_base64(key).map_err(|e| format!("invalid updater public key: {e}"))
+    parse_updater_public_key(key)
 }
 
 fn decode_installer_signature(sig_asset: &[u8]) -> Result<Signature, String> {
@@ -695,6 +729,18 @@ QtKMXWyYcwdpZAlPF7tE2ENJkRd1ujvKjlj1m9RtHTBnZPa5WKU5uWRs5GoP5M/VqE81QFuMKI5k/SfN
             signature.trusted_comment(),
             "timestamp:1555779966\tfile:test"
         );
+    }
+
+    #[test]
+    fn updater_public_key_accepts_raw_and_file_formats() {
+        let raw = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
+        let file = format!("untrusted comment: minisign public key\n{raw}\n");
+        let encoded_file = STANDARD.encode(file.as_bytes());
+
+        assert!(parse_updater_public_key(raw).is_ok());
+        assert!(parse_updater_public_key(&file).is_ok());
+        assert!(parse_updater_public_key(&encoded_file).is_ok());
+        assert_eq!(normalize_minisign_public_key(&file).as_deref(), Some(raw));
     }
 
     #[test]

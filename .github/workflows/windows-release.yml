@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       build_code:
-        description: "Testing version (MAJOR.MINOR.PATCH, e.g. 8.2.72)"
+        description: "Testing version (MAJOR.MINOR.PATCH, e.g. 8.2.73)"
         required: true
 
 permissions:
@@ -99,6 +99,20 @@ jobs:
             echo "TAURI_SIGNING_PRIVATE_KEY and TAURI_UPDATER_PUBLIC_KEY are required" >&2
             exit 1
           fi
+          TAURI_UPDATER_PUBLIC_KEY="$(node - <<'NODE'
+            const input = process.env.TAURI_UPDATER_PUBLIC_KEY?.trim() ?? "";
+            const key = input.startsWith("untrusted comment:")
+              ? input.split(/\r?\n/).map((line) => line.trim()).find((line) => line && !line.startsWith("untrusted comment:"))
+              : input.split(/\r?\n/)[0]?.trim();
+            if (!key) throw new Error("TAURI_UPDATER_PUBLIC_KEY did not contain a minisign public key");
+            const bytes = Buffer.from(key, "base64");
+            if (bytes.length !== 42 || !((bytes[0] === 0x45 && bytes[1] === 0x64) || (bytes[0] === 0x45 && bytes[1] === 0x44))) {
+              throw new Error("TAURI_UPDATER_PUBLIC_KEY is not a valid minisign public key");
+            }
+            process.stdout.write(key);
+          NODE
+          )"
+          export TAURI_UPDATER_PUBLIC_KEY
           node -e '
             const fs = require("fs");
             const path = "src-tauri/tauri.conf.json";
