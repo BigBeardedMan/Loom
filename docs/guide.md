@@ -18,6 +18,14 @@ This guide is generated and maintained alongside the app. The hosted MkDocs
 version of these chapters lives at
 [bigbeardedman.github.io/Loom](https://bigbeardedman.github.io/Loom/).
 
+![Loom — terminal workspace with live Codex task tracking](images/Loom1.jpg)
+
+![Loom — multi-terminal workspace with local model routing](images/Loom2.jpg)
+
+![Loom — Codex usage dashboard with local token analytics](images/Loom3.jpg)
+
+![Loom — Codex limits dashboard with local quota signals](images/Loom4.jpg)
+
 ---
 
 ## Table of Contents

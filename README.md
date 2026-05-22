@@ -9,11 +9,13 @@ Two builds live in this repo:
 
 Loom is a personal, single-user tool. No subscription model, hosted control plane, team billing, or feature gating. Local-first storage is the default; cloud services should be optional provider integrations only when they directly help the operator ship.
 
-![Loom — four-pane cockpit: editor, terminal, agent, task board](docs/images/Loom1.jpg)
+![Loom — terminal workspace with live Codex task tracking](docs/images/Loom1.jpg)
 
-![Loom — Notes workspace with agent pane](docs/images/Loom2.jpg)
+![Loom — multi-terminal workspace with local model routing](docs/images/Loom2.jpg)
 
-![Loom — Preview workspace with live localhost preview and agent pane](docs/images/Loom3.jpg)
+![Loom — Codex usage dashboard with local token analytics](docs/images/Loom3.jpg)
+
+![Loom — Codex limits dashboard with local quota signals](docs/images/Loom4.jpg)
 
 ## Install
 
