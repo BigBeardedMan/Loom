@@ -1,9 +1,6 @@
 import SwiftUI
 
-/// Generic donut/pie chart slice. Each piece carries a label, value, and
-/// the color the slice should be drawn in. Empty input renders as a
-/// hairline ring placeholder.
-struct PieSlice: Identifiable, Hashable {
+struct UsageBreakdownSlice: Identifiable {
     let label: String
     let value: Int
     let color: Color
@@ -11,146 +8,207 @@ struct PieSlice: Identifiable, Hashable {
     var id: String { label }
 }
 
-/// Compact donut chart with an inline legend. Designed for the usage
-/// dashboard — caps slice count, lumps overflow into "Other", and shows a
-/// total in the donut hole.
-struct PieChartView: View {
+struct UsageBreakdownRow: Identifiable {
+    let label: String
+    let value: Int
+    let color: Color
+
+    var id: String { label }
+}
+
+struct UsageTokenMixView: View {
     let title: String
-    let slices: [PieSlice]
-    let centerLabel: String?
-    let centerSubLabel: String?
+    let slices: [UsageBreakdownSlice]
+    let totalLabel: String
+    let valueFormatter: (Int) -> String
 
-    init(
-        title: String,
-        slices: [PieSlice],
-        centerLabel: String? = nil,
-        centerSubLabel: String? = nil
-    ) {
-        self.title = title
-        self.slices = slices
-        self.centerLabel = centerLabel
-        self.centerSubLabel = centerSubLabel
-    }
-
-    private var total: Int { slices.reduce(0) { $0 + $1.value } }
+    private var total: Int { slices.reduce(0) { $0 + max($1.value, 0) } }
+    private var visibleSlices: [UsageBreakdownSlice] { slices.filter { $0.value > 0 } }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title.uppercased())
-                .font(.system(size: 9, weight: .bold))
-                .tracking(0.5)
-                .foregroundStyle(LoomTheme.mutedText)
+        VStack(alignment: .leading, spacing: 7) {
+            sectionHeader(title: title, detail: total > 0 ? totalLabel : nil)
 
-            if total == 0 {
-                emptyDonut
-            } else {
-                HStack(alignment: .center, spacing: 12) {
-                    donut
-                        .frame(width: 92, height: 92)
-                    legend
+            if total > 0 {
+                segmentedBar
+                    .frame(height: 9)
+                    .clipShape(RoundedRectangle(cornerRadius: 999))
+                HStack(spacing: 8) {
+                    ForEach(slices) { slice in
+                        mixLegendItem(slice)
+                    }
                 }
-            }
-        }
-    }
-
-    private var emptyDonut: some View {
-        HStack(alignment: .center, spacing: 12) {
-            ZStack {
-                Circle()
-                    .stroke(LoomTheme.hairline, lineWidth: 12)
-                    .frame(width: 92, height: 92)
-                Text("—")
-                    .font(.system(size: 14, weight: .semibold))
+            } else {
+                Text("No token mix in this window.")
+                    .font(.system(size: 10))
                     .foregroundStyle(LoomTheme.mutedText)
             }
-            Text("No data yet")
-                .font(.system(size: 11))
-                .foregroundStyle(LoomTheme.mutedText)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(LoomTheme.panel.opacity(0.36))
+        .overlay(
+            RoundedRectangle(cornerRadius: LoomTheme.rowRadius)
+                .stroke(LoomTheme.hairline, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: LoomTheme.rowRadius))
+    }
+
+    private var segmentedBar: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 999)
+                    .fill(LoomTheme.hairline.opacity(0.72))
+
+                ForEach(Array(segments(in: geo.size.width).enumerated()), id: \.offset) { _, segment in
+                    Rectangle()
+                        .fill(segment.slice.color)
+                        .frame(width: segment.width)
+                        .offset(x: segment.offset)
+                        .help("\(segment.slice.label) — \(valueFormatter(segment.slice.value)) (\(percent(for: segment.slice.value)))")
+                }
+            }
         }
     }
 
-    private var donut: some View {
-        ZStack {
-            ForEach(Array(arcs.enumerated()), id: \.offset) { _, arc in
-                Path { path in
-                    path.addArc(
-                        center: CGPoint(x: 46, y: 46),
-                        radius: 40,
-                        startAngle: arc.start,
-                        endAngle: arc.end,
-                        clockwise: false
-                    )
-                }
-                .stroke(arc.slice.color, style: StrokeStyle(lineWidth: 14, lineCap: .butt))
-            }
-            VStack(spacing: 1) {
-                if let centerLabel {
-                    Text(centerLabel)
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
+    private func mixLegendItem(_ slice: UsageBreakdownSlice) -> some View {
+        HStack(spacing: 6) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(slice.value > 0 ? slice.color : LoomTheme.hairline)
+                .frame(width: 8, height: 8)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(slice.label.uppercased())
+                    .font(.system(size: 8, weight: .bold))
+                    .tracking(0.45)
+                    .foregroundStyle(LoomTheme.mutedText)
+                HStack(spacing: 4) {
+                    Text(valueFormatter(slice.value))
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
                         .foregroundStyle(LoomTheme.primaryText)
-                }
-                if let centerSubLabel {
-                    Text(centerSubLabel)
-                        .font(.system(size: 8, weight: .medium))
-                        .tracking(0.4)
+                    Text(percent(for: slice.value))
+                        .font(.system(size: 9, design: .monospaced))
                         .foregroundStyle(LoomTheme.mutedText)
                 }
             }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func segments(in width: CGFloat) -> [(slice: UsageBreakdownSlice, offset: CGFloat, width: CGFloat)] {
+        guard total > 0, width > 0 else { return [] }
+        var consumed = CGFloat(0)
+        return visibleSlices.enumerated().map { idx, slice in
+            let isLast = idx == visibleSlices.count - 1
+            let segmentWidth = isLast
+                ? max(0, width - consumed)
+                : max(2, width * CGFloat(slice.value) / CGFloat(total))
+            defer { consumed += segmentWidth }
+            return (slice, consumed, segmentWidth)
         }
     }
 
-    private var arcs: [DonutArc] {
-        guard total > 0 else { return [] }
-        let totalDegrees: Double = 360
-        var current: Double = -90 // 12 o'clock
-        var out: [DonutArc] = []
-        for slice in slices {
-            let portion = Double(slice.value) / Double(total) * totalDegrees
-            let start = Angle(degrees: current)
-            let end = Angle(degrees: current + portion)
-            out.append(DonutArc(slice: slice, start: start, end: end))
-            current += portion
-        }
-        return out
-    }
-
-    private var legend: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ForEach(slices) { slice in
-                HStack(spacing: 6) {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(slice.color)
-                        .frame(width: 8, height: 8)
-                    Text(slice.label)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(LoomTheme.primaryText)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer(minLength: 4)
-                    Text(percent(for: slice))
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(LoomTheme.mutedText)
-                }
-            }
-        }
-    }
-
-    private func percent(for slice: PieSlice) -> String {
-        guard total > 0 else { return "0%" }
-        let pct = Double(slice.value) / Double(total) * 100
+    private func percent(for value: Int) -> String {
+        guard total > 0, value > 0 else { return "0%" }
+        let pct = Double(value) / Double(total) * 100
         if pct < 0.5 { return "<1%" }
         return "\(Int(pct.rounded()))%"
     }
+}
 
-    private struct DonutArc {
-        let slice: PieSlice
-        let start: Angle
-        let end: Angle
+struct UsageRankedBreakdownView: View {
+    let title: String
+    let rows: [UsageBreakdownRow]
+    let emptyText: String
+    let valueFormatter: (Int) -> String
+
+    private var total: Int { rows.reduce(0) { $0 + max($1.value, 0) } }
+    private var peak: Int { max(rows.map(\.value).max() ?? 0, 1) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            sectionHeader(title: title, detail: total > 0 ? valueFormatter(total) : nil)
+
+            if total == 0 {
+                Text(emptyText)
+                    .font(.system(size: 10))
+                    .foregroundStyle(LoomTheme.mutedText)
+            } else {
+                VStack(spacing: 6) {
+                    ForEach(rows) { row in
+                        rankedRow(row)
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(LoomTheme.panel.opacity(0.36))
+        .overlay(
+            RoundedRectangle(cornerRadius: LoomTheme.rowRadius)
+                .stroke(LoomTheme.hairline, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: LoomTheme.rowRadius))
+    }
+
+    private func rankedRow(_ row: UsageBreakdownRow) -> some View {
+        let ratio = CGFloat(row.value) / CGFloat(peak)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(row.label)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(LoomTheme.primaryText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
+                Text(valueFormatter(row.value))
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(LoomTheme.primaryText)
+                Text(percent(for: row.value))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(LoomTheme.mutedText)
+                    .frame(width: 38, alignment: .trailing)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 999)
+                        .fill(LoomTheme.hairline.opacity(0.54))
+                    RoundedRectangle(cornerRadius: 999)
+                        .fill(row.color)
+                        .frame(width: max(3, geo.size.width * ratio))
+                }
+            }
+            .frame(height: 5)
+            .help("\(row.label) — \(valueFormatter(row.value)) (\(percent(for: row.value)))")
+        }
+    }
+
+    private func percent(for value: Int) -> String {
+        guard total > 0, value > 0 else { return "0%" }
+        let pct = Double(value) / Double(total) * 100
+        if pct < 0.5 { return "<1%" }
+        return "\(Int(pct.rounded()))%"
+    }
+}
+
+private func sectionHeader(title: String, detail: String?) -> some View {
+    HStack(spacing: 8) {
+        Text(title.uppercased())
+            .font(.system(size: 9, weight: .bold))
+            .tracking(0.5)
+            .foregroundStyle(LoomTheme.mutedText)
+        Spacer(minLength: 8)
+        if let detail {
+            Text(detail)
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(LoomTheme.mutedText)
+                .lineLimit(1)
+        }
     }
 }
 
 /// Horizontal bar list for "top topics" — keyword + count, with a fill
-/// proportional to the leader. Compact enough to drop next to a pie chart.
+/// proportional to the leader.
 struct TopTopicsView: View {
     let title: String
     let items: [(label: String, count: Int)]
