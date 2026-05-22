@@ -64,13 +64,8 @@ export function Titlebar() {
         title="Open Loom on GitHub"
       >
         <LoomLogoMark size={19} />
-        <span className="flex flex-col leading-none">
-          <span style={{ fontSize: 12, fontWeight: 700, color: text.primary }}>
-            Loom
-          </span>
-          <span style={{ marginTop: 2, fontSize: 9, fontWeight: 700, color: text.muted }}>
-            Testing Edition
-          </span>
+        <span style={{ fontSize: 12, fontWeight: 700, color: text.primary }}>
+          Loom
         </span>
       </a>
 
