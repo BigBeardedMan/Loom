@@ -147,26 +147,18 @@ struct WorkspaceView: View {
         Button {
             openURL(URL(string: "https://github.com/BigBeardedMan/Loom")!)
         } label: {
-            HStack(spacing: 8) {
-                LoomLogoMark(size: 24)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Loom")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(LoomTheme.primaryText)
-                    Text("Testing Edition")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(LoomTheme.orange)
-                        .tracking(0.45)
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(LoomTheme.softPanel.opacity(0.58))
-            .overlay(
-                RoundedRectangle(cornerRadius: LoomTheme.rowRadius)
-                    .stroke(LoomTheme.hairline, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: LoomTheme.rowRadius))
+            Text("Loom")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(LoomTheme.primaryText)
+                .frame(minWidth: 58, alignment: .center)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(LoomTheme.softPanel.opacity(0.58))
+                .overlay(
+                    RoundedRectangle(cornerRadius: LoomTheme.rowRadius)
+                        .stroke(LoomTheme.hairline, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: LoomTheme.rowRadius))
         }
         .buttonStyle(.plain)
         .pointingHandCursor()
