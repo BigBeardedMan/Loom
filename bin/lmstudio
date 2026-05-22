@@ -59,7 +59,7 @@ except ImportError:
 
 DEFAULT_BASE_URL = "http://localhost:1234/v1"
 DEFAULT_MAX_TURNS = 60
-CLI_VERSION = "8.2.87"
+CLI_VERSION = "8.2.88"
 TASK_ROOT = Path.home() / ".loom" / "tasks"
 SESSION_ROOT = Path.home() / ".loom" / "sessions"
 HISTORY_FILE = Path.home() / ".config" / "loom" / "lmstudio-history"
@@ -7761,6 +7761,18 @@ def detect_repeat_failure(history, name, args_canonical):
             and last["error"] and prev["error"])
 
 
+def detect_repeat_no_signal(history, name, args_canonical):
+    """True when this exact read-only call already returned no useful
+    information in the current session. Retrying the same no-match search
+    is model churn, not progress."""
+    for entry in reversed(history[-24:]):
+        if (entry.get("name") == name
+                and entry.get("args") == args_canonical
+                and entry.get("no_signal")):
+            return True
+    return False
+
+
 def build_intervention_message(name, args, schema_summary):
     """Synthetic tool-result body returned in place of the dispatch when
     we catch the model in a retry loop. Names the pattern explicitly and
@@ -7775,6 +7787,17 @@ def build_intervention_message(name, args, schema_summary):
         "Action: respond in plain text (no tool calls) describing what "
         "you intended to do, OR call `" + name + "` once with every "
         "required field filled in concretely."
+    )
+
+
+def build_no_signal_intervention(name, args):
+    arg_dump = json.dumps(args, indent=2) if args else "{}"
+    return (
+        "ORCHESTRATOR INTERVENTION: this exact `" + name + "` call already "
+        "returned no useful results. Do not retry it.\n\n"
+        "Last attempt:\n" + arg_dump + "\n\n"
+        "Action: answer now in plain text with what you checked and what "
+        "was not found, or try one genuinely different path/pattern."
     )
 
 
@@ -8745,10 +8768,13 @@ def run_turn(state, user_message, *, json_emit=None):
         json_emit("user", text=user_message)
 
     max_turns = max(1, int(getattr(state, "max_turns", DEFAULT_MAX_TURNS)))
+    concise_progress = (
+        bool(getattr(state, "concise_progress", False)) and not json_emit
+    )
+    progress_line = ConciseProgressLine(concise_progress)
+    unproductive_tool_turns = 0
+    force_final_answer = False
     for turn_index in range(1, max_turns + 1):
-        concise_progress = (
-            bool(getattr(state, "concise_progress", False)) and not json_emit
-        )
         streamer = ThinkStreamer(
             quiet=bool(json_emit) or concise_progress,
             emit_event=(lambda kind, text: json_emit(kind, text=text)) if json_emit else None,
@@ -8785,12 +8811,17 @@ def run_turn(state, user_message, *, json_emit=None):
             # stream rather than letting it ramble.
             stop_seq = None
             if (state.adapter and not state.adapter.native_tools
-                    and state.early_stop_text_tool_call):
+                    and state.early_stop_text_tool_call
+                    and not force_final_answer):
                 stop_seq = ["\n```\n", "</tool_call>"]
+            tool_schemas = (
+                [] if force_final_answer
+                else _all_tool_schemas(state, essential_only=essential_only)
+            )
             stream = stream_completion(
                 state.base_url, active_model,
                 state.transcript,
-                _all_tool_schemas(state, essential_only=essential_only),
+                tool_schemas,
                 max_tokens=state.max_tokens,
                 stop=stop_seq,
             )
@@ -8864,6 +8895,7 @@ def run_turn(state, user_message, *, json_emit=None):
                     json_emit("tool_surface_reduced",
                               message="essentials-only due to small context")
                 continue
+            progress_line.clear()
             if json_emit:
                 json_emit("error", message=error_message)
             else:
@@ -8876,7 +8908,7 @@ def run_turn(state, user_message, *, json_emit=None):
         # Even native-tool families occasionally fall back to text on
         # tricky prompts. The ModelAdapter parses both forms; we always
         # check when nothing native came through.
-        if (not finished_tool_calls and state.adapter
+        if (not force_final_answer and not finished_tool_calls and state.adapter
                 and assistant_text.strip()):
             schema_names = set(BUILTIN_TOOL_FUNCS.keys())
             for client in state.mcp_clients:
@@ -8909,6 +8941,7 @@ def run_turn(state, user_message, *, json_emit=None):
         # to render each one to a PNG (silent skip when mmdc not installed).
         rendered = render_mermaid_blocks(state, assistant_text)
         if rendered and not json_emit:
+            progress_line.clear()
             head = style(GLYPH_TOOL, "tool")
             print(f"  {head} {style('mermaid', 'key')} "
                   f"{style(', '.join(rendered), 'dim')}")
@@ -8917,6 +8950,7 @@ def run_turn(state, user_message, *, json_emit=None):
             # Don't auto-mark-complete here - the continuation policy may
             # want to push the model to actually do the work.
             state.last_turn_had_tool_calls = False
+            progress_line.clear()
             if concise_progress:
                 _render_concise_assistant_answer(
                     assistant_text, wrap=state.wrap)
@@ -8946,7 +8980,7 @@ def run_turn(state, user_message, *, json_emit=None):
         if not json_emit:
             for _, name, args in parsed_calls:
                 if concise_progress:
-                    _render_tool_progress_line(name, args)
+                    progress_line.update_tool(name, args)
                 else:
                     _render_tool_call_line(name, args)
 
@@ -8954,6 +8988,8 @@ def run_turn(state, user_message, *, json_emit=None):
             for _, name, args in parsed_calls:
                 json_emit("tool_call", name=name, arguments=args)
 
+        tool_progress_before = bool(state.progress_this_turn)
+        history_start = len(state.tool_history)
         results_in_order = [None] * len(parsed_calls)
         # Run safe calls in parallel.
         safe_indices = [i for i, (_, n, _) in enumerate(parsed_calls)
@@ -9003,11 +9039,39 @@ def run_turn(state, user_message, *, json_emit=None):
                                      "content": result_text})
             if not json_emit:
                 if name == "update_tasks":
+                    progress_line.clear()
                     draw_task_list(state.sink.current)
                 elif name in FS_MUTATING_TOOLS and state.last_diff:
+                    progress_line.clear()
                     path, old, new = state.last_diff
                     draw_diff(path, old, new)
                     state.last_diff = None
+
+        new_history = state.tool_history[history_start:]
+        tool_turn_made_progress = any(
+            (not entry.get("error")) and (not entry.get("no_signal"))
+            for entry in new_history
+        ) or (bool(state.progress_this_turn) != tool_progress_before)
+        if tool_turn_made_progress:
+            unproductive_tool_turns = 0
+        else:
+            unproductive_tool_turns += 1
+        if (concise_progress and unproductive_tool_turns >= 2
+                and not force_final_answer):
+            progress_line.update(
+                "summarizing after repeated no-result tool calls")
+            state.transcript.append({
+                "role": "system",
+                "content": (
+                    "ORCHESTRATOR: The last tool rounds produced no new "
+                    "information. Tool access is disabled for the next "
+                    "turn. Reply now in one concise sentence with what "
+                    "you checked and what was not found. Do not call tools."
+                ),
+            })
+            force_final_answer = True
+            unproductive_tool_turns = 0
+            continue
 
         # Collect what was mutated this turn, for the auto-test /
         # auto-screenshot / auto-commit hooks below.
@@ -9027,6 +9091,7 @@ def run_turn(state, user_message, *, json_emit=None):
                 note = run_auto_test(state)
                 if note:
                     if not json_emit:
+                        progress_line.clear()
                         head = style(GLYPH_TOOL, "tool")
                         print(f"  {head} {style('auto_test', 'key')} "
                               f"{style(runner['name'], 'dim')}")
@@ -9042,6 +9107,7 @@ def run_turn(state, user_message, *, json_emit=None):
             shot_note = maybe_auto_screenshot(state, mutated_paths)
             if shot_note:
                 if not json_emit:
+                    progress_line.clear()
                     head = style(GLYPH_TOOL, "tool")
                     print(f"  {head} {style('auto_screenshot', 'key')}")
                 state.transcript.append({
@@ -9058,6 +9124,7 @@ def run_turn(state, user_message, *, json_emit=None):
             ]
             commit_note = maybe_auto_commit(state, just_completed)
             if commit_note and not json_emit:
+                progress_line.clear()
                 head = style(GLYPH_TOOL, "tool")
                 print(f"  {head} {style('auto_commit', 'key')} "
                       f"{style(commit_note, 'dim')}")
@@ -9075,6 +9142,7 @@ def run_turn(state, user_message, *, json_emit=None):
                     for r in batch
                 )
                 if not json_emit:
+                    progress_line.clear()
                     head = style(GLYPH_TOOL, "tool")
                     print(f"  {head} {style('aggressive_batch', 'key')} "
                           f"({len(batch)} steps)")
@@ -9091,6 +9159,7 @@ def run_turn(state, user_message, *, json_emit=None):
     if json_emit:
         json_emit("error", message=f"max_turns={max_turns} hit")
     else:
+        progress_line.clear()
         print(style(f"  (stopped: hit max_turns={max_turns})", "err"))
     return ""
 
@@ -9319,6 +9388,46 @@ def _render_tool_progress_line(name, args):
     print(f"  {head} {style(summary, 'dim')}")
 
 
+class ConciseProgressLine:
+    """Single live status line for concise mode.
+
+    Carriage-return redraw keeps the terminal scrollback from filling with
+    every tool call. Before any normal output, clear() erases the live line.
+    """
+
+    def __init__(self, enabled):
+        self.enabled = bool(enabled)
+        self.visible = False
+        self.count = 0
+
+    def update_tool(self, name, args):
+        if not self.enabled:
+            return
+        self.count += 1
+        summary = _tool_progress_summary(name, args)
+        if self.count > 1:
+            summary = f"{summary} · {self.count} actions"
+        self.update(summary)
+
+    def update(self, summary):
+        if not self.enabled:
+            return
+        width = max(40, term_width() - 4)
+        if len(summary) > width - 6:
+            summary = summary[: width - 7] + "…"
+        head = style(GLYPH_TOOL, "tool")
+        line = f"  {head} {style(summary, 'dim')}"
+        sys.stdout.write("\r\x1b[2K" + line)
+        sys.stdout.flush()
+        self.visible = True
+
+    def clear(self):
+        if self.enabled and self.visible:
+            sys.stdout.write("\r\x1b[2K")
+            sys.stdout.flush()
+            self.visible = False
+
+
 def _assistant_display_text(text):
     if not text:
         return ""
@@ -9342,6 +9451,44 @@ def _render_concise_assistant_answer(text, *, wrap=True):
         return
     for line in rendered.splitlines():
         print(f"  {line}")
+
+
+def _render_tool_result_for_state(state, name, result, ok):
+    if getattr(state, "concise_progress", False):
+        return
+    _render_tool_result_summary(name, result, ok)
+
+
+def _tool_result_has_signal(name, result):
+    if name in FS_MUTATING_TOOLS or name == "run_bash" or name.startswith("mcp__"):
+        return True
+    text = str(result or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    no_signal_prefixes = (
+        "(no output)",
+        "no output",
+        "no matches",
+        "path not found:",
+        "grep timed out",
+        "orchestrator intervention:",
+    )
+    if any(lowered.startswith(prefix) for prefix in no_signal_prefixes):
+        return False
+    if name == "list_dir":
+        ignored = {".ds_store", "thumbs.db", "desktop.ini"}
+        entries = [line.strip().lower() for line in text.splitlines()
+                   if line.strip()]
+        return bool(entries) and any(entry not in ignored for entry in entries)
+    return True
+
+
+def _result_signature(result):
+    text = str(result or "")
+    if len(text) > 400:
+        text = text[:400]
+    return text
 
 
 def _dispatch_tool(state, name, args, *, narration=""):
@@ -9368,7 +9515,8 @@ def _dispatch_tool(state, name, args, *, narration=""):
     )
     if hook_note:
         # Surface in scrollback (not in tool result; that goes to model).
-        _render_tool_result_summary(name, f"hook: {hook_note[:160]}", True)
+        _render_tool_result_for_state(
+            state, name, f"hook: {hook_note[:160]}", True)
     if blocked:
         state.tool_history.append({
             "name": name, "args": canonical_in, "error": True,
@@ -9380,8 +9528,8 @@ def _dispatch_tool(state, name, args, *, narration=""):
     if state.constitution_rules:
         violation = constitution_violation(state, name, args_in)
         if violation:
-            _render_tool_result_summary(name, f"constitution: {violation}",
-                                        False)
+            _render_tool_result_for_state(
+                state, name, f"constitution: {violation}", False)
             state.tool_history.append({
                 "name": name, "args": canonical_in, "error": True,
             })
@@ -9406,9 +9554,22 @@ def _dispatch_tool(state, name, args, *, narration=""):
                 + "If the directory you want to write into doesn't exist "
                 "yet, write_file will create it automatically."
             )
-        _render_tool_result_summary(name, "orchestrator intervened (loop)", False)
+        _render_tool_result_for_state(
+            state, name, "orchestrator intervened (loop)", False)
         state.tool_history.append({
             "name": name, "args": canonical_in, "error": False,
+        })
+        return intervention
+
+    if name in SAFE_PARALLEL_TOOLS and detect_repeat_no_signal(
+            state.tool_history, name, canonical_in):
+        intervention = build_no_signal_intervention(name, args_in)
+        _render_tool_result_for_state(
+            state, name, "orchestrator blocked repeated no-result call",
+            False)
+        state.tool_history.append({
+            "name": name, "args": canonical_in, "error": True,
+            "no_signal": True,
         })
         return intervention
 
@@ -9461,12 +9622,17 @@ def _dispatch_tool(state, name, args, *, narration=""):
         hit = state.prefetch_cache.get(cache_key)
         if hit and time.time() - hit["ts"] < 30:
             state.prefetch_hits += 1
-            _render_tool_result_summary(name,
-                                        "[prefetch hit] " + str(hit["result"]),
-                                        True)
+            _render_tool_result_for_state(
+                state, name, "[prefetch hit] " + str(hit["result"]), True)
+            result_text = str(hit["result"])
+            no_signal = not _tool_result_has_signal(name, result_text)
             state.tool_history.append({
                 "name": name, "args": canonical_in, "error": False,
+                "no_signal": no_signal,
+                "result_sig": _result_signature(result_text),
             })
+            if not no_signal:
+                state.progress_this_turn = True
             memory_record(state, name, args_in, str(hit["result"]))
             return hit["result"]
 
@@ -9580,15 +9746,19 @@ def _dispatch_tool(state, name, args, *, narration=""):
         result = func(state, args_in)
         elapsed_ms = int((time.time() - _start) * 1000)
         cost_meter_record(state, name, elapsed_ms, args_in, result)
-        _render_tool_result_summary(name, result, True)
+        _render_tool_result_for_state(state, name, result, True)
+        no_signal = not _tool_result_has_signal(name, result)
         state.tool_history.append({
             "name": name, "args": _canonical(args_in), "error": False,
             "elapsed_ms": elapsed_ms,
+            "no_signal": no_signal,
+            "result_sig": _result_signature(result),
         })
         # 8.0.3: every successful non-update_tasks tool counts as real
         # progress for the zero-progress guard. update_tasks has its own
         # path above (counts only on a real status flip).
-        state.progress_this_turn = True
+        if not no_signal:
+            state.progress_this_turn = True
         memory_record(state, name, args_in, str(result))
         # post-tool-use hook. Stdout becomes a system note appended after
         # the tool result, so the model sees structured observations.
@@ -9613,7 +9783,7 @@ def _dispatch_tool(state, name, args, *, narration=""):
             return result + "\n\n[orchestrator: " + repair_note + "]"
         return result
     except Exception as e:
-        _render_tool_result_summary(name, str(e), False)
+        _render_tool_result_for_state(state, name, str(e), False)
         state.tool_history.append({
             "name": name, "args": _canonical(args_in), "error": True,
         })
