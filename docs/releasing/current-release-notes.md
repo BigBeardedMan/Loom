@@ -4,6 +4,8 @@
 - LM Studio terminal input now reads raw key bytes directly from the PTY file descriptor so repeated arrow-key presses cannot leak out of Python's buffered stdin as literal `[A` or `[B` text.
 - LM Studio slash commands are now saved to prompt history, so Up/Down recall works after commands like `/install`.
 - LM Studio now parses XML-style text tool calls from local models, preventing raw `<tool_call><function=...>` output from stalling the agent.
+- LM Studio now suppresses raw text-mode tool-call blocks from the visible terminal stream while still executing them, so local models do not leave XML or fenced tool syntax on screen.
+- LM Studio now honors `--max-turns`/`LMSTUDIO_MAX_TURNS` and defaults the agent loop to 60 turns, preventing long local reviews from stopping at the old hard-coded 30-turn limit.
 - LM Studio now includes `--debug-keys` for live raw-byte decoding diagnostics and `--version` to show the installed helper source path.
 - LM Studio slash-command navigation now tolerates orphaned `[A`/`[B` arrow-key payloads from Loom terminals, preventing raw arrow codes from being inserted into the prompt.
 - LM Studio now opens a Claude/Codex-style slash-command palette when typing `/`, showing command descriptions, a highlighted selection, Up/Down cycling, Tab insertion, and Enter-to-run behavior.
@@ -12,7 +14,7 @@
 - macOS and Windows Testing now include LM Studio run profile controls for planner, coder, and reviewer models, with coder-model routing used for local agent runs when routing is enabled.
 - macOS Testing now adds LM Studio readiness and model-library cards to the Agent Workbench, including native v1 load/unload/download support and fallback `lms` loading when native management is unavailable.
 - Windows Testing now adds the matching LM Studio readiness, model-library, and run-profile surface in the Agent pane, backed by new Tauri commands for native v1 load, unload, download, and download-status calls.
-- Testing Edition version metadata is now 8.2.85 on macOS and Windows.
+- Testing Edition version metadata is now 8.2.86 on macOS and Windows.
 - Windows Testing now treats LM Studio as a first-class Agent Pane provider with saved LM Studio endpoints, native `/api/v0/models` discovery, loaded-model prioritization, server status, runtime prepare, auto-scale controls, and terminal launch shortcuts.
 - Windows Testing now restores the missing visible Settings button in the title bar, matching the macOS always-available settings entry point.
 - Windows Testing now moves the Settings close button to the top-right corner of the Settings panel for update-pill verification.
