@@ -515,6 +515,7 @@ class BoxedLineEditor:
 
     LEAD_VISIBLE = 4   # "│ ❯ " on first row
     CONT_VISIBLE = 4   # "│   " on continuation rows (aligned under text)
+    SINGLE_BYTE_CSI = "ABCDHFZ"
 
     def __init__(self, history, state=None):
         self.history = list(history)
@@ -712,6 +713,27 @@ class BoxedLineEditor:
         self._render()
         return True
 
+    def _insert_text(self, text, advance=None):
+        self.line = self.line[:self.col] + text + self.line[self.col:]
+        self.col += len(text) if advance is None else advance
+        self._render()
+
+    def _handle_orphaned_csi(self):
+        """Handle `[A`/`[B` when the terminal bridge drops the ESC byte.
+
+        Loom's PTY bridge can occasionally deliver the CSI payload after
+        the escape byte has already timed out in the editor. Without this,
+        arrow keys show up as literal `[A` and `[B` text.
+        """
+        seq = self._read_with_timeout(0.04)
+        if seq is None:
+            return False
+        if seq in self.SINGLE_BYTE_CSI:
+            self._handle_csi(seq)
+            return True
+        self._insert_text("[" + seq)
+        return True
+
     def _render(self):
         """Full redraw. Wipe the previously drawn box (cursor is inside it
         at self._cursor_box_row), then render top + content rows + bottom
@@ -874,8 +896,7 @@ class BoxedLineEditor:
                     # `_handle_csi("<")` (a no-op), then read each of
                     # `0;42;15M` as a separate character and inserted
                     # them into self.line.
-                    SINGLE_BYTE_CSI = "ABCDHFZ"
-                    if nxt == "[" and seq not in SINGLE_BYTE_CSI:
+                    if nxt == "[" and seq not in self.SINGLE_BYTE_CSI:
                         # Multi-byte CSI. Drain until terminator: any
                         # alpha (A-Z, a-z) or `~`. Common patterns:
                         #   ESC[200~              bracketed paste start
@@ -947,6 +968,8 @@ class BoxedLineEditor:
                 continue
 
             if o >= 32:  # printable
+                if ch == "[" and self._handle_orphaned_csi():
+                    continue
                 extra = 0
                 if o >= 0xf0:
                     extra = 3
@@ -956,9 +979,7 @@ class BoxedLineEditor:
                     extra = 1
                 if extra:
                     ch += sys.stdin.read(extra)
-                self.line = self.line[:self.col] + ch + self.line[self.col:]
-                self.col += 1
-                self._render()
+                self._insert_text(ch, advance=1)
                 continue
 
     def _handle_paste(self):
