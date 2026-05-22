@@ -147,10 +147,12 @@ struct WorkspaceView: View {
         Button {
             openURL(URL(string: "https://github.com/BigBeardedMan/Loom")!)
         } label: {
-            Text("Loom")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(LoomTheme.primaryText)
-                .frame(minWidth: 58, alignment: .center)
+            HStack(spacing: 8) {
+                LoomLogoMark(size: 24)
+                Text("Loom")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(LoomTheme.primaryText)
+            }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
                 .background(LoomTheme.softPanel.opacity(0.58))

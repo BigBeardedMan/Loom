@@ -1,5 +1,6 @@
 import { useApp } from "../lib/store";
 import { ipc } from "../lib/ipc";
+import { LoomLogoMark } from "./LoomLogoMark";
 import { UpdatePill } from "./UpdatePill";
 import { Icons } from "../lib/icons";
 import { useDictation } from "../lib/dictation";
@@ -51,7 +52,7 @@ export function Titlebar() {
           e.preventDefault();
           ipc.shell.open("https://github.com/BigBeardedMan/Loom").catch(() => {});
         }}
-        className="flex items-center justify-center"
+        className="flex items-center justify-center gap-2"
         style={{
           padding: "4px 9px 4px 8px",
           minHeight: 34,
@@ -63,6 +64,7 @@ export function Titlebar() {
         }}
         title="Open Loom on GitHub"
       >
+        <LoomLogoMark size={19} />
         <span style={{ fontSize: 12, fontWeight: 700, color: text.primary }}>
           Loom
         </span>

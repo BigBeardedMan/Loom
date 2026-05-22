@@ -1,5 +1,5 @@
 ## Changes
 
-- Production Loom now shows only the centered `Loom` wordmark in the app shell.
-- Removed the Testing Edition logo mark and subtitle from the production macOS top bar.
-- Removed the same Testing Edition branding from the Windows/Tauri titlebar mirror and document title.
+- Production Loom restores the logo mark in the app shell while keeping the visible Testing Edition subtitle removed.
+- The macOS top bar and Windows/Tauri titlebar now both show the Loom logo mark next to the `Loom` wordmark.
+- Production version metadata is now 9.0.2 on macOS and Windows.
