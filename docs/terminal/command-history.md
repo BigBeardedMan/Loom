@@ -6,7 +6,7 @@ It's available as a panel kind in any **Prompt** workspace. Add it the same way 
 
 ## How it works
 
-Loom installs a small zsh shim at `~/Library/Application Support/Loom/shell/.zshrc`. When a Loom terminal pane spawns its login shell, the env it passes through includes:
+Loom installs a small zsh shim at `~/Library/Application Support/Loom/shell/.zshrc` in the Loom build. When a Loom terminal pane spawns its login shell, the env it passes through includes:
 
 - `ZDOTDIR=~/Library/Application Support/Loom/shell` — points zsh at the shim directory.
 - `LOOM_SESSION_ID=<uuid>` — identifies which Loom terminal session ran the command.
@@ -44,10 +44,22 @@ Exit codes are preserved across the `tee` pipeline via zsh's `pipefail` and `${p
 - **Non-zsh shells** are not supported. The shim is zsh-specific. If your `$SHELL` is `bash` or `fish`, the shell still runs normally; nothing breaks, but no commands appear in the panel.
 - **Commands run before Loom started writing the shim** (i.e. older zsh sessions or terminals from outside Loom) are not in the log.
 
+## Command history vs. terminal transcripts
+
+Command history is structured metadata: command text, cwd, timing, exit code,
+session id, and optional output capture for commands sent through Loom UI.
+Terminal transcripts are separate full PTY logs saved under `Terminal History/`
+so closed terminal sessions can be reviewed or recovered later.
+
 ## Privacy
 
 The history file lives entirely on disk inside Application Support. Nothing leaves your Mac. Loom reads the file with standard `FileManager` calls and does not watch via FSEvents (which would require a separate sandbox entitlement).
 
 ## Removing the integration
 
-Delete `~/Library/Application Support/Loom/shell/.zshrc`. Loom will re-create it on next launch unless you also turn off the integration (planned for a future Settings tab). To stop new entries from being logged in the meantime, delete the history file: `~/Library/Application Support/Loom/shell/history.jsonl`. The file is recreated on the next command if the shim is still in place.
+Use Settings -> Shell and turn off **Capture commands from Loom terminals**.
+The change applies to new terminal panes. To remove the existing files, delete
+`~/Library/Application Support/Loom/shell/.zshrc` and
+`~/Library/Application Support/Loom/shell/history.jsonl`.
+Loom recreates the shim on launch, but it is not sourced when the setting is
+off.

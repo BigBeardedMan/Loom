@@ -13,7 +13,7 @@ pub struct LocalEndpoint {
     pub id: String,
     pub name: String,
     pub base_url: String,
-    pub kind: String, // "ollama" | "openai-compat"
+    pub kind: String, // "ollama" | "openai-compat" | "lmstudio"
     pub default_model: String,
     pub requires_auth: bool,
     pub created_at: i64,

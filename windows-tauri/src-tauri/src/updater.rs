@@ -1,8 +1,10 @@
 // Custom updater: detect arch → check GitHub Releases → download matching
-// NSIS installer → save under %APPDATA%\Loom\staging\ → prompt → run installer.
+// NSIS installer → save under %APPDATA%\com.chasesims.Loom\staging\ → run installer.
 // Replaces the tauri-plugin-updater flow (left registered but unused).
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use futures_util::StreamExt;
+use minisign_verify::{PublicKey, Signature};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -80,29 +82,15 @@ struct GhAsset {
 #[derive(Deserialize)]
 struct GhRelease {
     tag_name: String,
+    draft: bool,
+    prerelease: bool,
     html_url: String,
     body: Option<String>,
     published_at: Option<String>,
     assets: Vec<GhAsset>,
 }
 
-fn parse_semver(s: &str) -> (u32, u32, u32) {
-    let trimmed = s.trim_start_matches("v");
-    let parts: Vec<&str> = trimmed.split('.').collect();
-    let to_num = |p: Option<&&str>| -> u32 {
-        p.and_then(|s| s.split('-').next().unwrap_or("0").parse::<u32>().ok())
-            .unwrap_or(0)
-    };
-    (
-        to_num(parts.first()),
-        to_num(parts.get(1)),
-        to_num(parts.get(2)),
-    )
-}
-
-fn is_newer(latest: &str, current: &str) -> bool {
-    parse_semver(latest) > parse_semver(current)
-}
+const STABLE_TAG_PREFIX: &str = "v";
 
 fn arch_token(arch: &str) -> &'static str {
     match arch {
@@ -111,10 +99,39 @@ fn arch_token(arch: &str) -> &'static str {
     }
 }
 
+fn stable_version_from_tag(tag: &str) -> Option<&str> {
+    tag.strip_prefix(STABLE_TAG_PREFIX)
+        .filter(|version| parse_semver(version).is_some())
+}
+
+fn parse_semver(version: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((major, minor, patch))
+}
+
+fn is_newer_version(candidate: &str, current: &str) -> bool {
+    let Some(candidate) = parse_semver(candidate) else {
+        return false;
+    };
+    let Some(current) = parse_semver(current) else {
+        return false;
+    };
+    candidate > current
+}
+
 #[tauri::command]
 pub async fn update_check() -> Result<Option<UpdateInfo>, String> {
+    // Stable Loom: walk recent releases and pick the highest semver `v<version>`
+    // that has a matching Windows installer for this architecture. GitHub
+    // ordering and manual release edits are not trusted for update selection.
     let url = format!(
-        "https://api.github.com/repos/{}/{}/releases/latest",
+        "https://api.github.com/repos/{}/{}/releases?per_page=100",
         REPO_OWNER, REPO_NAME
     );
     let client = reqwest::Client::builder()
@@ -125,46 +142,66 @@ pub async fn update_check() -> Result<Option<UpdateInfo>, String> {
     if !resp.status().is_success() {
         return Err(format!("GitHub API: HTTP {}", resp.status()));
     }
-    let release: GhRelease = resp.json().await.map_err(|e| e.to_string())?;
-
-    let latest_ver = release
-        .tag_name
-        .strip_prefix("windows-v")
-        .or_else(|| release.tag_name.strip_prefix("v"))
-        .unwrap_or(&release.tag_name)
-        .to_string();
+    let releases: Vec<GhRelease> = resp.json().await.map_err(|e| e.to_string())?;
     let current = env!("CARGO_PKG_VERSION");
-    if !is_newer(&latest_ver, current) {
-        return Ok(None);
-    }
-
     let arch = update_get_arch();
     let token = arch_token(&arch);
-    let asset = release
-        .assets
-        .iter()
-        .find(|a| is_valid_installer_name(&a.name, token))
-        .cloned();
-    let asset = match asset {
-        Some(a) => a,
-        None => return Ok(None),
+
+    let mut candidate: Option<((u64, u64, u64), String, GhRelease, GhAsset)> = None;
+    for release in releases {
+        if release.draft || release.prerelease {
+            continue;
+        }
+        let Some(version) = stable_version_from_tag(&release.tag_name) else {
+            continue;
+        };
+        let Some(parsed_version) = parse_semver(version) else {
+            continue;
+        };
+        if !is_newer_version(version, current) {
+            continue;
+        }
+
+        let asset = release
+            .assets
+            .iter()
+            .find(|asset| {
+                is_valid_installer_name(&asset.name, token, Some(version))
+                    && is_primary_installer_name(&asset.name)
+            })
+            .cloned();
+        let Some(asset) = asset else {
+            continue;
+        };
+        if !is_valid_release_asset_url(&asset.browser_download_url, &asset.name, version) {
+            return Err(format!(
+                "unexpected installer URL for {}: {}",
+                release.tag_name, asset.browser_download_url
+            ));
+        }
+        let sig_name = format!("{}.sig", asset.name);
+        let has_signature = release
+            .assets
+            .iter()
+            .any(|a| a.name == sig_name && a.size > 0);
+        if !has_signature {
+            return Err(format!(
+                "installer asset is missing non-empty signature on {}: {sig_name}",
+                release.tag_name
+            ));
+        }
+
+        if candidate
+            .as_ref()
+            .map_or(true, |(best, _, _, _)| parsed_version > *best)
+        {
+            candidate = Some((parsed_version, version.to_string(), release, asset));
+        }
+    }
+
+    let Some((_parsed, latest_ver, release, asset)) = candidate else {
+        return Ok(None);
     };
-    if !is_valid_release_asset_url(&asset.browser_download_url, &asset.name) {
-        return Err(format!(
-            "unexpected installer URL: {}",
-            asset.browser_download_url
-        ));
-    }
-    let sig_name = format!("{}.sig", asset.name);
-    let has_signature = release
-        .assets
-        .iter()
-        .any(|a| a.name == sig_name && a.size > 0);
-    if !has_signature {
-        return Err(format!(
-            "installer asset is missing non-empty signature: {sig_name}"
-        ));
-    }
 
     Ok(Some(UpdateInfo {
         version: latest_ver,
@@ -193,20 +230,59 @@ fn staged_marker_path(installer: &PathBuf) -> PathBuf {
     installer.with_extension("exe.staged")
 }
 
-fn is_valid_installer_name(name: &str, token: &str) -> bool {
+fn installer_parts(name: &str) -> Option<(String, String)> {
     if name.contains('/') || name.contains('\\') || name.contains("..") {
-        return false;
+        return None;
     }
-    let Ok(re) = Regex::new(r"(?i)^Loom[A-Za-z0-9._ -]*_(x64|arm64)-setup\.exe$") else {
-        return false;
+    let Ok(re) = Regex::new(r"(?i)^Loom[A-Za-z0-9._ -]*_(\d+\.\d+\.\d+)_(x64|arm64)-setup\.exe$")
+    else {
+        return None;
     };
-    re.is_match(name)
-        && name
-            .to_ascii_lowercase()
-            .contains(&format!("_{token}-setup.exe"))
+    let caps = re.captures(name)?;
+    let version = caps.get(1)?.as_str();
+    let arch = caps.get(2)?.as_str().to_ascii_lowercase();
+    parse_semver(version)?;
+    Some((version.to_string(), arch))
 }
 
-fn is_valid_release_asset_url(asset_url: &str, asset_name: &str) -> bool {
+fn is_valid_installer_name(name: &str, token: &str, expected_version: Option<&str>) -> bool {
+    let Some((version, arch)) = installer_parts(name) else {
+        return false;
+    };
+    arch == token.to_ascii_lowercase()
+        && expected_version.map_or(true, |expected| version == expected)
+}
+
+fn is_primary_installer_name(name: &str) -> bool {
+    name.starts_with("Loom_")
+}
+
+fn release_version_from_asset_url(asset_url: &str) -> Option<String> {
+    let Ok(url) = url::Url::parse(asset_url) else {
+        return None;
+    };
+    if url.scheme() != "https" || url.host_str() != Some("github.com") {
+        return None;
+    }
+    let path_segments = url.path_segments()?.collect::<Vec<_>>();
+    if path_segments.len() < 6
+        || path_segments[0] != REPO_OWNER
+        || path_segments[1] != REPO_NAME
+        || path_segments[2] != "releases"
+        || path_segments[3] != "download"
+    {
+        return None;
+    }
+    stable_version_from_tag(path_segments[4]).map(str::to_string)
+}
+
+fn is_valid_release_asset_url(asset_url: &str, asset_name: &str, expected_version: &str) -> bool {
+    let Some((asset_version, _arch)) = installer_parts(asset_name) else {
+        return false;
+    };
+    if asset_version != expected_version {
+        return false;
+    }
     let Ok(url) = url::Url::parse(asset_url) else {
         return false;
     };
@@ -215,9 +291,144 @@ fn is_valid_release_asset_url(asset_url: &str, asset_name: &str) -> bool {
     }
     let path = url.path();
     let encoded_name = asset_name.replace(' ', "%20");
-    path.starts_with("/BigBeardedMan/Loom/releases/download/v")
-        && (path.ends_with(&format!("/{asset_name}"))
-            || path.ends_with(&format!("/{encoded_name}")))
+    path.starts_with(&format!(
+        "/{}/{}/releases/download/v{}/",
+        REPO_OWNER, REPO_NAME, expected_version
+    )) && (path.ends_with(&format!("/{asset_name}")) || path.ends_with(&format!("/{encoded_name}")))
+}
+
+fn normalize_minisign_public_key(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    for line in trimmed.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with("untrusted comment:") {
+            continue;
+        }
+        if PublicKey::from_base64(line).is_ok() {
+            return Some(line.to_string());
+        }
+    }
+    if let Ok(decoded) = STANDARD.decode(trimmed) {
+        if decoded.len() == 42 && PublicKey::from_base64(trimmed).is_ok() {
+            return Some(trimmed.to_string());
+        }
+        if let Ok(decoded_text) = String::from_utf8(decoded) {
+            return normalize_minisign_public_key(&decoded_text);
+        }
+    }
+    None
+}
+
+fn parse_updater_public_key(key: &str) -> Result<PublicKey, String> {
+    let Some(normalized) = normalize_minisign_public_key(key) else {
+        return Err(
+            "invalid updater public key: expected a raw minisign key or minisign.pub contents"
+                .into(),
+        );
+    };
+    PublicKey::from_base64(&normalized).map_err(|e| format!("invalid updater public key: {e}"))
+}
+
+fn updater_public_key() -> Result<PublicKey, String> {
+    let key = option_env!("TAURI_UPDATER_PUBLIC_KEY").unwrap_or("").trim();
+    if key.is_empty() {
+        return Err("updater public key is not embedded in this build".into());
+    }
+    parse_updater_public_key(key)
+}
+
+fn decode_installer_signature(sig_asset: &[u8]) -> Result<Signature, String> {
+    let raw = std::str::from_utf8(sig_asset)
+        .map_err(|e| format!("installer signature is not UTF-8: {e}"))?
+        .trim();
+    if raw.is_empty() {
+        return Err("installer signature is empty".into());
+    }
+    let signature_text = if raw.starts_with("untrusted comment:") {
+        raw.to_string()
+    } else {
+        let decoded = STANDARD
+            .decode(raw)
+            .map_err(|e| format!("installer signature is not valid base64: {e}"))?;
+        String::from_utf8(decoded)
+            .map_err(|e| format!("decoded installer signature is not UTF-8: {e}"))?
+    };
+    Signature::decode(&signature_text)
+        .map_err(|e| format!("installer signature could not be decoded: {e}"))
+}
+
+fn verify_installer_signature(installer: &[u8], sig_asset: &[u8]) -> Result<(), String> {
+    let public_key = updater_public_key()?;
+    let signature = decode_installer_signature(sig_asset)?;
+    public_key
+        .verify(installer, &signature, true)
+        .map_err(|e| format!("installer signature verification failed: {e}"))
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_cmd_path(path: &str) -> String {
+    path.strip_prefix(r"\\?\UNC\")
+        .map(|rest| format!(r"\\{rest}"))
+        .or_else(|| path.strip_prefix(r"\\?\").map(str::to_string))
+        .unwrap_or_else(|| path.to_string())
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_update_helper_script(
+    parent_pid: u32,
+    installer_path: &str,
+    app_exe_name: &str,
+    exe_path: &str,
+) -> String {
+    format!(
+        "@echo off\r\n\
+set LOGFILE=%TEMP%\\loom-update-{pid}.log\r\n\
+echo === loom updater %DATE% %TIME% === > \"%LOGFILE%\"\r\n\
+echo waiting for pid {pid} to exit >> \"%LOGFILE%\"\r\n\
+:waitloop\r\n\
+tasklist /FI \"PID eq {pid}\" 2>nul | findstr /C:\" {pid} \" >nul\r\n\
+if not errorlevel 1 (\r\n\
+    timeout /t 1 /nobreak >nul\r\n\
+    goto waitloop\r\n\
+)\r\n\
+echo pid {pid} exited, settling 5s for file locks >> \"%LOGFILE%\"\r\n\
+timeout /t 5 /nobreak >nul\r\n\
+echo closing remaining {app_exe_name} processes >> \"%LOGFILE%\"\r\n\
+taskkill /IM \"{app_exe_name}\" /T /F >> \"%LOGFILE%\" 2>&1\r\n\
+echo running updater mode: \"{installer}\" /S /R /UPDATE /ARGS >> \"%LOGFILE%\"\r\n\
+start \"\" /wait \"{installer}\" /S /R /UPDATE /ARGS\r\n\
+set INSTALL_RC=%ERRORLEVEL%\r\n\
+echo updater-mode exit code: %INSTALL_RC% >> \"%LOGFILE%\"\r\n\
+if \"%INSTALL_RC%\"==\"0\" goto relaunchfallback\r\n\
+echo updater mode failed, trying legacy silent mode >> \"%LOGFILE%\"\r\n\
+start \"\" /wait \"{installer}\" /S\r\n\
+set INSTALL_RC=%ERRORLEVEL%\r\n\
+echo legacy-mode exit code: %INSTALL_RC% >> \"%LOGFILE%\"\r\n\
+if not \"%INSTALL_RC%\"==\"0\" (\r\n\
+    echo installer failed in both modes; relaunching current app without opening browser >> \"%LOGFILE%\"\r\n\
+    start \"\" \"{exe}\"\r\n\
+    goto cleanup\r\n\
+)\r\n\
+:relaunchfallback\r\n\
+echo settling 5s before fallback relaunch >> \"%LOGFILE%\"\r\n\
+timeout /t 5 /nobreak >nul\r\n\
+tasklist /FI \"IMAGENAME eq {app_exe_name}\" 2>nul | findstr /I /C:\"{app_exe_name}\" >nul\r\n\
+if errorlevel 1 (\r\n\
+    echo installer did not relaunch Loom, using fallback: \"{exe}\" >> \"%LOGFILE%\"\r\n\
+    start \"\" \"{exe}\"\r\n\
+) else (\r\n\
+    echo installer relaunched Loom >> \"%LOGFILE%\"\r\n\
+)\r\n\
+echo done >> \"%LOGFILE%\"\r\n\
+:cleanup\r\n\
+(goto) 2>nul & del \"%~f0\"\r\n",
+        pid = parent_pid,
+        installer = windows_cmd_path(installer_path).replace('"', ""),
+        app_exe_name = app_exe_name.replace('"', ""),
+        exe = windows_cmd_path(exe_path).replace('"', ""),
+    )
 }
 
 fn ensure_staged_installer(app: &AppHandle, installer_path: &str) -> Result<PathBuf, String> {
@@ -246,18 +457,19 @@ fn ensure_staged_installer(app: &AppHandle, installer_path: &str) -> Result<Path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .ok_or_else(|| "installer has no file name".to_string())?;
-    let arch = if name.to_ascii_lowercase().contains("_arm64-setup.exe") {
-        "arm64"
-    } else {
-        "x64"
+    let Some((_version, arch)) = installer_parts(&name) else {
+        return Err(format!("unexpected installer name: {name}"));
     };
-    if !is_valid_installer_name(&name, arch) {
+    if !is_valid_installer_name(&name, &arch, None) {
         return Err(format!("unexpected installer name: {name}"));
     }
     let marker = staged_marker_path(&canonical);
     if !marker.exists() {
         return Err("installer was not staged by Loom".into());
     }
+    let installer = fs::read(&canonical).map_err(|e| format!("read staged installer: {e}"))?;
+    let signature = fs::read(&marker).map_err(|e| format!("read staged signature: {e}"))?;
+    verify_installer_signature(&installer, &signature)?;
     Ok(canonical)
 }
 
@@ -267,10 +479,16 @@ pub async fn update_download_and_stage(
     asset_url: String,
     asset_name: String,
 ) -> Result<String, String> {
-    if !is_valid_installer_name(&asset_name, arch_token(&update_get_arch())) {
+    let expected_version = release_version_from_asset_url(&asset_url)
+        .ok_or_else(|| format!("unexpected installer URL: {asset_url}"))?;
+    if !is_valid_installer_name(
+        &asset_name,
+        arch_token(&update_get_arch()),
+        Some(&expected_version),
+    ) {
         return Err(format!("unexpected installer name: {asset_name}"));
     }
-    if !is_valid_release_asset_url(&asset_url, &asset_name) {
+    if !is_valid_release_asset_url(&asset_url, &asset_name, &expected_version) {
         return Err(format!("unexpected installer URL: {asset_url}"));
     }
     let staging = staging_dir(&app)?;
@@ -326,15 +544,22 @@ pub async fn update_download_and_stage(
         .create_new(true)
         .open(&target)
         .map_err(|e| e.to_string())?;
+    let mut installer_bytes = Vec::with_capacity(total.min(64 * 1024 * 1024) as usize);
     let mut downloaded: u64 = 0;
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let bytes = chunk.map_err(|e| e.to_string())?;
         file.write_all(&bytes).map_err(|e| e.to_string())?;
+        installer_bytes.extend_from_slice(&bytes);
         downloaded += bytes.len() as u64;
         let _ = app.emit("update/progress", UpdateProgress { downloaded, total });
     }
     file.flush().map_err(|e| e.to_string())?;
+    drop(file);
+    if let Err(err) = verify_installer_signature(&installer_bytes, &sig) {
+        let _ = fs::remove_file(&target);
+        return Err(err);
+    }
     fs::write(&marker, sig).map_err(|e| e.to_string())?;
     Ok(target.to_string_lossy().to_string())
 }
@@ -347,23 +572,19 @@ pub fn update_run_installer(
 ) -> Result<(), String> {
     let path = ensure_staged_installer(&app, &installer_path)?;
 
-    // Goal: one-click in-place update. Spawn a detached helper that
-    // (1) waits for this Loom.exe to exit so NSIS can overwrite the binary,
-    // (2) runs the NSIS installer silently with /S,
-    // (3) relaunches the freshly-installed Loom.exe.
-    //
-    // Everything the helper does is mirrored to %TEMP%\loom-update-<pid>.log
-    // so when (not if) it fails on someone else's machine we can ask for the
-    // log instead of guessing. Two reliability tweaks past the v3.1.1 helper:
-    // a longer post-exit settle (5s) so Loom.exe's handles fully release
-    // before NSIS overwrites it, and a fallback that opens the GitHub
-    // release page in the user's browser if the silent installer returns a
-    // non-zero exit code (most often UAC denied or AV quarantined).
+    // Spawn a detached helper that waits for this process to exit, runs the
+    // NSIS installer with Tauri's official updater arguments, and falls back
+    // to relaunching the app. The helper logs to %TEMP%\loom-update-<pid>.log
+    // and intentionally never opens GitHub from an in-app update attempt.
     #[cfg(windows)]
     {
-        let installer_path = path.to_string_lossy().to_string();
+        let installer_path = windows_cmd_path(&path.to_string_lossy());
         let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
-        let exe_path = exe.to_string_lossy().to_string();
+        let app_exe_name = exe
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "loom.exe".to_string());
+        let exe_path = windows_cmd_path(&exe.to_string_lossy());
         let parent_pid = std::process::id();
 
         let temp = std::env::temp_dir();
@@ -373,39 +594,8 @@ pub fn update_run_installer(
             uuid::Uuid::new_v4()
         ));
 
-        let script = format!(
-            "@echo off\r\n\
-set LOGFILE=%TEMP%\\loom-update-{pid}.log\r\n\
-echo === loom updater %DATE% %TIME% === > \"%LOGFILE%\"\r\n\
-echo waiting for pid {pid} to exit >> \"%LOGFILE%\"\r\n\
-:waitloop\r\n\
-tasklist /FI \"PID eq {pid}\" 2>nul | findstr /C:\" {pid} \" >nul\r\n\
-if not errorlevel 1 (\r\n\
-    timeout /t 1 /nobreak >nul\r\n\
-    goto waitloop\r\n\
-)\r\n\
-echo pid {pid} exited, settling 5s for file locks >> \"%LOGFILE%\"\r\n\
-timeout /t 5 /nobreak >nul\r\n\
-echo running: \"{installer}\" /S >> \"%LOGFILE%\"\r\n\
-\"{installer}\" /S >> \"%LOGFILE%\" 2>&1\r\n\
-set INSTALL_RC=%ERRORLEVEL%\r\n\
-echo installer exit code: %INSTALL_RC% >> \"%LOGFILE%\"\r\n\
-if not \"%INSTALL_RC%\"==\"0\" (\r\n\
-    echo silent install failed, opening release page >> \"%LOGFILE%\"\r\n\
-    start \"\" \"https://github.com/BigBeardedMan/Loom/releases/latest\"\r\n\
-    goto cleanup\r\n\
-)\r\n\
-echo settling 2s before relaunch >> \"%LOGFILE%\"\r\n\
-timeout /t 2 /nobreak >nul\r\n\
-echo relaunching: \"{exe}\" >> \"%LOGFILE%\"\r\n\
-start \"\" \"{exe}\"\r\n\
-echo done >> \"%LOGFILE%\"\r\n\
-:cleanup\r\n\
-(goto) 2>nul & del \"%~f0\"\r\n",
-            pid = parent_pid,
-            installer = installer_path.replace('"', ""),
-            exe = exe_path.replace('"', ""),
-        );
+        let script =
+            windows_update_helper_script(parent_pid, &installer_path, &app_exe_name, &exe_path);
 
         {
             let mut helper = fs::OpenOptions::new()
@@ -456,4 +646,155 @@ echo done >> \"%LOGFILE%\"\r\n\
 #[tauri::command]
 pub async fn update_apply() -> Result<(), String> {
     Err("update_apply is deprecated; use download_and_stage + run_installer".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compares_stable_versions_as_semver() {
+        assert!(is_newer_version("9.0.1", "9.0.0"));
+        assert!(is_newer_version("9.10.0", "9.2.99"));
+        assert!(!is_newer_version("9.0.0", "9.0.0"));
+        assert!(!is_newer_version("9.0.0", "9.0.1"));
+        assert!(!is_newer_version("9.0.1", "dev-local"));
+    }
+
+    #[test]
+    fn installer_name_must_match_release_version_and_arch() {
+        assert!(is_valid_installer_name(
+            "Loom_9.0.0_x64-setup.exe",
+            "x64",
+            Some("9.0.0")
+        ));
+        assert!(is_valid_installer_name(
+            "Loom_9.0.0_arm64-setup.exe",
+            "arm64",
+            Some("9.0.0")
+        ));
+        assert!(!is_valid_installer_name(
+            "Loom_8.1.10_x64-setup.exe",
+            "x64",
+            Some("9.0.0")
+        ));
+        assert!(!is_valid_installer_name(
+            "Loom_9.0.0_arm64-setup.exe",
+            "x64",
+            Some("9.0.0")
+        ));
+        assert!(is_valid_installer_name(
+            "Loom.Bridge_9.0.0_x64-setup.exe",
+            "x64",
+            Some("9.0.0")
+        ));
+        assert!(!is_primary_installer_name(
+            "Loom.Bridge_9.0.0_x64-setup.exe"
+        ));
+        assert!(is_primary_installer_name(
+            "Loom_9.0.0_x64-setup.exe"
+        ));
+    }
+
+    #[test]
+    fn release_asset_url_must_match_release_and_asset() {
+        let url = "https://github.com/BigBeardedMan/Loom/releases/download/v9.0.0/Loom_9.0.0_x64-setup.exe";
+        assert_eq!(
+            release_version_from_asset_url(url).as_deref(),
+            Some("9.0.0")
+        );
+        assert!(is_valid_release_asset_url(
+            url,
+            "Loom_9.0.0_x64-setup.exe",
+            "9.0.0"
+        ));
+        assert!(!is_valid_release_asset_url(
+            url,
+            "Loom_9.0.0_x64-setup.exe",
+            "9.0.1"
+        ));
+        assert!(!is_valid_release_asset_url(
+            "https://github.com/BigBeardedMan/Loom/releases/download/v9.0.0/Loom_8.1.10_x64-setup.exe",
+            "Loom_8.1.10_x64-setup.exe",
+            "9.0.0"
+        ));
+    }
+
+    #[test]
+    fn signature_decoder_accepts_tauri_base64_sig_assets() {
+        let minisign_text = "untrusted comment: signature from minisign secret key
+RWQf6LRCGA9i59SLOFxz6NxvASXDJeRtuZykwQepbDEGt87ig1BNpWaVWuNrm73YiIiJbq71Wi+dP9eKL8OC351vwIasSSbXxwA=
+trusted comment: timestamp:1555779966\tfile:test
+QtKMXWyYcwdpZAlPF7tE2ENJkRd1ujvKjlj1m9RtHTBnZPa5WKU5uWRs5GoP5M/VqE81QFuMKI5k/SfNQUaOAA==";
+        let encoded = STANDARD.encode(minisign_text);
+        let signature = decode_installer_signature(encoded.as_bytes())
+            .expect("base64 minisign text should decode");
+        assert_eq!(
+            signature.trusted_comment(),
+            "timestamp:1555779966\tfile:test"
+        );
+    }
+
+    #[test]
+    fn updater_public_key_accepts_raw_and_file_formats() {
+        let raw = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
+        let file = format!("untrusted comment: minisign public key\n{raw}\n");
+        let encoded_file = STANDARD.encode(file.as_bytes());
+
+        assert!(parse_updater_public_key(raw).is_ok());
+        assert!(parse_updater_public_key(&file).is_ok());
+        assert!(parse_updater_public_key(&encoded_file).is_ok());
+        assert_eq!(normalize_minisign_public_key(&file).as_deref(), Some(raw));
+    }
+
+    #[test]
+    fn windows_helper_uses_installer_modes_without_browser_fallback() {
+        let script = windows_update_helper_script(
+            1234,
+            r"C:\Users\runner\AppData\Roaming\Loom\staging\Loom_9.0.0_x64-setup.exe",
+            "loom.exe",
+            r"C:\Users\runner\AppData\Local\Loom\loom.exe",
+        );
+        assert!(script.contains("/S /R /UPDATE /ARGS"));
+        assert!(script.contains("trying legacy silent mode"));
+        assert!(script.contains("\" /S\r\n"));
+        assert!(!script.contains("github.com"));
+        assert!(!script.contains("release page"));
+    }
+
+    #[test]
+    fn windows_cmd_path_strips_extended_length_prefixes_for_batch_commands() {
+        assert_eq!(
+            windows_cmd_path(
+                r"\\?\C:\Users\Chase\AppData\Roaming\com.chasesims.Loom\staging\Loom.Bridge_9.0.0_arm64-setup.exe"
+            ),
+            r"C:\Users\Chase\AppData\Roaming\com.chasesims.Loom\staging\Loom.Bridge_9.0.0_arm64-setup.exe"
+        );
+        assert_eq!(
+            windows_cmd_path(r"\\?\UNC\server\share\Loom_9.0.0_x64-setup.exe"),
+            r"\\server\share\Loom_9.0.0_x64-setup.exe"
+        );
+        assert_eq!(
+            windows_cmd_path(r"C:\Users\Chase\Downloads\Loom.exe"),
+            r"C:\Users\Chase\Downloads\Loom.exe"
+        );
+    }
+
+    #[test]
+    fn windows_helper_never_writes_extended_length_paths_to_batch() {
+        let script = windows_update_helper_script(
+            628,
+            r"\\?\C:\Users\Chase\AppData\Roaming\com.chasesims.Loom\staging\Loom.Bridge_9.0.0_arm64-setup.exe",
+            "Loom.exe",
+            r"\\?\C:\Users\Chase\AppData\Local\Loom\Loom.exe",
+        );
+
+        assert!(!script.contains(r"\\?\"));
+        assert!(script.contains(
+            r"C:\Users\Chase\AppData\Roaming\com.chasesims.Loom\staging\Loom.Bridge_9.0.0_arm64-setup.exe"
+        ));
+        assert!(script.contains(
+            r"C:\Users\Chase\AppData\Local\Loom\Loom.exe"
+        ));
+    }
 }

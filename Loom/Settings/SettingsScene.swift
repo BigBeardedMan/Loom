@@ -15,6 +15,10 @@ struct SettingsView: View {
                 .tabItem { Label("Providers", systemImage: "server.rack") }
                 .padding(20)
 
+            AgentSettings()
+                .tabItem { Label("Agent", systemImage: "wand.and.stars") }
+                .padding(20)
+
             MCPSettings()
                 .tabItem { Label("MCP", systemImage: "powerplug") }
                 .padding(20)
@@ -27,7 +31,7 @@ struct SettingsView: View {
                 .tabItem { Label("Advanced", systemImage: "gearshape.2") }
                 .padding(20)
         }
-        .frame(width: 620, height: 460)
+        .frame(width: 640, height: 480)
     }
 }
 
@@ -97,6 +101,8 @@ private struct ProvidersSettings: View {
     @Environment(AgentRegistry.self) private var registry
     @State private var editing: LocalEndpoint?
     @State private var presentEditor: Bool = false
+    @State private var lmStudioDetected: Bool = false
+    @State private var isCheckingLMStudio: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -123,9 +129,19 @@ private struct ProvidersSettings: View {
                 .listStyle(.bordered)
             }
 
-            Text("Endpoints reachable on localhost or your LAN. Ollama auto-discovers models via /api/tags; OpenAI-compatible servers (LM Studio, llama.cpp, Jan, vLLM) use the model id you set here.")
+            if lmStudioDetected && !hasLMStudioEndpoint {
+                lmStudioDetectedCallout
+            }
+
+            Text("Endpoints reachable on localhost or your LAN. Ollama auto-discovers models via /api/tags; LM Studio uses /api/v0/models for loaded-model status; OpenAI-compatible servers use the model id you set here.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+        .task {
+            await checkForLMStudioServer()
+        }
+        .onChange(of: store.endpoints) { _, _ in
+            Task { await checkForLMStudioServer() }
         }
         .sheet(isPresented: $presentEditor, onDismiss: refreshAgents) {
             EndpointEditor(initial: editing) { saved in
@@ -138,6 +154,40 @@ private struct ProvidersSettings: View {
                 presentEditor = false
             }
         }
+    }
+
+    private var hasLMStudioEndpoint: Bool {
+        store.endpoints.contains { $0.kind == .lmstudio }
+    }
+
+    private var lmStudioDetectedCallout: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: "cpu")
+                .foregroundStyle(Color(red: 0.62, green: 0.40, blue: 0.95))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("LM Studio server detected")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("Add it as a local provider so models appear in the Agent picker.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if isCheckingLMStudio {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            Button("Add LM Studio") {
+                addDetectedLMStudio()
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(10)
+        .background(Color.purple.opacity(0.10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.purple.opacity(0.28), lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private var emptyState: some View {
@@ -161,7 +211,7 @@ private struct ProvidersSettings: View {
 
     private func endpointRow(_ endpoint: LocalEndpoint) -> some View {
         HStack(alignment: .center, spacing: 10) {
-            Image(systemName: endpoint.kind == .ollama ? "cube.box" : "network")
+            Image(systemName: endpointIcon(for: endpoint.kind))
                 .foregroundStyle(.secondary)
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 2) {
@@ -192,6 +242,41 @@ private struct ProvidersSettings: View {
     private func refreshAgents() {
         Task { await registry.refresh(localEndpoints: store.endpoints) }
     }
+
+    private func checkForLMStudioServer() async {
+        guard !hasLMStudioEndpoint else {
+            lmStudioDetected = false
+            return
+        }
+        guard let url = URL(string: LocalEndpoint.Kind.lmstudio.defaultBaseURL) else {
+            return
+        }
+        isCheckingLMStudio = true
+        let reachable = await LMStudioProvider.serverIsUp(baseURL: url)
+        isCheckingLMStudio = false
+        lmStudioDetected = reachable && !hasLMStudioEndpoint
+    }
+
+    private func addDetectedLMStudio() {
+        let endpoint = LocalEndpoint(
+            displayName: "LM Studio",
+            kind: .lmstudio,
+            baseURL: LocalEndpoint.Kind.lmstudio.defaultBaseURL,
+            defaultModel: "",
+            requiresAuth: false
+        )
+        store.upsert(endpoint)
+        lmStudioDetected = false
+        refreshAgents()
+    }
+
+    private func endpointIcon(for kind: LocalEndpoint.Kind) -> String {
+        switch kind {
+        case .ollama:           return "shippingbox"
+        case .openAICompatible: return "network"
+        case .lmstudio:         return "cpu"
+        }
+    }
 }
 
 private struct EndpointEditor: View {
@@ -212,8 +297,24 @@ private struct EndpointEditor: View {
     @State private var authToken: String = ""
     @State private var testStatus: TestStatus = .idle
     @State private var testMessage: String = ""
+    @State private var lmsCLI = LMStudioCLI()
+    @State private var discoveredModels: [DiscoveredModel] = []
+    @State private var isDiscoveringModels: Bool = false
+    @AppStorage("loom.lmstudio.autoScale") private var lmStudioAutoScale: Bool = true
+    @AppStorage("loom.lmstudio.maxContext") private var lmStudioMaxContext: Int = 65_536
 
     enum TestStatus { case idle, running, ok, failed }
+
+    private struct DiscoveredModel: Identifiable, Hashable {
+        let id: String
+        let detail: String
+        let loaded: Bool
+
+        var menuLabel: String {
+            if detail.isEmpty { return id }
+            return "\(id) (\(detail))"
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -228,7 +329,7 @@ private struct EndpointEditor: View {
                     }
                 }
                 .onChange(of: kind) { _, newKind in
-                    if baseURL.isEmpty || isDefaultBaseURL(for: oppositeKind(newKind)) {
+                    if baseURL.isEmpty || isOnAnyDefault() {
                         baseURL = newKind.defaultBaseURL
                     }
                 }
@@ -237,9 +338,12 @@ private struct EndpointEditor: View {
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.body, design: .monospaced))
 
-                TextField(modelFieldLabel, text: $defaultModel, prompt: Text(modelFieldHint))
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(.body, design: .monospaced))
+                HStack(spacing: 6) {
+                    TextField(modelFieldLabel, text: $defaultModel, prompt: Text(modelFieldHint))
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+                    modelPicker
+                }
 
                 Toggle("Requires auth token", isOn: $requiresAuth)
                 if requiresAuth {
@@ -268,6 +372,10 @@ private struct EndpointEditor: View {
                 Spacer()
             }
 
+            if kind == .lmstudio {
+                lmStudioServerSection
+            }
+
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel)
@@ -278,8 +386,242 @@ private struct EndpointEditor: View {
             }
         }
         .padding(20)
-        .frame(width: 480)
-        .onAppear(perform: prefill)
+        .frame(width: 520)
+        .onAppear {
+            applyInitial()
+            if kind == .lmstudio {
+                Task { await lmsCLI.refresh() }
+            }
+        }
+        .onChange(of: initial?.id) { _, _ in
+            // Sheet content's @State persists across presentations, so
+            // re-applying `initial` (or the blank defaults when adding) on
+            // every change is what makes Edit show the right endpoint
+            // instead of whatever the previous open left behind.
+            applyInitial()
+            if kind == .lmstudio {
+                Task { await lmsCLI.refresh() }
+            }
+        }
+        .onChange(of: kind) { _, newKind in
+            if newKind == .lmstudio {
+                Task { await lmsCLI.refresh() }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var modelPicker: some View {
+        Menu {
+            if isDiscoveringModels {
+                Text("Fetching…").foregroundStyle(.secondary)
+            } else if discoveredModels.isEmpty {
+                Text(kind == .lmstudio ? "No models found on the server" : "No models loaded on the server")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(discoveredModels) { model in
+                    Button {
+                        defaultModel = model.id
+                    } label: {
+                        Label(model.menuLabel, systemImage: model.loaded ? "circle.fill" : "circle")
+                    }
+                }
+            }
+            Divider()
+            Button {
+                Task { await discoverModels() }
+            } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+            }
+        } label: {
+            Image(systemName: "chevron.down.circle")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Fetch available models from the server")
+        .task(id: baseURL + kind.rawValue) {
+            await discoverModels()
+        }
+    }
+
+    /// Hit the server's models endpoint and populate `discoveredModels`.
+    /// LM Studio uses its richer native discovery path so the UI can show
+    /// loaded state and runtime context length.
+    private func discoverModels() async {
+        let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed) else {
+            discoveredModels = []
+            return
+        }
+        isDiscoveringModels = true
+        defer { isDiscoveringModels = false }
+
+        let endpoint: URL
+        switch kind {
+        case .ollama:
+            endpoint = url.appendingPathComponent("api/tags")
+        case .openAICompatible:
+            endpoint = url.appendingPathComponent("models")
+        case .lmstudio:
+            let models = await LMStudioProvider.fetchModels(baseURL: url)
+            discoveredModels = models.map {
+                DiscoveredModel(
+                    id: $0.id,
+                    detail: $0.metadataSummary,
+                    loaded: $0.loaded
+                )
+            }
+            return
+        }
+
+        var request = URLRequest(url: endpoint)
+        request.timeoutInterval = 4
+        if requiresAuth, !authToken.isEmpty {
+            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "authorization")
+        }
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                discoveredModels = []
+                return
+            }
+            switch kind {
+            case .ollama:
+                struct OllamaResp: Decodable {
+                    let models: [Item]
+                    struct Item: Decodable { let name: String }
+                }
+                let resp = try JSONDecoder().decode(OllamaResp.self, from: data)
+                discoveredModels = resp.models.map {
+                    DiscoveredModel(id: $0.name, detail: "", loaded: false)
+                }
+            case .openAICompatible:
+                struct OpenAIResp: Decodable {
+                    let data: [Item]
+                    struct Item: Decodable { let id: String }
+                }
+                let resp = try JSONDecoder().decode(OpenAIResp.self, from: data)
+                discoveredModels = resp.data.map {
+                    DiscoveredModel(id: $0.id, detail: "", loaded: false)
+                }
+            case .lmstudio:
+                break
+            }
+        } catch {
+            discoveredModels = []
+        }
+    }
+
+    @ViewBuilder
+    private var lmStudioServerSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("LM Studio Server")
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer()
+                serverStatusBadge
+            }
+
+            HStack(spacing: 8) {
+                Button("Start Server") {
+                    Task { await lmsCLI.startServer() }
+                }
+                .disabled(lmsCLI.status == .lmsMissing)
+                Button("Start as Daemon") {
+                    Task { await lmsCLI.daemonUp() }
+                }
+                .disabled(lmsCLI.status == .lmsMissing)
+                .help("Headless server that survives Loom quitting")
+                Button("Stop") {
+                    Task { await lmsCLI.stopServer() }
+                }
+                .disabled(lmsCLI.status == .lmsMissing)
+                Spacer()
+                Button("Refresh") {
+                    Task { await lmsCLI.refresh() }
+                }
+                .buttonStyle(.borderless)
+            }
+
+            Toggle("Auto-scale for agent work", isOn: $lmStudioAutoScale)
+                .font(.system(size: 11))
+            Stepper(value: $lmStudioMaxContext, in: 4_096...131_072, step: 4_096) {
+                Text("Target context: \(lmStudioMaxContext.formatted())")
+                    .font(.system(size: 11, design: .monospaced))
+            }
+            .disabled(!lmStudioAutoScale)
+            Text("Optimize reloads use `parallel=1` and this context target so the in-app agent has room for tools and transcript history.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if lmsCLI.status == .lmsMissing {
+                Text("`lms` CLI not found on PATH. Install LM Studio from lmstudio.ai and open it once to enable the CLI.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else if !lmsCLI.installedModels.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Installed models (\(lmsCLI.installedModels.count))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(lmsCLI.installedModels, id: \.self) { id in
+                                HStack(spacing: 6) {
+                                    Image(systemName: lmsCLI.loadedModels.contains(id) ? "circle.fill" : "circle")
+                                        .font(.system(size: 7))
+                                        .foregroundStyle(lmsCLI.loadedModels.contains(id) ? .green : .secondary)
+                                    Text(id)
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                    Spacer()
+                                    if !lmsCLI.loadedModels.contains(id) {
+                                        Button("Load") {
+                                            Task { await lmsCLI.loadModel(id) }
+                                        }
+                                        .buttonStyle(.borderless)
+                                        .font(.system(size: 10))
+                                    } else {
+                                        Button("Unload") {
+                                            Task { await lmsCLI.unloadModel(id) }
+                                        }
+                                        .buttonStyle(.borderless)
+                                        .font(.system(size: 10))
+                                    }
+                                    Button("Optimize") {
+                                        Task { await lmsCLI.optimizeForAgentWork(id, contextLength: lmStudioMaxContext) }
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .font(.system(size: 10))
+                                }
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                    .frame(maxHeight: 100)
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.gray.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    @ViewBuilder
+    private var serverStatusBadge: some View {
+        switch lmsCLI.status {
+        case .unknown:
+            Text("Checking…").font(.caption).foregroundStyle(.secondary)
+        case .stopped:
+            Label("Stopped", systemImage: "circle")
+                .font(.caption).foregroundStyle(.secondary)
+        case .running(let port):
+            Label("Running on :\(port)", systemImage: "circle.fill")
+                .font(.caption).foregroundStyle(.green)
+        case .lmsMissing:
+            Label("lms not installed", systemImage: "exclamationmark.triangle")
+                .font(.caption).foregroundStyle(.orange)
+        }
     }
 
     private var canSave: Bool {
@@ -288,11 +630,19 @@ private struct EndpointEditor: View {
     }
 
     private var modelFieldLabel: String {
-        kind == .ollama ? "Default model (optional)" : "Model"
+        switch kind {
+        case .ollama:           return "Default model (optional)"
+        case .lmstudio:         return "Default model (optional)"
+        case .openAICompatible: return "Model"
+        }
     }
 
     private var modelFieldHint: String {
-        kind == .ollama ? "llama3.2:3b — only used if /api/tags fails" : "lmstudio-community/Llama-3.1-8B-Instruct"
+        switch kind {
+        case .ollama:           return "llama3.2:3b — only used if /api/tags fails"
+        case .lmstudio:         return "qwen3-coder-30b — only used if /api/v0/models fails"
+        case .openAICompatible: return "lmstudio-community/Llama-3.1-8B-Instruct"
+        }
     }
 
     @ViewBuilder
@@ -315,14 +665,29 @@ private struct EndpointEditor: View {
         }
     }
 
-    private func prefill() {
-        guard let initial else { return }
-        displayName = initial.displayName
-        kind = initial.kind
-        baseURL = initial.baseURL
-        defaultModel = initial.defaultModel
-        requiresAuth = initial.requiresAuth
-        authToken = KeychainStore.load(account: initial.keychainAccount) ?? ""
+    /// Reset every @State field from `initial`, or to a clean "Add" baseline
+    /// when initial is nil. Called from both `onAppear` and `onChange(of:
+    /// initial?.id)` so the sheet content reflects whichever endpoint the
+    /// user clicked Edit on - or a blank form if they clicked Add.
+    private func applyInitial() {
+        testStatus = .idle
+        testMessage = ""
+        discoveredModels = []
+        if let initial {
+            displayName = initial.displayName
+            kind = initial.kind
+            baseURL = initial.baseURL
+            defaultModel = initial.defaultModel
+            requiresAuth = initial.requiresAuth
+            authToken = KeychainStore.load(account: initial.keychainAccount) ?? ""
+        } else {
+            displayName = ""
+            kind = .ollama
+            baseURL = LocalEndpoint.Kind.ollama.defaultBaseURL
+            defaultModel = ""
+            requiresAuth = false
+            authToken = ""
+        }
     }
 
     private func save() {
@@ -340,8 +705,12 @@ private struct EndpointEditor: View {
         ))
     }
 
-    private func oppositeKind(_ k: LocalEndpoint.Kind) -> LocalEndpoint.Kind {
-        k == .ollama ? .openAICompatible : .ollama
+    /// Detect "user hasn't customized the URL" so swapping the Kind picker can
+    /// auto-fill the new default. Checks against every kind's default to handle
+    /// the three-way switch (ollama / openAICompatible / lmstudio).
+    private func isOnAnyDefault() -> Bool {
+        let trimmed = baseURL.trimmingCharacters(in: .whitespaces)
+        return LocalEndpoint.Kind.allCases.contains { trimmed == $0.defaultBaseURL }
     }
 
     private func isDefaultBaseURL(for k: LocalEndpoint.Kind) -> Bool {
@@ -370,6 +739,8 @@ private struct EndpointEditor: View {
             result = await testOllama(url: url)
         case .openAICompatible:
             result = await testOpenAI(url: url, token: requiresAuth ? authToken : nil)
+        case .lmstudio:
+            result = await testLMStudio(url: url)
         }
 
         switch result {
@@ -414,13 +785,38 @@ private struct EndpointEditor: View {
             return .failure(error.localizedDescription)
         }
     }
+
+    private func testLMStudio(url: URL) async -> TestResult {
+        let models = await LMStudioProvider.fetchModels(baseURL: url)
+        if models.isEmpty {
+            return .failure("Server reachable but no models installed")
+        }
+        let loaded = models.filter(\.loaded).count
+        let preferred = defaultModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let probeModel = preferred.isEmpty ? (models.first(where: \.loaded)?.id ?? models.first?.id) : preferred
+        let schemaSupport: String
+        if let probeModel, !probeModel.isEmpty {
+            let supported = await LMStudioProvider.supportsJSONSchemaResponseFormat(baseURL: url, model: probeModel)
+            schemaSupport = supported ? ", schema tools ok" : ", no schema tools"
+        } else {
+            schemaSupport = ""
+        }
+        if loaded > 0 {
+            return .ok("\(models.count) installed, \(loaded) loaded\(schemaSupport)")
+        }
+        return .ok("\(models.count) installed, 0 loaded\(schemaSupport)")
+    }
 }
 
 // MARK: - Shell
 
 private struct ShellSettings: View {
+    @Environment(TerminalTranscriptStore.self) private var terminalHistory
     @AppStorage("loom.shellIntegration") private var integrationEnabled: Bool = true
     @AppStorage("loom.terminal.pasteAsPlainText") private var pasteAsPlainText: Bool = false
+    @AppStorage(TerminalTranscriptStore.enabledDefaultsKey) private var terminalHistoryEnabled: Bool = true
+    @AppStorage(TerminalTranscriptStore.maxBytesDefaultsKey) private var terminalHistoryMaxBytes: Double = TerminalTranscriptStore.defaultStorageLimitBytes
+    @State private var confirmPruneTerminalHistory: Bool = false
 
     var body: some View {
         Form {
@@ -434,6 +830,42 @@ private struct ShellSettings: View {
                 Text("Applies to terminals opened after the change. Currently-running terminals keep whichever mode they started with.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+            }
+
+            Section("Terminal History") {
+                Toggle("Save terminal transcripts locally", isOn: $terminalHistoryEnabled)
+
+                Picker("Storage limit", selection: $terminalHistoryMaxBytes) {
+                    Text("250 MB").tag(250_000_000.0)
+                    Text("500 MB").tag(500_000_000.0)
+                    Text("1 GB").tag(1_073_741_824.0)
+                    Text("2 GB").tag(2_147_483_648.0)
+                    Text("5 GB").tag(5_368_709_120.0)
+                    Text("10 GB").tag(10_737_418_240.0)
+                }
+                .pickerStyle(.menu)
+                .onChange(of: terminalHistoryMaxBytes) { _, _ in
+                    terminalHistory.enforceStorageLimit()
+                }
+
+                LabeledContent("Currently saved") {
+                    Text(byteCount(terminalHistory.totalBytes))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack {
+                    Button("Prune Terminal History...", role: .destructive) {
+                        confirmPruneTerminalHistory = true
+                    }
+                    Button("Reveal History Folder") {
+                        terminalHistory.revealHistoryFolder()
+                    }
+                }
+
+                Text("Transcripts stay on this Mac. Loom prunes old closed and deleted sessions when saved history exceeds the limit; active terminals keep running.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Pasting") {
@@ -468,6 +900,22 @@ private struct ShellSettings: View {
             }
         }
         .formStyle(.grouped)
+        .confirmationDialog(
+            "Prune saved terminal history?",
+            isPresented: $confirmPruneTerminalHistory,
+            titleVisibility: .visible
+        ) {
+            Button("Prune History", role: .destructive) {
+                terminalHistory.pruneSavedHistory()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This clears saved terminal transcripts. Active terminal panes keep running, but their saved transcript files start over.")
+        }
+    }
+
+    private func byteCount(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 }
 
@@ -699,6 +1147,270 @@ private struct MCPSettings: View {
     }
 }
 
+// MARK: - Agent
+
+private struct AgentSettings: View {
+    @AppStorage("loom.agent.maxTurns") private var maxTurns: Int = 30
+    @AppStorage("loom.agent.allowBash") private var allowBash: Bool = false
+    @AppStorage("loom.agent.permissionMode") private var permissionModeRaw: String = AgentPermissionMode.confirm.rawValue
+    @AppStorage("loom.agent.autoCompact") private var autoCompact: Bool = true
+    @AppStorage("loom.agent.postEditActions") private var postEditActions: Bool = true
+    @AppStorage("loom.lmstudio.autoScale") private var lmStudioAutoScale: Bool = true
+    @AppStorage("loom.lmstudio.maxContext") private var lmStudioMaxContext: Int = 65_536
+    @AppStorage("loom.lmstudio.plannerModel") private var lmStudioPlannerModel: String = ""
+    @AppStorage("loom.lmstudio.coderModel") private var lmStudioCoderModel: String = ""
+    @AppStorage("loom.lmstudio.routingEnabled") private var lmStudioRoutingEnabled: Bool = false
+    @AppStorage("loom.lmstudio.workbenchEnabled") private var lmStudioWorkbenchEnabled: Bool = true
+    @AppStorage("loom.lmstudio.autoPrepare") private var lmStudioAutoPrepare: Bool = true
+    @AppStorage("loom.agent.autoVerify") private var autoVerify: Bool = true
+    @AppStorage("loom.agent.previewSnapshots") private var previewSnapshots: Bool = false
+    @State private var helperStatus: HelperStatus = .unknown
+    @State private var helperError: String?
+
+    enum HelperStatus { case unknown, installed(URL), missing }
+
+    private var permissionModeBinding: Binding<AgentPermissionMode> {
+        Binding(
+            get: { AgentPermissionMode(rawValue: permissionModeRaw) ?? .confirm },
+            set: { permissionModeRaw = $0.rawValue }
+        )
+    }
+
+    var body: some View {
+        Form {
+            Section("Agent Loop") {
+                Stepper(value: $maxTurns, in: 3...100, step: 1) {
+                    Text("Max turns per run: \(maxTurns)")
+                }
+                Text("How many tool-call rounds the agent can take before stopping. Lower this if a local model gets stuck looping; raise it for harder multi-file refactors.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Allow run_bash tool", isOn: $allowBash)
+                Text("Lets the agent execute shell commands in the workspace. Off by default. Local code models will sometimes try aggressive cleanup commands. Turn on only when you trust the model and the workspace.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Picker("Permission mode", selection: permissionModeBinding) {
+                    ForEach(AgentPermissionMode.allCases) { mode in
+                        Label(mode.label, systemImage: mode.systemImage)
+                            .tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                Text((AgentPermissionMode(rawValue: permissionModeRaw) ?? .confirm).help)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Auto-compact long local-agent conversations", isOn: $autoCompact)
+                Text("When the transcript grows near the LM Studio context target, Loom keeps the recent turns and inserts a compact summary of older messages.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Add review summary after edits", isOn: $postEditActions)
+                Text("After file-editing runs, Loom adds a Review changes block with changed files, tool issues, and a git diff summary when available.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Auto-run verification after edits", isOn: $autoVerify)
+                Text("Runs read-only git checks and an inferred test/build command when the local agent changes files.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Check Preview pane URL during verification", isOn: $previewSnapshots)
+                Text("When a Preview pane exists, verification also checks the preview URL and records its HTTP status.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("LM Studio Runtime") {
+                Toggle("Use Agent Workbench for LM Studio", isOn: $lmStudioWorkbenchEnabled)
+                Text("Shows the LM Studio run as a cockpit with plan, tool timeline, changed files, and verification results.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Auto-prepare stopped LM Studio server", isOn: $lmStudioAutoPrepare)
+                Text("When the LM Studio pane opens and the server is stopped, Loom can start the daemon and load the selected model for agent work.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Auto-scale loaded model context", isOn: $lmStudioAutoScale)
+                Stepper(value: $lmStudioMaxContext, in: 4_096...131_072, step: 4_096) {
+                    Text("Context target: \(lmStudioMaxContext.formatted())")
+                }
+                .disabled(!lmStudioAutoScale)
+
+                Toggle("Route planner and coder models", isOn: $lmStudioRoutingEnabled)
+                TextField("Planner model", text: $lmStudioPlannerModel, prompt: Text("small fast model"))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                    .disabled(!lmStudioRoutingEnabled)
+                TextField("Coder model", text: $lmStudioCoderModel, prompt: Text("strong code model"))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                    .disabled(!lmStudioRoutingEnabled)
+
+                Text("These settings are shared by the Agent pane, terminal LM Studio quick launches, and the lmstudio CLI handoff.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Terminal Helper") {
+                HStack {
+                    helperStatusLabel
+                    Spacer()
+                    Button("Install Helper") {
+                        installHelper()
+                    }
+                    .disabled(installedHelperURL() != nil)
+                    Button("Uninstall") {
+                        uninstallHelper()
+                    }
+                    .disabled(installedHelperURL() == nil)
+                }
+
+                Text("Installs a `loom` command at ~/.local/bin so you can launch agent runs from any terminal: `loom \"fix the failing tests\"`. Add ~/.local/bin to your PATH if it isn't already.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if let helperError {
+                    Text(helperError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+
+            Section("Recommended Local Models") {
+                modelRow("qwen3-coder-30b", note: "Best all-around code model. Strong tool calling.")
+                modelRow("gpt-oss-20b", note: "OpenAI's open weights. Lower RAM than Qwen3-Coder.")
+                modelRow("deepseek-coder-v2", note: "Strong reasoning. Better for tricky refactors.")
+                Text("Pull these from inside LM Studio's Models tab. Loom auto-detects what's installed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { refreshHelperStatus() }
+    }
+
+    @ViewBuilder
+    private var helperStatusLabel: some View {
+        switch helperStatus {
+        case .unknown:
+            Text("Checking…").foregroundStyle(.secondary)
+        case .installed(let url):
+            Label("Installed at \(url.path)", systemImage: "checkmark.seal.fill")
+                .foregroundStyle(.green)
+                .font(.system(size: 11))
+        case .missing:
+            Label("Not installed", systemImage: "minus.circle")
+                .foregroundStyle(.secondary)
+                .font(.system(size: 11))
+        }
+    }
+
+    private func modelRow(_ name: String, note: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "cpu")
+                .foregroundStyle(.purple)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name).font(.system(size: 12, design: .monospaced))
+                Text(note).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+    }
+
+    private func refreshHelperStatus() {
+        if let url = installedHelperURL() {
+            helperStatus = .installed(url)
+        } else {
+            helperStatus = .missing
+        }
+    }
+
+    private func installedHelperURL() -> URL? {
+        let target = helperTargetURL()
+        return FileManager.default.fileExists(atPath: target.path) ? target : nil
+    }
+
+    private func helperTargetURL() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".local/bin/loom")
+    }
+
+    private func installHelper() {
+        helperError = nil
+        let target = helperTargetURL()
+        do {
+            let dir = target.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try Self.helperScriptSource.write(to: target, atomically: true, encoding: .utf8)
+            let attrs: [FileAttributeKey: Any] = [.posixPermissions: NSNumber(value: 0o755)]
+            try FileManager.default.setAttributes(attrs, ofItemAtPath: target.path)
+            refreshHelperStatus()
+        } catch {
+            helperError = error.localizedDescription
+        }
+    }
+
+    private func uninstallHelper() {
+        helperError = nil
+        let target = helperTargetURL()
+        do {
+            try FileManager.default.removeItem(at: target)
+            refreshHelperStatus()
+        } catch {
+            helperError = error.localizedDescription
+        }
+    }
+
+    /// The body of `~/.local/bin/loom`. Posts a `loom://` URL to LaunchServices
+    /// so the running Loom app picks it up via .onOpenURL. Uses python3 for
+    /// URL encoding because it's pre-installed on every macOS the app supports.
+    private static let helperScriptSource: String = """
+    #!/usr/bin/env bash
+    # Loom terminal helper. Triggers an agent run inside the Loom macOS app.
+    # Usage: loom "your prompt here"
+    #        loom --agent AGENT_ID "your prompt"
+    set -e
+
+    prompt=""
+    agent=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --workspace)
+                echo "warning: --workspace is ignored by this Loom build" >&2
+                shift 2 ;;
+            --agent)
+                agent="$2"; shift 2 ;;
+            -h|--help)
+                echo "Usage: loom [--agent ID] \\"prompt\\""; exit 0 ;;
+            *)
+                if [ -z "$prompt" ]; then prompt="$1"; else prompt="$prompt $1"; fi
+                shift ;;
+        esac
+    done
+
+    if [ -z "$prompt" ] && [ ! -t 0 ]; then
+        prompt="$(cat)"
+    fi
+
+    if [ -z "$prompt" ]; then
+        echo "Usage: loom [--agent ID] \\"prompt\\"" >&2
+        exit 1
+    fi
+
+    enc() { python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$1"; }
+    url="loom://run?prompt=$(enc "$prompt")"
+    [ -n "$agent" ] && url="$url&agent=$(enc "$agent")"
+    /usr/bin/open "$url"
+    """
+}
+
 // MARK: - Advanced
 
 private struct AdvancedSettings: View {
@@ -722,7 +1434,7 @@ private struct AdvancedSettings: View {
                             .font(.caption)
                     }
                 }
-                Text("Loom's Agent block uses Claude Code's OAuth login — no key required. This is kept for future API-direct features. Stored in macOS Keychain (service `com.chasesims.Loom`).")
+                Text("Loom's Agent block uses Claude Code's OAuth login. No key required. This is kept for future API-direct features. Stored in macOS Keychain (service `com.chasesims.Loom`).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

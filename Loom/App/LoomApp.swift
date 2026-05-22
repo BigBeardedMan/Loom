@@ -9,9 +9,12 @@ struct LoomApp: App {
     @State private var usageService = UsageService()
     @State private var updateService = UpdateService()
     @State private var localEndpoints = LocalEndpointStore()
+    @State private var lmStudioRuntime = LMStudioRuntimeService()
+    @State private var dictationService = DictationService()
     @State private var workspaceContext = WorkspaceContext()
     @State private var mcpService = MCPService()
     @State private var commandHistory = CommandHistoryService()
+    @State private var terminalTranscripts = TerminalTranscriptStore()
     @State private var crashService = CrashService.shared
 
     init() {
@@ -44,10 +47,14 @@ struct LoomApp: App {
                 .environment(usageService)
                 .environment(updateService)
                 .environment(localEndpoints)
+                .environment(lmStudioRuntime)
+                .environment(dictationService)
                 .environment(workspaceContext)
                 .environment(commandHistory)
+                .environment(terminalTranscripts)
                 .task {
                     ShellIntegration.install()
+                    terminalTranscripts.start()
                     layout.prefetchAllKinds()
                     liveAgentTasks.start()
                     usageService.start()
@@ -55,6 +62,21 @@ struct LoomApp: App {
                     commandHistory.start()
                     layout.startLiveAgentPolling()
                     await agentRegistry.refresh(localEndpoints: localEndpoints.endpoints)
+                }
+                // 8.0.16: trigger an extra remote-update check when Loom
+                // comes back to the foreground. The 60s background poll
+                // still runs, but this hook means a user who just shipped
+                // a new release (or switched back from a browser after
+                // reading a release note) sees the pill within seconds
+                // instead of within a minute.
+                .onReceive(NotificationCenter.default.publisher(
+                    for: NSApplication.didBecomeActiveNotification
+                )) { _ in
+                    usageService.requestLimitWarningRefresh()
+                    Task { await updateService.checkRemote() }
+                }
+                .onOpenURL { url in
+                    URLSchemeHandler.handle(url)
                 }
                 .sheet(item: Binding(
                     get: { crashService.pendingReport },
@@ -148,6 +170,18 @@ struct LoomApp: App {
                 .keyboardShortcut("o", modifiers: [.command, .shift])
                 .disabled(layout.previousWorkspaceID == nil)
             }
+            CommandMenu("Dictation") {
+                Button(dictationService.state.isActive ? "Stop Dictation" : "Start Dictation") {
+                    dictationService.toggle()
+                }
+                .keyboardShortcut(f5Key, modifiers: [])
+
+                Button("Cancel Dictation") {
+                    dictationService.cancel()
+                }
+                .keyboardShortcut(.escape, modifiers: [])
+                .disabled(!dictationService.state.isActive)
+            }
 
             CommandGroup(replacing: .help) {
                 Button("Loom Help") {
@@ -178,8 +212,11 @@ struct LoomApp: App {
         Settings {
             SettingsView()
                 .environment(localEndpoints)
+                .environment(lmStudioRuntime)
+                .environment(dictationService)
                 .environment(agentRegistry)
                 .environment(mcpService)
+                .environment(terminalTranscripts)
         }
     }
 
@@ -188,6 +225,10 @@ struct LoomApp: App {
         let index = panels.firstIndex(of: panel) ?? 0
         let digit = String(min(index + 1, 9))
         return KeyEquivalent(Character(digit))
+    }
+
+    private var f5Key: KeyEquivalent {
+        KeyEquivalent(Character(UnicodeScalar(NSF5FunctionKey)!))
     }
 
     private func pinFocused(_ pin: BlockPin?) {

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version (MAJOR.MINOR.PATCH, e.g. 4.0.0)"
+        description: "Version (MAJOR.MINOR.PATCH, e.g. 9.0.0)"
         required: true
 
 permissions:
@@ -88,6 +88,8 @@ jobs:
 
       - name: Build Tauri (${{ matrix.target }})
         env:
+          # Kept for compatibility with older about/build-code UI surfaces.
+          LOOM_BUILD_CODE: ${{ steps.release_version.outputs.value }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
@@ -98,6 +100,37 @@ jobs:
             echo "TAURI_SIGNING_PRIVATE_KEY and TAURI_UPDATER_PUBLIC_KEY are required" >&2
             exit 1
           fi
+          TAURI_UPDATER_PUBLIC_KEY="$(node - <<'NODE'
+            const input = process.env.TAURI_UPDATER_PUBLIC_KEY?.trim() ?? "";
+            const rawKeyPattern = /^[A-Za-z0-9+/=]+$/;
+            const keyFromPubFile = (text) =>
+              text.split(/\r?\n/).map((line) => line.trim()).find((line) => line && !line.startsWith("untrusted comment:"));
+            const validateRawKey = (key) => {
+              if (!key || !rawKeyPattern.test(key)) return false;
+              const bytes = Buffer.from(key, "base64");
+              return bytes.length === 42 && ((bytes[0] === 0x45 && bytes[1] === 0x64) || (bytes[0] === 0x45 && bytes[1] === 0x44));
+            };
+            const encodePubFile = (text) => Buffer.from(text.endsWith("\n") ? text : `${text}\n`, "utf8").toString("base64");
+            let canonical;
+            if (input.startsWith("untrusted comment:")) {
+              const key = keyFromPubFile(input);
+              if (!validateRawKey(key)) throw new Error("TAURI_UPDATER_PUBLIC_KEY contains an invalid minisign public key file");
+              canonical = encodePubFile(input);
+            } else {
+              const compact = input.replace(/\s+/g, "");
+              const decodedText = Buffer.from(compact, "base64").toString("utf8");
+              if (decodedText.startsWith("untrusted comment:") && validateRawKey(keyFromPubFile(decodedText))) {
+                canonical = compact;
+              } else if (validateRawKey(compact)) {
+                canonical = encodePubFile(`untrusted comment: minisign public key\n${compact}`);
+              } else {
+                throw new Error("TAURI_UPDATER_PUBLIC_KEY is not a valid Tauri updater public key");
+              }
+            }
+            process.stdout.write(canonical);
+          NODE
+          )"
+          export TAURI_UPDATER_PUBLIC_KEY
           node -e '
             const fs = require("fs");
             const path = "src-tauri/tauri.conf.json";
@@ -128,10 +161,135 @@ jobs:
           fi
 
           installer_name="$(basename "${installers[0]}")"
-          cp "${installers[0]}" "$out/$installer_name"
-          pnpm tauri signer sign -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" "$out/$installer_name"
-          test -s "$out/$installer_name.sig"
+          artifact_name="${installer_name// /.}"
+          cp "${installers[0]}" "$out/$artifact_name"
+          pnpm tauri signer sign -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" "$out/$artifact_name"
+          test -s "$out/$artifact_name.sig"
+
+          legacy_name="${artifact_name/_${{ steps.release_version.outputs.value }}_${{ matrix.artifact_suffix }}-setup.exe/_${{ matrix.artifact_suffix }}-setup.exe}"
+          if [[ "$legacy_name" == "$artifact_name" ]]; then
+            echo "could not derive legacy installer alias from $artifact_name" >&2
+            exit 1
+          fi
+          cp "$out/$artifact_name" "$out/$legacy_name"
+          cp "$out/$artifact_name.sig" "$out/$legacy_name.sig"
+
+          bridge_name="Loom.Bridge_${{ steps.release_version.outputs.value }}_${{ matrix.artifact_suffix }}-setup.exe"
+          rustc --edition=2021 --target ${{ matrix.target }} -C opt-level=2 \
+            tools/windows-updater-bridge.rs \
+            -o "$out/$bridge_name"
+          pnpm tauri signer sign -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" "$out/$bridge_name"
+          test -s "$out/$bridge_name.sig"
           find "$out" -maxdepth 1 -type f -print
+
+      - name: Smoke test NSIS updater install
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $versionedInstaller = Get-ChildItem -Path "release-artifacts" -Filter "Loom_${{ steps.release_version.outputs.value }}_${{ matrix.artifact_suffix }}-setup.exe" | Select-Object -First 1
+          $legacyInstaller = Get-ChildItem -Path "release-artifacts" -Filter "Loom_${{ matrix.artifact_suffix }}-setup.exe" | Select-Object -First 1
+          $bridgeInstaller = Get-ChildItem -Path "release-artifacts" -Filter "Loom.Bridge_${{ steps.release_version.outputs.value }}_${{ matrix.artifact_suffix }}-setup.exe" | Select-Object -First 1
+          if (-not $versionedInstaller) {
+            throw "No versioned ${{ matrix.artifact_suffix }} NSIS installer found in release-artifacts"
+          }
+          if (-not $legacyInstaller) {
+            throw "No legacy ${{ matrix.artifact_suffix }} NSIS installer alias found in release-artifacts"
+          }
+          if (-not $bridgeInstaller) {
+            throw "No bridge ${{ matrix.artifact_suffix }} updater found in release-artifacts"
+          }
+
+          $programFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+          $exeNames = @("loom.exe", "Loom.exe")
+          $installDirs = @()
+          if ($env:LOCALAPPDATA) {
+            $installDirs += Join-Path $env:LOCALAPPDATA "Loom"
+            $installDirs += Join-Path $env:LOCALAPPDATA "Programs\Loom"
+          }
+          if ($env:ProgramFiles) {
+            $installDirs += Join-Path $env:ProgramFiles "Loom"
+          }
+          if ($programFilesX86) {
+            $installDirs += Join-Path $programFilesX86 "Loom"
+          }
+          $pathsToCheck = foreach ($dir in $installDirs) {
+            foreach ($name in $exeNames) {
+              Join-Path $dir $name
+            }
+          }
+
+          function Stop-LoomProcesses {
+            Stop-Process -Name "loom" -Force -ErrorAction SilentlyContinue
+            Stop-Process -Name "Loom" -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+          }
+
+          function Invoke-InstallerSmoke {
+            param(
+              [Parameter(Mandatory = $true)] [System.IO.FileInfo] $Installer,
+              [Parameter(Mandatory = $true)] [string[]] $Arguments,
+              [Parameter(Mandatory = $true)] [string] $Label
+            )
+
+            Write-Host "Running $Label smoke test for $($Installer.FullName) $($Arguments -join ' ')"
+            $process = Start-Process -FilePath $Installer.FullName -ArgumentList $Arguments -PassThru
+            $deadline = (Get-Date).AddMinutes(4)
+            $candidateRoots = @()
+            while ((Get-Date) -lt $deadline) {
+              $candidateRoots = @($pathsToCheck | Where-Object { $_ -and (Test-Path -LiteralPath $_) })
+              if ($candidateRoots -and $process.HasExited) {
+                if ($process.ExitCode -ne 0) {
+                  throw "$Label install failed with exit code $($process.ExitCode)"
+                }
+                break
+              }
+              if ($process.HasExited -and $process.ExitCode -ne 0) {
+                throw "$Label install failed with exit code $($process.ExitCode)"
+              }
+              Start-Sleep -Seconds 5
+            }
+
+            if (-not $candidateRoots) {
+              if (-not $process.HasExited) {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+              }
+              Write-Host "Checked install paths:"
+              $pathsToCheck | ForEach-Object { Write-Host "  $_" }
+              if ($env:LOCALAPPDATA -and (Test-Path $env:LOCALAPPDATA)) {
+                Get-ChildItem -Path $env:LOCALAPPDATA -Filter "*.exe" -Recurse -ErrorAction SilentlyContinue |
+                  Where-Object { $_.FullName -match "Loom|loom" } |
+                  Select-Object -First 20 -ExpandProperty FullName |
+                  ForEach-Object { Write-Host "Found candidate: $_" }
+              }
+              throw "Installed Loom executable was not found after $Label install"
+            }
+
+            $exe = @($candidateRoots)[0]
+            $productVersion = (Get-Item -LiteralPath $exe).VersionInfo.ProductVersion
+            Write-Host "Installed executable: $exe"
+            Write-Host "Installed product version: $productVersion"
+            if ($productVersion -and -not $productVersion.StartsWith("${{ steps.release_version.outputs.value }}")) {
+              throw "Installed product version '$productVersion' does not match ${{ steps.release_version.outputs.value }}"
+            }
+
+            Stop-LoomProcesses
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+          }
+
+          Invoke-InstallerSmoke -Installer $legacyInstaller -Arguments @("/S") -Label "legacy silent"
+          Invoke-InstallerSmoke -Installer $versionedInstaller -Arguments @("/S", "/R", "/UPDATE", "/ARGS") -Label "updater"
+          $env:LOOM_BRIDGE_LOCAL_INSTALLER = $versionedInstaller.FullName
+          $env:LOOM_BRIDGE_STRICT = "1"
+          $env:LOOM_BRIDGE_DISABLE_ELEVATION = "1"
+          try {
+            Invoke-InstallerSmoke -Installer $bridgeInstaller -Arguments @("/S") -Label "bridge recovery"
+          } finally {
+            Remove-Item Env:\LOOM_BRIDGE_LOCAL_INSTALLER -ErrorAction SilentlyContinue
+            Remove-Item Env:\LOOM_BRIDGE_STRICT -ErrorAction SilentlyContinue
+            Remove-Item Env:\LOOM_BRIDGE_DISABLE_ELEVATION -ErrorAction SilentlyContinue
+          }
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -160,8 +318,8 @@ jobs:
             exit 1
           fi
           find dist -maxdepth 3 -type f -print
-          NSIS_X64=$(find dist -name "*x64-setup.exe" | head -n1)
-          NSIS_ARM=$(find dist -name "*arm64-setup.exe" | head -n1)
+          NSIS_X64=$(find dist -name "Loom_${VERSION}_x64-setup.exe" | head -n1)
+          NSIS_ARM=$(find dist -name "Loom_${VERSION}_arm64-setup.exe" | head -n1)
           SIG_X64="${NSIS_X64}.sig"
           SIG_ARM="${NSIS_ARM}.sig"
           for file in "$NSIS_X64" "$NSIS_ARM" "$SIG_X64" "$SIG_ARM"; do
@@ -191,12 +349,19 @@ jobs:
           }
           EOF
           mv latest-windows.json dist/
+      - name: Publish bridge recovery assets first
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          files: dist/**/Loom.Bridge_*-setup.exe*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
       - name: Publish release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
-          files: dist/**/*
+          files: |
+            dist/latest-windows.json
+            dist/**/Loom_*
           generate_release_notes: true
-          # When the macOS local release.sh has already created the v$VERSION
-          # release with the DMG attached, this step appends our NSIS assets
-          # to it instead of erroring out.
+          # The macOS local release.sh may have already created the release
+          # with the DMG; this step appends our NSIS assets to the same tag.
           fail_on_unmatched_files: false

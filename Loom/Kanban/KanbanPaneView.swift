@@ -73,10 +73,6 @@ struct KanbanPaneView: View {
                 .padding(.vertical, 1)
                 .background(Color.white.opacity(0.05))
                 .clipShape(Capsule())
-            // Claude gets a file-level delete; Codex/Gemini get hidden via a
-            // dismissal timestamp (the rollout JSONL holds the conversation
-            // so it isn't safe to delete). Either way the × is available on
-            // every session.
             Button {
                 liveAgentTasks.clear(group: group)
             } label: {
@@ -204,13 +200,15 @@ struct KanbanPaneView: View {
         } else {
             labelText = labels.prefix(3).joined(separator: ", ") + ", and \(labels.count - 3) more"
         }
-        return "Clears every visible session\(labelText.isEmpty ? "" : " for \(labelText)"). File-backed task sessions delete their task JSON files; log-backed sessions such as Codex are hidden until their log updates, so stuck sessions stay gone and active sessions reappear on the next event."
+        return "Clears every visible session\(labelText.isEmpty ? "" : " for \(labelText)"). File-backed task sessions delete their task JSON files; log-backed sessions such as Codex are hidden until their task plan updates, so stuck sessions stay gone and active sessions reappear on the next plan update."
     }
 
     private func clearHelp(for group: LiveAgentTaskGroup) -> String {
         switch group.source {
-        case .claude: return "Clear \(group.displayName) task files"
-        case .codex, .gemini: return "Hide \(group.displayName) until it next updates"
+        case .claude, .lmstudio:
+            return "Clear \(group.displayName) task files"
+        case .codex, .gemini, .ollama, .openAICompatible:
+            return "Hide \(group.displayName) until it next updates"
         }
     }
 

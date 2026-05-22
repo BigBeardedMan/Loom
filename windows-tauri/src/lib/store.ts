@@ -9,6 +9,7 @@ import {
   type Layout,
   defaultLayout,
 } from "../modules/workspace/LayoutPersistence";
+import type { TerminalTranscriptRestore } from "./ipc";
 import {
   WEIGHT_MIN,
   WEIGHT_MAX,
@@ -29,7 +30,7 @@ export type Panel =
   | "preview"
   | "commands";
 
-type UsageTool = "claude" | "codex" | "gemini" | null;
+type UsageTool = "claude" | "codex" | "lmstudio" | null;
 type UsageTimeframe = "day" | "week" | "month" | "year";
 
 type Theme = "system" | "light" | "dark";
@@ -57,6 +58,7 @@ type AppState = {
   deleteWorkspace: (id: string) => Promise<void>;
   renameWorkspace: (id: string, name: string) => Promise<void>;
   addBlock: (kind: Panel) => Promise<void>;
+  restoreTerminalBlock: (restore: TerminalTranscriptRestore) => Promise<void>;
   removeBlock: (id: string) => Promise<void>;
   reorderBlocks: (newOrder: Block[]) => Promise<void>;
   swapBlocks: (a: string, b: string) => Promise<void>;
@@ -84,6 +86,52 @@ type AppState = {
 
 const SELECTED_WS_KEY = "loom.selectedWorkspaceId";
 
+const MAC_WORKSPACE_SEEDS: Array<{
+  name: string;
+  colorName: Workspace["colorName"];
+  kindRaw: Workspace["kindRaw"];
+}> = [
+  { name: "Prompt", colorName: "blue", kindRaw: "code" },
+  { name: "Ideas", colorName: "pink", kindRaw: "ideas" },
+  { name: "Review", colorName: "orange", kindRaw: "review" },
+];
+
+function matchesSeedKind(ws: Workspace, kind: Workspace["kindRaw"]) {
+  if (kind === "review") return ws.kindRaw === "review" || ws.kindRaw === "build";
+  return ws.kindRaw === kind;
+}
+
+function canonicalWorkspaceList(list: Workspace[]): Workspace[] {
+  return MAC_WORKSPACE_SEEDS.flatMap((seed) => {
+    const match = list.find((ws) => matchesSeedKind(ws, seed.kindRaw));
+    if (!match) return [];
+    return [
+      {
+        ...match,
+        name: seed.name,
+        colorName: seed.colorName,
+        kindRaw: seed.kindRaw,
+      },
+    ];
+  });
+}
+
+async function loadCanonicalWorkspaces(): Promise<Workspace[]> {
+  const list = await ipc.workspace.list();
+  const next = [...list];
+  for (const seed of MAC_WORKSPACE_SEEDS) {
+    if (next.some((ws) => matchesSeedKind(ws, seed.kindRaw))) continue;
+    const created = await ipc.workspace.create({
+      name: seed.name,
+      colorName: seed.colorName,
+      kindRaw: seed.kindRaw,
+    });
+    await saveLayout(created.id, defaultLayout(seed.kindRaw));
+    next.push(created);
+  }
+  return canonicalWorkspaceList(next);
+}
+
 export const useApp = create<AppState>((set, get) => ({
   workspaces: [],
   selectedWorkspaceId: localStorage.getItem(SELECTED_WS_KEY),
@@ -97,7 +145,7 @@ export const useApp = create<AppState>((set, get) => ({
   theme: (localStorage.getItem("loom.theme") as Theme) || "system",
 
   loadWorkspaces: async () => {
-    const list = await ipc.workspace.list();
+    const list = await loadCanonicalWorkspaces();
     set({ workspaces: list });
     const current = get().selectedWorkspaceId;
     const valid = list.find((w) => w.id === current);
@@ -196,6 +244,19 @@ export const useApp = create<AppState>((set, get) => ({
     }
     const next: Layout = { blocks: [...current.blocks, block] };
     set({ layout: next });
+    await saveLayout(wsId, next);
+  },
+
+  restoreTerminalBlock: async (restore) => {
+    const wsId = get().selectedWorkspaceId;
+    const current = get().layout;
+    if (!wsId || !current) return;
+    const block = newBlock("terminal");
+    block.customTitle = restore.title;
+    block.terminalCount = 1;
+    block.restoredTranscript = restore;
+    const next: Layout = { blocks: [...current.blocks, block] };
+    set({ layout: next, selectedUsageTool: null });
     await saveLayout(wsId, next);
   },
 

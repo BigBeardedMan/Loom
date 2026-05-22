@@ -170,6 +170,7 @@ Deferred to follow-ups:
 
 - Multi-window support
 - Notes Ctrl+F search
+- Mirror macOS Codex limit labels in the Windows Usage view: primary as the reported 4h/5h limit, secondary as Week.
 - Auto-preview index per Preview block
 - Toast notifications, tray icon, jump lists
 - Update minisign keypair signing (current updater uses arch-detected

@@ -49,7 +49,10 @@ version of these chapters lives at
     1. [Appearance](#111-appearance)
     2. [Tasks](#112-tasks)
     3. [Providers](#113-providers)
-    4. [Advanced](#114-advanced)
+    4. [Agent](#114-agent)
+    5. [MCP](#115-mcp)
+    6. [Shell](#116-shell)
+    7. [Advanced](#117-advanced)
 12. [Updates](#12-updates)
     1. [Auto Update](#121-auto-update)
     2. [Manual Check](#122-manual-check)
@@ -139,6 +142,11 @@ Loom 2.x extends the cockpit. Highlights:
   stdout+stderr to a per-command file. Cards expand in place to show
   the captured output. Hand-typed commands skip the wrap so
   interactive TUIs keep working.
+- **Terminal transcripts and recovery**: Loom saves local
+  PTY transcripts, shows closed sessions under **Recently Closed**, and
+  adds **Recently Deleted** with Recover and Delete Permanently actions.
+  Settings -> Shell controls the transcript cap, defaults to 1 GB, and
+  can prune saved history without stopping active terminals.
 
 ---
 
@@ -181,10 +189,13 @@ Subsequent launches behave normally. macOS remembers the override.
 
 Drag `/Applications/Loom.app` to the Trash. Loom-owned data lives in:
 
-- `~/Library/Application Support/Loom/` (staging directory, update
-  manifest, layout JSON, and the shell integration shim + history log)
-- `~/Library/Application Support/com.chasesims.Loom/` (SwiftData store)
-- `~/Library/Preferences/com.chasesims.Loom.plist` (UserDefaults)
+- `~/Library/Application Support/Loom/` (staging directory,
+  update manifest, layout JSON, shell history, terminal transcripts, and
+  clipboard image drops in the Loom build)
+- `~/Library/Application Support/com.chasesims.Loom/`
+  (SwiftData store in the Loom build)
+- `~/Library/Preferences/com.chasesims.Loom.plist`
+  (UserDefaults in the Loom build)
 - macOS Keychain, service `com.chasesims.Loom` (Anthropic key, local endpoint
   bearer tokens)
 
@@ -474,18 +485,18 @@ flow into every subprocess you run:
 - Suffix matches: any variable ending in `_API_KEY`, `_SECRET_KEY`,
   `_ACCESS_TOKEN`, or `_AUTH_TOKEN`.
 
-#### Multi-row click to position cursor
+#### Claude click-to-edit
 
-When a known CLI agent (`claude`, `codex`, `gemini`) is the foreground
-process, single-clicking inside its prompt area sends arrow-key sequences to
-walk the cursor to the clicked column and row. Same UX as Warp or iTerm with
-shell integration.
+When Claude Code (`claude`) is the foreground process, single-clicking inside
+its active prompt sends arrow-key sequences to walk the cursor to the clicked
+column and row. That makes it possible to click into already-typed Claude
+prompt text and edit from that point without manually arrowing around.
 
-Vertical movement is gated behind the CLI-agent check because sending up or
-down arrows into a plain shell prompt would walk command history rather than
-move the cursor. Cross-row clicks are also bounded to a 10-row radius from
-the cursor so accidental scrollback clicks do not blast a hundred arrow
-sequences into the foreground.
+The behavior is intentionally Claude-only. Sending arrows into zsh, Codex,
+Gemini, or an arbitrary TUI can trigger command history or tool-specific
+shortcuts instead of moving text insertion. Cross-row clicks are bounded to a
+10-row radius from the cursor so accidental scrollback clicks do not blast a
+hundred arrow sequences into the foreground.
 
 Single clicks with any modifier (Shift, Command, Option, Control) are
 ignored so SwiftTerm's native selection and word-lookup gestures keep
@@ -503,7 +514,7 @@ When detection fires:
 - The active sessions badge in the workspace sidebar increments.
 - The Tasks pane (in Prompt workspaces) starts mirroring the agent's live
   task list from `~/.claude/tasks/<session>/<id>.json`.
-- The terminal's click-to-position behavior unlocks vertical movement.
+- Claude terminal prompts unlock click-to-edit cursor movement.
 
 When the agent process exits, detection drops on the next 2 second poll.
 
@@ -516,8 +527,9 @@ When the Terminal pane receives an image-only pasteboard, Loom inserts an
 editable Codex argument instead of sending image bytes into the PTY:
 `--image '<path>' `. Finder-copied image files reuse their existing path.
 Direct clipboard images, such as screenshots, are saved as PNG files under
-`~/Library/Application Support/Loom/Clipboard Images/`. Loom does not press
-Return; you review or edit the command and run it yourself.
+`~/Library/Application Support/Loom/Clipboard Images/` in
+the Loom build. Loom does not press Return; you review or edit the
+command and run it yourself.
 
 If the clipboard contains both text and image data, text paste wins. That
 keeps rich browser and document copies from unexpectedly becoming image
@@ -532,13 +544,15 @@ dragged images are saved as PNG files in the same Clipboard Images folder.
 #### Scrollback
 
 SwiftTerm keeps the default 1000-line scrollback. Scroll with two-finger
-drag or your terminal's Page Up / Page Down (depending on `terminfo`).
+drag or your terminal's Page Up / Page Down (depending on `terminfo`). This
+live scrollback is separate from saved terminal transcripts.
 
 #### Restart
 
 There is no "restart shell" button. Close the pane (the **x** in its title
 bar) and re-add it to get a fresh shell that respawns in the workspace
-folder. The previous shell's scrollback is lost.
+folder. The previous live scrollback is lost, but the saved transcript moves
+to **Recently Closed** when terminal history is enabled.
 
 #### Multi-pane splits (v1.9.0+)
 
@@ -568,6 +582,30 @@ shell in its saved cwd.
 Live-agent counts walk every session in every terminal block, so each
 pane that has a CLI agent (claude / codex / gemini) in the foreground
 counts toward the workspace badge.
+
+#### Session transcripts and recovery (Loom)
+
+When terminal history is enabled, every Terminal pane writes its PTY output to
+a local ANSI transcript under `~/Library/Application Support/Loom Testing
+Edition/Terminal History/transcripts/`. Metadata lives next to it in
+`sessions.json`. This is a transcript of terminal output, not a resurrected
+process: closing a terminal still stops the shell.
+
+In the Prompt workspace sidebar:
+
+- Closed terminal panes appear under **Recently Closed**.
+- Clicking a closed row opens a transcript reader.
+- **Start Fresh Shell Here** creates a new Terminal block at the saved cwd.
+- The trash button moves the transcript to **Recently Deleted**.
+- **Recently Deleted** lives at the bottom of the Terminal Sessions section
+  and offers **Recover** or **Delete Permanently** for each transcript.
+
+Settings -> Shell -> Terminal History controls whether transcripts are saved,
+the storage limit, and pruning. The default limit is 1 GB; available choices
+are 250 MB, 500 MB, 1 GB, 2 GB, 5 GB, and 10 GB. When saved history exceeds the
+limit, Loom prunes old closed/deleted transcripts first and never kills an
+active terminal. **Prune Terminal History** clears saved transcripts; active
+terminal panes keep running, but their saved transcript files start over.
 
 #### Inline command cards (v2.1.0+)
 
@@ -916,8 +954,8 @@ to keep `LazyVStack` rendering fast.
 
 #### Privacy
 
-Loom only reads files under `~/Library/Application Support/Loom/shell/`.
-Nothing leaves your machine.
+Loom only reads files under `~/Library/Application Support/Loom/shell/`
+for command history in Loom. Nothing leaves your machine.
 
 ---
 
@@ -1065,17 +1103,18 @@ Direct API calls bill against your Anthropic account, separate from any
 Claude Code subscription. The Usage dashboard reads on-disk Claude Code
 session logs and does **not** track direct API usage.
 
-### 7.3. Local LLMs (Ollama and OpenAI compatible)
+### 7.3. Local LLMs (Ollama, LM Studio, and OpenAI compatible)
 
-Loom can stream chat from any LLM you run on `localhost` or your LAN. Two
+Loom can stream chat from any LLM you run on `localhost` or your LAN. Three
 integrations are built in.
 
 | Kind | Best for | Wire format |
 | ---- | -------- | ----------- |
 | Ollama | `ollama serve` running locally or on a homelab box | `POST /api/chat` (NDJSON), `GET /api/tags` for models |
-| OpenAI compatible | LM Studio, llama.cpp's `llama-server`, Jan, vLLM, LocalAI, anything that speaks `/v1/chat/completions` | OpenAI SSE stream |
+| LM Studio | LM Studio's local server, with richer model discovery through `/api/v0/models` | OpenAI SSE stream plus LM Studio model metadata |
+| OpenAI compatible | llama.cpp's `llama-server`, Jan, vLLM, LocalAI, anything that speaks `/v1/chat/completions` | OpenAI SSE stream |
 
-Both are added in [Settings -> Providers](#113-providers).
+All three are added in [Settings -> Providers](#113-providers).
 
 #### Ollama setup
 
@@ -1099,23 +1138,34 @@ pulled model. Pick one, send a prompt, watch tokens stream in.
 LAN setup: run `OLLAMA_HOST=0.0.0.0:11434 ollama serve` on the remote box and
 set Loom's Base URL to `http://<host>:11434`.
 
-#### OpenAI-compatible setup
+#### LM Studio setup
 
-These tools all expose an OpenAI-shaped HTTP API. Pick one, start its
-server, then add an endpoint in Loom.
-
-LM Studio:
+LM Studio exposes an OpenAI-shaped chat API plus a native model-discovery API
+that tells Loom which models are installed and loaded.
 
 1. In LM Studio: **Developer -> Local Server -> Start Server** (default port
    1234).
-2. Note the model identifier (e.g. `lmstudio-community/Llama-3.1-8B-Instruct`).
+2. Load a model in LM Studio, or use the `lms` CLI to load one.
 3. Loom -> **Settings -> Providers -> Add**.
    - Display name: `LM Studio`
-   - Kind: OpenAI-compatible
+   - Kind: LM Studio
    - Base URL: `http://localhost:1234/v1`
-   - Model: the identifier from step 2
+   - Default model: optional fallback only; Loom auto-discovers installed
+     models through `/api/v0/models`
    - Requires auth: off
-4. **Save**.
+4. Click **Test connection**. It should report installed and loaded model
+   counts.
+5. Click **Save**.
+
+If the LM Studio server is already running when you open Settings ->
+Providers, Loom offers an **Add LM Studio** shortcut that creates this
+endpoint for you. Loaded models appear first in the Agent picker with their
+context and quantization details.
+
+#### OpenAI-compatible setup
+
+For llama.cpp, Jan, vLLM, LocalAI, and other OpenAI-shaped servers, start
+the server and add an OpenAI-compatible endpoint in Loom.
 
 llama.cpp:
 
@@ -1262,10 +1312,7 @@ in-flight plan won't appear in the Tasks pane until the CLI emits a
 structured plan log.
 
 Loom polls every 2 seconds via `LiveAgentTasksService` (off-main-thread
-JSON decode) and surfaces active tasks grouped by product, model, and
-session id. Codex model names come from the rollout's latest
-`turn_context`; Claude model names come from the matching
-`~/.claude/projects/.../<session-id>.jsonl` when available.
+JSON decode) and surfaces active tasks grouped by source plus session id.
 
 ### Task statuses
 
@@ -1285,13 +1332,12 @@ descending.
 In a Prompt workspace's Tasks pane, live agent tasks appear in their own
 section above the kanban columns:
 
-- Header: **<product> . <model> . <session-id-prefix>** (for example,
-  `Codex . gpt-5.5 . 019e34ad`).
+- Header: **Live . <session-id-prefix>** (e.g. `Live . 33280421`).
 - One row per task, with a status badge.
 - Click a task to expand and read its full description and `activeForm`.
 
-When a session finishes (or its session id rotates), the live block clears
-on the next 2 second poll.
+When a session finishes, all tasks become terminal, or its session id rotates,
+the live block clears on the next 2 second poll.
 
 ### Multiple sessions
 
@@ -1326,31 +1372,21 @@ forever. Only `.json` task-file mtimes count.
 
 ### Privacy
 
-Loom only reads files under `~/.claude/tasks/`, `~/.claude/projects/`, and
-`~/.codex/sessions/`.
-Nothing leaves your machine. The polling service uses standard
+Loom only reads files under `~/.claude/tasks/`, `~/.claude/projects/`,
+`~/.codex/sessions/`, and `~/.loom/tasks/`. Nothing leaves your machine.
+The polling service uses standard
 `FileManager` calls and does not watch via FSEvents (which would require a
 separate privacy entitlement).
 
 ### Clearing
 
-Every session header carries a × icon, and the trash icon in the pane
-header runs "Clear all". The effect on disk depends on the source:
-
-- **Claude** sessions get their `.json` task files deleted. Live sessions
-  rewrite them on the next turn, so the clear only "sticks" for crashed or
-  zombie sessions.
-- **Codex** rollouts hold the full conversation alongside the plan, so
-  Loom never deletes them. Instead it records a dismissal timestamp
-  keyed by product, model, and session id under `UserDefaults` key
-  `loom.tasks.dismissedSessions`, then hides the group until the rollout's
-  file mtime advances past that mark. An active session reappears after
-  its next event; a stuck session stays cleared.
-- **Gemini** isn't collected from disk today; the same dismissal
-  mechanism applies if a future Gemini source is added.
-
-"Clear all" opens a confirmation, then clears every visible session using
-the per-source behavior above.
+Every session header carries a × icon, and the trash icon in the pane header
+runs "Clear all". Claude Code and LM Studio task JSON files are deleted. Codex
+rollout files are left untouched because they hold conversation history; Loom
+records a dismissal timestamp keyed to the product/model/session and hides the
+group until a newer `update_plan` event advances past that mark. Active Codex
+sessions reappear after their next plan update; stuck or completed sessions
+stay cleared.
 
 ---
 
@@ -1452,8 +1488,16 @@ the latest total in each session, then maps it into the selected timeframe by
 the event timestamp. This drives the same chart and list surfaces as Claude:
 per-bucket activity, token mix, model and project slices, top topics, recent
 prompts, and hour-of-day heatmap. When Codex writes rate-limit snapshots,
-the Codex dashboard also shows primary and secondary limit meters, reset
+the dedicated Limits view shows primary and secondary limit meters, reset
 times, plan type, credit balance, and the latest observed timestamp.
+
+When any tool has readable local limit data at or above the warning
+threshold, Loom adds a red `1` badge to that tool's usage pill. Opening the
+dashboard carries the same badge to the **Limits** button; clicking
+**Limits** acknowledges that snapshot and clears the badge until a newer
+warning snapshot appears. In Loom `8.0.25`, the threshold is set
+to 20% so this alert flow can be tested; the intended production threshold is
+85%.
 
 ### Timeframes
 
@@ -1468,12 +1512,18 @@ Pick a timeframe at the top of the dashboard:
 
 Switching timeframe triggers a full snapshot recompute.
 
+The **Limits** button sits beside the timeframe buttons. It switches the
+same Claude, Codex, or Gemini dashboard into a local limit-signal view
+without changing the selected timeframe.
+
 ### Refresh cadence
 
 Two cadences:
 
 - **Light path.** Every 3 seconds, count `.jsonl` files modified within the
   last 5 minutes. Drives the active sessions badge.
+- **Limit warning path.** On app open/foreground and then every 20 minutes,
+  read the latest local limit snapshots and update warning badges.
 - **Full snapshot.** Heavy. On demand (timeframe change or pane open).
   Reads every JSONL file in full, runs the regex scan off the main actor.
   Year-range refreshes can take roughly a minute on large logs; the
@@ -1494,8 +1544,10 @@ Each tab opens a single-CLI dashboard tinted with that CLI's brand color
 - Top projects, top models, top topics.
 - An hourly distribution.
 - Recent prompts (clickable to expand).
-- Codex only: locally logged primary/secondary rate-limit meters and reset
-  times when Codex records that data.
+- A separate Limits view. Codex shows locally logged primary/secondary
+  rate-limit meters and reset times when Codex records that data. Claude
+  and Gemini show an honest no-local-signal state until their CLIs expose
+  readable local limit logs.
 
 CLIs that are not installed render an "installed but no data" placeholder
 so the tab still works as a feature-discovery surface.
@@ -1506,7 +1558,8 @@ The Anthropic console's quota and billing dashboards are the source of
 truth for paid usage. Loom's dashboard is purely a local-disk read of CLI
 session logs. It does not call the Anthropic API or the OpenAI API to look
 up live quotas. Codex limit meters are the latest values Codex already wrote
-locally, not a live billing-console lookup.
+locally, not a live billing-console lookup. Claude and Gemini Limits do not
+invent quota numbers when their local logs do not expose them.
 
 ### Privacy
 
@@ -1518,13 +1571,16 @@ leaves your machine.
 
 ## 11. Settings
 
-Loom's Settings window is a four-tab `TabView` (`SettingsScene.swift`),
+Loom's Settings window is a seven-tab `TabView` (`SettingsScene.swift`),
 sized 620x460:
 
 1. Appearance
 2. Tasks
 3. Providers
-4. Advanced
+4. Agent
+5. MCP
+6. Shell
+7. Advanced
 
 Open it via `Command ,` or the **Loom -> Settings...** menu item.
 
@@ -1560,15 +1616,18 @@ and a row of actions:
 - **Trash icon.** Removes the endpoint and clears its Keychain auth token.
 
 Empty state shows a hint pointing at Add.
+If LM Studio's default server is already running on `localhost:1234` and no
+LM Studio endpoint exists yet, Loom shows an **LM Studio server detected**
+callout with a one-click **Add LM Studio** action.
 
 #### Add a provider
 
 | Field | Notes |
 | ----- | ----- |
 | Display name | Free-form. Shown as the menu group header (`Local . <name>`). |
-| Kind | Ollama or OpenAI-compatible. Switching kinds swaps the default base URL hint. |
-| Base URL | Full URL. Trailing slash is stripped. Defaults: `http://localhost:11434` (Ollama), `http://localhost:1234/v1` (OpenAI-compatible). |
-| Default model / Model | For Ollama: optional fallback when `/api/tags` fails. For OpenAI-compatible: required. |
+| Kind | Ollama, LM Studio, or OpenAI-compatible. Switching kinds swaps the default base URL hint. |
+| Base URL | Full URL. Trailing slash is stripped. Defaults: `http://localhost:11434` (Ollama), `http://localhost:1234/v1` (LM Studio and OpenAI-compatible). |
+| Default model / Model | For Ollama and LM Studio: optional fallback when discovery fails. For OpenAI-compatible: required. |
 | Requires auth token | Toggle. When on, reveals a SecureField for a bearer token. |
 
 #### Test connection
@@ -1577,8 +1636,13 @@ Click **Test connection** before saving:
 
 - Ollama: hits `GET <baseURL>/api/tags`. Reports the number of models or
   "No models / unreachable".
+- LM Studio: hits `/api/v0/models` first, then falls back to
+  `GET <baseURL>/models`. Reports installed and loaded model counts.
 - OpenAI compatible: hits `GET <baseURL>/models`. Reports HTTP 200 or the
   failure reason.
+
+For LM Studio, the model menu lists loaded models first and includes available
+context length, quantization, and architecture details from `/api/v0/models`.
 
 Test does not save the endpoint; you still have to click **Save**.
 
@@ -1592,7 +1656,21 @@ Test does not save the endpoint; you still have to click **Save**.
 Saving (or removing) an endpoint triggers `AgentRegistry.refresh(...)`. The
 Agent pane picker updates without an app restart.
 
-### 11.4. MCP
+### 11.4. Agent
+
+Controls local-agent runtime behavior and the optional terminal helper.
+
+| Field | Storage | Purpose |
+| ----- | ------- | ------- |
+| Max turns per run | UserDefaults `loom.agent.maxTurns` | Caps tool-call rounds for one agent run. Default 30 |
+| Allow run_bash tool | UserDefaults `loom.agent.allowBash` | Lets local agents execute shell commands in the workspace. Off by default |
+| Permission mode | UserDefaults `loom.agent.permissionMode` | Controls in-app local-agent approvals: Ask, Plan, Accept Edits, or Bypass Permissions |
+
+The tab also installs or uninstalls a `loom` helper at `~/.local/bin/loom`.
+That helper opens a `loom://run?...` URL so a terminal can launch an agent run
+inside the running app.
+
+### 11.5. MCP
 
 Manages Claude Code's MCP (Model Context Protocol) server registry. Loom
 doesn't speak MCP directly; every read and write goes through the
@@ -1631,23 +1709,31 @@ The tab surfaces an error if `claude` isn't on disk at any of the
 standard locations (`/usr/local/bin/claude`, `/opt/homebrew/bin/claude`,
 `~/.local/bin/claude`). Install Claude Code first.
 
-### 11.5. Shell
+### 11.6. Shell
 
 Toggles Loom's zsh shell integration on or off. The integration shim
-lives at `~/Library/Application Support/Loom/shell/.zshrc` and is
-sourced via `ZDOTDIR` when each terminal session spawns.
+lives at `~/Library/Application Support/Loom/shell/.zshrc` in
+Loom and is sourced via `ZDOTDIR` when each terminal session
+spawns.
 
 | Field | Storage | Purpose |
 | ----- | ------- | ------- |
 | Capture commands from Loom terminals | UserDefaults `loom.shellIntegration` | Default true. When false, terminals launch with the user's normal `$ZDOTDIR` and no command logging happens. |
+| Save terminal transcripts locally | UserDefaults `loom.terminalHistory.enabled` | Default true. When false, Loom stops appending PTY output to transcript files |
+| Storage limit | UserDefaults `loom.terminalHistory.maxBytes` | Default 1 GB. Choices: 250 MB, 500 MB, 1 GB, 2 GB, 5 GB, 10 GB |
+| Always paste as plain text | UserDefaults `loom.terminal.pasteAsPlainText` | Sends clipboard text directly to the PTY instead of SwiftTerm bracketed paste |
 
-The tab also shows the on-disk paths to the shim and the history JSONL
-log, plus a **Reveal in Finder** button.
+The Terminal History section shows the currently saved byte count, a **Prune
+Terminal History** action, and **Reveal History Folder**. Pruning clears saved
+transcripts while active terminal panes keep running.
+
+The tab also shows the on-disk paths to the shim and the history JSONL log,
+plus a **Reveal in Finder** button.
 
 Toggling applies to terminals opened *after* the change. Currently
 running terminals keep whichever mode they started with.
 
-### 11.6. Advanced
+### 11.7. Advanced
 
 | Field | Storage | Purpose |
 | ----- | ------- | ------- |
@@ -1902,6 +1988,12 @@ Lightweight settings and lists where SwiftData would be overkill.
 | `loom.appearance` | String | Theme: `system`, `light`, `dark` |
 | `loom.tasks.staleHours` | Double | Live agent tasks stale window (hours) |
 | `loom.localEndpoints` | Data | JSON-encoded `[LocalEndpoint]` |
+| `loom.agent.maxTurns` | Int | Max tool-call rounds for one local-agent run |
+| `loom.agent.allowBash` | Bool | Enables the local-agent `run_bash` tool |
+| `loom.shellIntegration` | Bool | Enables the zsh command-history shim |
+| `loom.terminal.pasteAsPlainText` | Bool | Sends text paste directly to the PTY |
+| `loom.terminalHistory.enabled` | Bool | Enables local PTY transcript persistence |
+| `loom.terminalHistory.maxBytes` | Double | Terminal transcript storage cap in bytes |
 | `loom.workspaceSeed.v0_8` | Bool | Migration flag (v0.8 seed cleanup) |
 | `loom.workspaceSeed.v0_9` | Bool | Migration flag (v0.9 build -> review) |
 | `loom.workspaceSeed.v0_10` | Bool | Migration flag (v0.10 Code -> Prompt) |
@@ -1918,7 +2010,8 @@ Secrets only. Service: `com.chasesims.Loom`. See
 #### What is not persisted
 
 - Agent message history. In-memory only.
-- Terminal scrollback. SwiftTerm holds it; not persisted across launches.
+- Live terminal scrollback. SwiftTerm holds it in memory; Loom saves
+  separate local transcript files when terminal history is enabled.
 - In-flight HTTP requests and subprocesses. All canceled on quit.
 
 ### 14.3. Swift Concurrency
@@ -2079,9 +2172,9 @@ at the 500 most-recent.
 #### Privacy
 
 The shim writes only to the Loom-owned support directory. Nothing
-leaves the machine. Output is not captured (output capture without
-breaking interactive TUIs requires a `script`-style PTY tee, which is
-a future expansion).
+leaves the machine. Structured command records and captured command-output
+files are separate from the full terminal transcripts stored under Terminal
+History.
 
 #### Opting out
 
@@ -2090,6 +2183,41 @@ a future expansion).
 nothing is logged. Currently running terminals keep their existing
 mode. The shim file stays on disk; delete it manually if you want it
 removed entirely.
+
+### 14.5. Terminal Transcript History
+
+`TerminalTranscriptStore` owns full-session transcript persistence. Each
+`TerminalSession` registers itself when the terminal view appears, receives a
+transcript file URL, and attaches a lightweight `TerminalTranscriptRecorder` to
+`LoomTerminalView.dataReceived(slice:)`. The recorder appends PTY bytes on a
+serial background queue before SwiftTerm renders them.
+
+#### Layout on disk
+
+```
+~/Library/Application Support/Loom/Terminal History/
+├── sessions.json               # metadata: title, cwd, workspace, state, sizes
+└── transcripts/
+    └── <session-uuid>.ansi     # raw ANSI PTY transcript
+```
+
+Session states are `active`, `closed`, and `deleted`. App launch sweeps any
+stale `active` rows left behind by a previous quit into `closed`, so recoverable
+transcripts appear in **Recently Closed** after relaunch.
+
+#### Storage cap
+
+`loom.terminalHistory.maxBytes` defaults to 1 GB. The store refreshes usage on
+launch, every 60 seconds, and when Settings changes the cap. If saved history is
+over the limit, closed/deleted transcripts are pruned oldest first. Active
+terminal processes are not killed by pruning or cap enforcement.
+
+#### Transcript viewer
+
+The viewer reads at most the newest 2 MB of a transcript, strips ANSI escape
+sequences for readability, and shows a trim notice when the saved file is
+larger. **Start Fresh Shell Here** creates a new Terminal block at the saved
+cwd; it does not resurrect the old process.
 
 ---
 
@@ -2156,13 +2284,16 @@ Adjacent precautions:
 
 | Path | Purpose |
 | ---- | ------- |
-| `~/Library/Application Support/Loom/staging/Loom.app` | Newly downloaded build, waiting for Update click |
+| `~/Library/Application Support/Loom/staging/Loom.app` | Newly downloaded Loom build, waiting for Update click |
 | `~/Library/Application Support/Loom/staging/manifest.json` | `{ version, build, stagedAt }` for the staged build |
 | `~/Library/Application Support/Loom/staging/last-apply.log` | Helper-script log from the last apply |
 | `~/Library/Application Support/Loom/layout.json` | Per-kind block list (custom titles, pins, span flags, terminal cwds, multi-pane split axis) |
 | `~/Library/Application Support/Loom/shell/.zshrc` | Shell-integration shim sourced via `ZDOTDIR` |
 | `~/Library/Application Support/Loom/shell/history.jsonl` | Append-only command-log written by the shim |
 | `~/Library/Application Support/Loom/shell/output/cap-*.out` | Captured stdout+stderr for commands wrapped via `__loom_capture` |
+| `~/Library/Application Support/Loom/Terminal History/sessions.json` | Terminal transcript metadata and active/closed/deleted state |
+| `~/Library/Application Support/Loom/Terminal History/transcripts/<uuid>.ansi` | Raw ANSI PTY transcript for one terminal session |
+| `~/Library/Application Support/Loom/Clipboard Images/clipboard-*.png` | Raw clipboard or drag image data saved before inserting a Codex `--image` argument |
 | `~/Library/Application Support/com.chasesims.Loom/default.store` | SwiftData store (workspaces, kanban, notes) |
 | `~/Library/Preferences/com.chasesims.Loom.plist` | UserDefaults |
 
@@ -2248,7 +2379,14 @@ security dump-keychain | awk -F\" '/svce.*com.chasesims.Loom/{getline; print $4}
 | `loom.appearance` | String | Theme picker value |
 | `loom.tasks.staleHours` | Double | Live tasks stale window (hours) |
 | `loom.localEndpoints` | Data | JSON-encoded `[LocalEndpoint]` |
+| `loom.agent.maxTurns` | Int | Max tool-call rounds for one local-agent run |
+| `loom.agent.allowBash` | Bool | Enables the local-agent `run_bash` tool |
+| `loom.agent.lmstudioMode` | Bool | Keeps LM Studio Agent Mode on by default in the Agent pane |
+| `loom.agent.permissionMode` | String | In-app local-agent permission mode |
 | `loom.shellIntegration` | Bool | Settings → Shell toggle. Default true; false skips the `ZDOTDIR` override and command logging |
+| `loom.terminal.pasteAsPlainText` | Bool | Settings -> Shell paste toggle |
+| `loom.terminalHistory.enabled` | Bool | Settings -> Shell transcript persistence toggle |
+| `loom.terminalHistory.maxBytes` | Double | Settings -> Shell transcript storage cap in bytes. Default 1 GB |
 | `loom.workspaceSeed.v0_8` | Bool | One-time migration flag |
 | `loom.workspaceSeed.v0_9` | Bool | One-time migration flag |
 | `loom.workspaceSeed.v0_10` | Bool | One-time migration flag |
@@ -2261,12 +2399,13 @@ defaults read com.chasesims.Loom
 
 ---
 
-## 17. Releasing a New Build
+## 17. Releasing a Loom Build
 
-Loom's release script is `bin/release.sh`. Run from the repo root:
+Loom's release script is `bin/release.sh`. Run from the
+repo root on the `main` branch:
 
 ```bash
-# 1. Bump MARKETING_VERSION (and CURRENT_PROJECT_VERSION) in project.yml.
+# 1. Bump MARKETING_VERSION in project.yml.
 # 2. Update docs/releasing/current-release-notes.md.
 # 3. Commit + push.
 bin/release.sh
@@ -2282,18 +2421,20 @@ bin/release.sh
 
 ### What the script does
 
-1. Reads version from `project.yml` (`MARKETING_VERSION` and
-   `CURRENT_PROJECT_VERSION`).
-2. Pre-flight: verify `gh` is authed (via `gh api user`), the local tag
-   does not already exist, and the GitHub release does not already exist.
+1. Reads `MARKETING_VERSION` from `project.yml`.
+2. Pre-flight: verify the branch is `main`, `gh` is authed
+   (via `gh api user`), the working tree is clean, the local tag does not
+   already exist, and whether the GitHub release already exists.
 3. Regenerate the Xcode project: `xcodegen generate`.
-4. Build Release: `xcodebuild ... -configuration Release build`.
-5. Locate the built `.app` under DerivedData.
-6. Stage `.app` and an `/Applications` alias in a temp dir; strip xattrs.
+4. Build Release with `xcodebuild ... -configuration Release build`.
+5. Validate the built `Loom.app`: its
+   `CFBundleShortVersionString` must match `MARKETING_VERSION`.
+6. Stage `.app` and an `/Applications` alias in a temp dir; strip xattrs and
+   validate the copied bundle version again before packaging.
 7. Package the DMG via `hdiutil create -format UDZO`, named
    `Loom-<version>.dmg`.
 8. Compute SHA-256 of the DMG; write a `.sha256` sidecar file.
-9. Tag and push: `git tag -a v<version> -m "Loom <version> (<build>)"`,
+9. Tag and push: `git tag -a v<version> -m "Loom <version>"`,
    `git push origin v<version>`.
 10. Create or update the GitHub release with the release notes from
     `docs/releasing/current-release-notes.md`, plus the DMG, `.sha256`
@@ -2301,18 +2442,21 @@ bin/release.sh
 
 ### Post-release
 
-Every running Loom on every machine picks the new build up via the
-[auto-update](#121-auto-update) path within 60 seconds.
+Every running Loom install sees the new build through the update pill after
+the `v<version>` release and assets are published.
 
 ### What can go wrong
 
 - "tag vX.Y.Z already exists locally": you forgot to bump
   `MARKETING_VERSION`. Bump it, commit, retry.
-- "built Release/Loom.app not found under DerivedData": `xcodebuild` failed
-  silently. Re-run with `-quiet` removed from the script to see the actual
-  compile errors.
-- `gh release create` 422: the release already exists on GitHub. Bump
-  version, retry.
+- "built Release/Loom.app not found at ...":
+  `xcodebuild` failed silently. Re-run with `-quiet` removed from the script
+  to see the actual compile errors.
+- "bundle version ... does not match release tag version ...": the package is
+  stale or the version override did not make it into the app bundle. Do not
+  upload the DMG; fix the build/version issue and rerun the script.
+- If Windows CI created the release first, `release.sh` refreshes
+  the release notes and appends the Mac DMG assets.
 - Local codesign fails: see [Building from Source](#18-building-from-source)
   for the local-codesign cert setup.
 
@@ -2471,8 +2615,7 @@ Items in active design, not promises. Order is rough priority.
 
 | Item | Why |
 | ---- | --- |
-| Command-block terminal history | Every shell command becomes its own scrollable, copyable card with exit code and timing. The terminal is Loom's product differentiator; structuring its output is the next step. |
-| Multi-pane terminal layouts | Split panes inside one Terminal pane (without spinning up multiple Terminal blocks). |
+| Transcript search and export | Full local terminal transcripts now exist; next step is fast search, filtering, and export for long-running sessions. |
 | MCP server bridging | Native MCP support so Loom can expose its own state (kanban cards, workspace folder, layout) as MCP tools to the agents it hosts. |
 | CodeEdit integration | Replace the plain `TextEditor` with [CodeEdit](https://github.com/CodeEditApp/CodeEdit)'s `NSTextView`-based editing surface. Syntax highlighting, save in-pane. |
 | Persistent agent message history | Today the chat log is in-memory only. Persist per-workspace so a quit-relaunch does not lose context. |

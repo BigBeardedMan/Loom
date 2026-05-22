@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Icons } from "../../lib/icons";
 import {
   useUsage,
@@ -10,42 +10,51 @@ import {
   type Timeframe,
 } from "../../lib/usage";
 import { useApp } from "../../lib/store";
+import { radius, surface, text } from "../../lib/theme";
 
 const TIMEFRAMES: Timeframe[] = ["day", "week", "month", "year"];
 
 type Props = { tool: Tool };
 type UsageData = NonNullable<ReturnType<typeof useUsage>["data"]>;
+type UsageMode = "usage" | "limits";
 
 export function UsageView({ tool }: Props) {
   const timeframe = useApp((s) => s.usageTimeframe);
   const setTimeframe = useApp((s) => s.setUsageTimeframe);
   const { data, loading, error, refresh } = useUsage(tool, timeframe);
+  const [mode, setMode] = useState<UsageMode>("usage");
+  const [preview, setPreview] = useState<UsageData["recentPrompts"][number] | null>(null);
 
   const brand = toolBrandColor(tool);
+  const canShowLimits = tool === "codex" && !!data && hasCodexLimitData(data);
+
+  useEffect(() => {
+    if (mode === "limits" && !canShowLimits) setMode("usage");
+  }, [canShowLimits, mode]);
 
   return (
     <div
       className="flex h-full w-full flex-col overflow-hidden"
-      style={{ background: "var(--color-loom-cockpit)", color: "var(--color-loom-text)" }}
+      style={{ background: surface.panel, color: text.primary }}
     >
       <header
         className="flex items-center gap-3 flex-none"
         style={{
-          padding: "12px 18px",
-          borderBottom: "1px solid rgba(255,255,255,0.08)",
-          background: "rgba(0,0,0,0.18)",
+          padding: "11px 14px",
+          borderBottom: `1px solid ${surface.hairline}`,
+          background: "color-mix(in srgb, " + surface.softPanel + ", transparent 54%)",
         }}
       >
         <div
           className="flex items-center justify-center rounded-md"
-          style={{ width: 26, height: 26, background: brand, color: "white" }}
+          style={{ width: 26, height: 26, background: brand, color: "white", borderRadius: radius.control }}
         >
           <Icons.sparkles size={14} strokeWidth={2.2} />
         </div>
         <div className="flex flex-col leading-tight">
           <span style={{ fontSize: 13, fontWeight: 600 }}>{toolLabel(tool)}</span>
-          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>
-            {timeframeHeadline(timeframe)}
+          <span style={{ fontSize: 11, color: text.muted }}>
+            {mode === "limits" ? "Limits" : timeframeHeadline(timeframe)}
             {data?.lastActivity && ` · last activity ${shortAgo(data.lastActivity)}`}
           </span>
         </div>
@@ -53,30 +62,49 @@ export function UsageView({ tool }: Props) {
           {TIMEFRAMES.map((tf) => (
             <button
               key={tf}
-              onClick={() => setTimeframe(tf)}
+              onClick={() => {
+                setMode("usage");
+                setTimeframe(tf);
+              }}
               style={{
                 padding: "4px 10px",
                 fontSize: 11,
                 fontWeight: 500,
-                borderRadius: 6,
-                border: "1px solid rgba(255,255,255,0.10)",
-                background: tf === timeframe ? brand : "rgba(255,255,255,0.05)",
-                color: tf === timeframe ? "white" : "rgba(255,255,255,0.7)",
+                borderRadius: radius.control,
+                border: `1px solid ${surface.hairline}`,
+                background: mode === "usage" && tf === timeframe ? brand : surface.softPanel,
+                color: mode === "usage" && tf === timeframe ? "white" : text.muted,
               }}
             >
               {timeframeLabel(tf)}
             </button>
           ))}
+          {canShowLimits && (
+            <button
+              onClick={() => setMode("limits")}
+              style={{
+                padding: "4px 10px",
+                fontSize: 11,
+                fontWeight: 600,
+                borderRadius: radius.control,
+                border: `1px solid ${surface.hairline}`,
+                background: mode === "limits" ? brand : surface.softPanel,
+                color: mode === "limits" ? "white" : text.muted,
+              }}
+            >
+              Limits
+            </button>
+          )}
           <button
             onClick={refresh}
             aria-label="Refresh"
             style={{
               marginLeft: 4,
               padding: 6,
-              borderRadius: 6,
-              border: "1px solid rgba(255,255,255,0.10)",
-              background: "rgba(255,255,255,0.05)",
-              color: "rgba(255,255,255,0.7)",
+              borderRadius: radius.control,
+              border: `1px solid ${surface.hairline}`,
+              background: surface.softPanel,
+              color: text.muted,
             }}
           >
             {loading ? (
@@ -88,7 +116,7 @@ export function UsageView({ tool }: Props) {
         </div>
       </header>
 
-      <div className="scrollbar-thin flex-1 overflow-y-auto" style={{ padding: 18 }}>
+      <div className="scrollbar-thin flex-1 overflow-y-auto" style={{ padding: 16 }}>
         {error && (
           <div
             style={{
@@ -113,23 +141,27 @@ export function UsageView({ tool }: Props) {
         )}
 
         {data && data.isInstalled && (
-          <>
-            <StatGrid data={data} />
-            {tool === "codex" && hasCodexLimitData(data) && (
-              <CodexLimits data={data} brand={brand} />
-            )}
-            {data.chartBuckets.length > 0 && (
-              <Section title="Activity">
-                <BucketBars buckets={data.chartBuckets} brand={brand} />
-              </Section>
-            )}
-            <DonutsRow data={data} brand={brand} />
-            <HourlyHeatmap hours={data.hourlyDistribution} brand={brand} />
-            <PromptsAndTopics data={data} />
-            <ProjectsList data={data} />
-          </>
+          mode === "limits" && canShowLimits ? (
+            <LimitsDashboard data={data} tool={tool} brand={brand} />
+          ) : (
+            <>
+              <StatGrid data={data} />
+              {data.chartBuckets.length > 0 && (
+                <Section title="Activity">
+                  <BucketBars buckets={data.chartBuckets} brand={brand} />
+                </Section>
+              )}
+              <DonutsRow data={data} brand={brand} />
+              <HourlyHeatmap hours={data.hourlyDistribution} brand={brand} />
+              <PromptsAndTopics data={data} onPreview={setPreview} />
+              <ProjectsList data={data} />
+            </>
+          )
         )}
       </div>
+      {preview && (
+        <PromptPreviewDialog prompt={preview} onClose={() => setPreview(null)} />
+      )}
     </div>
   );
 }
@@ -137,8 +169,8 @@ export function UsageView({ tool }: Props) {
 function StatGrid({ data }: { data: UsageData }) {
   const stats: Array<[string, string]> = [
     ["Sessions today", String(data.sessionsToday)],
-    ["Sessions total", String(data.sessionsTotal)],
-    ["Total tokens", fmt(data.inputTokens + data.outputTokens + data.cachedTokens)],
+    ["All sessions", String(data.sessionsTotal)],
+    ["Window tokens", fmt(data.inputTokens + data.outputTokens + data.cachedTokens)],
     ["Input", fmt(data.inputTokens)],
     ["Output", fmt(data.outputTokens)],
     ["Cached", fmt(data.cachedTokens)],
@@ -182,7 +214,73 @@ function hasCodexLimitData(data: UsageData): boolean {
   );
 }
 
-function CodexLimits({ data, brand }: { data: UsageData; brand: string }) {
+function LimitsDashboard({ data, tool, brand }: { data: UsageData; tool: Tool; brand: string }) {
+  const pressure = limitPressure(data, tool, brand);
+  const ratio = limitRatio(data);
+  return (
+    <div className="flex flex-col gap-3">
+      <div
+        className="flex items-center gap-4"
+        style={{
+          padding: 16,
+          background: `linear-gradient(135deg, ${alpha(brand, 0.22)}, rgba(255,255,255,0.045) 58%, ${alpha(pressure.color, 0.18)})`,
+          border: `1px solid ${alpha(brand, 0.26)}`,
+          borderRadius: 10,
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 10, letterSpacing: 0.7, textTransform: "uppercase", color: "rgba(255,255,255,0.5)" }}>
+            Limit pressure
+          </div>
+          <div style={{ marginTop: 3, fontSize: 30, lineHeight: 1, fontWeight: 700 }}>
+            {pressure.label}
+          </div>
+          <div style={{ marginTop: 6, fontSize: 12, color: "rgba(255,255,255,0.58)" }}>
+            {pressure.detail}
+          </div>
+        </div>
+        <div
+          className="ml-auto flex items-center justify-center"
+          style={{
+            width: 84,
+            height: 84,
+            borderRadius: 999,
+            background: `conic-gradient(${pressure.color} ${Math.max(8, ratio * 100)}%, rgba(255,255,255,0.09) 0)`,
+            boxShadow: `0 0 30px ${alpha(pressure.color, 0.18)}`,
+            flex: "none",
+          }}
+        >
+          <div
+            className="flex items-center justify-center"
+            style={{
+              width: 58,
+              height: 58,
+              borderRadius: 999,
+              background: "rgba(0,0,0,0.38)",
+              color: pressure.color,
+            }}
+          >
+            <Icons.sparkles size={22} strokeWidth={2.2} />
+          </div>
+        </div>
+      </div>
+
+      {tool === "codex" && hasCodexLimitData(data) ? (
+        <CodexLimitMeters data={data} brand={brand} />
+      ) : (
+        <NoLimitSignal tool={tool} brand={brand} />
+      )}
+
+      <div className="grid grid-cols-3 gap-3">
+        <MiniStat label="Active" value={String(data.activeSessions)} />
+        <MiniStat label="Last activity" value={data.lastActivity ? shortAgo(data.lastActivity) : "None" } />
+        <MiniStat label="Local tokens" value={fmt(data.inputTokens + data.outputTokens + data.cachedTokens)} />
+      </div>
+    </div>
+  );
+}
+
+function CodexLimitMeters({ data, brand }: { data: UsageData; brand: string }) {
   const rows = [
     {
       label: "Primary",
@@ -199,56 +297,109 @@ function CodexLimits({ data, brand }: { data: UsageData; brand: string }) {
   ].filter((row) => row.used != null || row.window != null || row.resetsAt != null);
 
   return (
-    <Section title="Codex limits">
+    <div
+      style={{
+        padding: 12,
+        background: "rgba(255,255,255,0.04)",
+        border: "1px solid rgba(255,255,255,0.06)",
+        borderRadius: 10,
+      }}
+    >
+      <div className="flex items-center gap-2" style={{ marginBottom: 10 }}>
+        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.55)" }}>
+          Latest local Codex limit signal
+        </span>
+        {data.planType && (
+          <span
+            style={{
+              marginLeft: "auto",
+              fontSize: 10,
+              padding: "2px 7px",
+              borderRadius: 999,
+              background: "rgba(255,255,255,0.07)",
+              color: "rgba(255,255,255,0.72)",
+              textTransform: "uppercase",
+            }}
+          >
+            {data.planType}
+          </span>
+        )}
+      </div>
+      {rows.length > 0 && (
+        <div className="grid grid-cols-2 gap-3">
+          {rows.map((row) => (
+            <LimitMeter key={row.label} {...row} brand={brand} />
+          ))}
+        </div>
+      )}
       <div
+        className="flex flex-wrap items-center gap-x-4 gap-y-1"
+        style={{ marginTop: 10, fontSize: 11, color: "rgba(255,255,255,0.5)" }}
+      >
+        <span>
+          {data.credits == null
+            ? "credit balance unavailable"
+            : `Credit balance ${fmtCredits(data.credits)}`}
+        </span>
+        {data.rateLimitObservedAt && <span>Observed {shortDateTime(data.rateLimitObservedAt)}</span>}
+        {data.rateLimitReachedType && <span>Reached {data.rateLimitReachedType}</span>}
+      </div>
+    </div>
+  );
+}
+
+function NoLimitSignal({ tool, brand }: { tool: Tool; brand: string }) {
+  return (
+    <div
+      className="flex items-start gap-3"
+      style={{
+        padding: 12,
+        background: "rgba(255,255,255,0.04)",
+        border: "1px solid rgba(255,255,255,0.06)",
+        borderRadius: 10,
+      }}
+    >
+      <div
+        className="flex items-center justify-center"
         style={{
-          padding: 12,
-          background: "rgba(255,255,255,0.04)",
-          border: "1px solid rgba(255,255,255,0.06)",
-          borderRadius: 10,
+          width: 28,
+          height: 28,
+          borderRadius: 8,
+          background: alpha(brand, 0.16),
+          border: `1px solid ${alpha(brand, 0.28)}`,
+          color: brand,
+          flex: "none",
         }}
       >
-        <div className="flex items-center gap-2" style={{ marginBottom: 10 }}>
-          <span style={{ fontSize: 11, color: "rgba(255,255,255,0.55)" }}>
-            reported by latest local Codex session
-          </span>
-          {data.planType && (
-            <span
-              style={{
-                marginLeft: "auto",
-                fontSize: 10,
-                padding: "2px 7px",
-                borderRadius: 999,
-                background: "rgba(255,255,255,0.07)",
-                color: "rgba(255,255,255,0.72)",
-                textTransform: "uppercase",
-              }}
-            >
-              {data.planType}
-            </span>
-          )}
-        </div>
-        {rows.length > 0 && (
-          <div className="grid grid-cols-2 gap-3">
-            {rows.map((row) => (
-              <LimitMeter key={row.label} {...row} brand={brand} />
-            ))}
-          </div>
-        )}
-        <div
-          className="flex flex-wrap items-center gap-x-4 gap-y-1"
-          style={{ marginTop: 10, fontSize: 11, color: "rgba(255,255,255,0.5)" }}
-        >
-          <span>
-            {data.credits == null
-              ? "credit balance unavailable"
-              : `Credit balance ${fmtCredits(data.credits)}`}
-          </span>
-          {data.rateLimitObservedAt && <span>Observed {shortDateTime(data.rateLimitObservedAt)}</span>}
-          {data.rateLimitReachedType && <span>Reached {data.rateLimitReachedType}</span>}
+        <Icons.eye size={14} strokeWidth={2} />
+      </div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>No local limit signal found</div>
+        <div style={{ marginTop: 3, fontSize: 11, color: "rgba(255,255,255,0.52)" }}>
+          {toolLabel(tool)} has not written readable limit data to its local logs yet.
         </div>
       </div>
-    </Section>
+    </div>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        padding: 12,
+        background: "rgba(255,255,255,0.04)",
+        border: "1px solid rgba(255,255,255,0.06)",
+        borderRadius: 10,
+      }}
+    >
+      <div style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", letterSpacing: 0.6, textTransform: "uppercase" }}>
+        {label}
+      </div>
+      <div style={{ marginTop: 4, fontSize: 16, fontWeight: 600, fontFamily: "var(--font-mono)" }}>
+        {value}
+      </div>
+    </div>
   );
 }
 
@@ -296,6 +447,75 @@ function LimitMeter({
       </div>
     </div>
   );
+}
+
+function limitPressure(
+  data: UsageData,
+  tool: Tool,
+  brand: string
+): { label: string; detail: string; color: string } {
+  if (tool !== "codex" || !hasCodexLimitData(data)) {
+    return {
+      label: "No Signal",
+      detail: "Loom is watching local logs for readable limit snapshots.",
+      color: brand,
+    };
+  }
+
+  if (data.rateLimitReachedType) {
+    return {
+      label: "Limited",
+      detail: `Codex reported a reached ${data.rateLimitReachedType} limit.`,
+      color: "rgb(228, 80, 137)",
+    };
+  }
+
+  const peak = [data.rateLimitPrimaryUsedPercent, data.rateLimitSecondaryUsedPercent]
+    .filter((v): v is number => typeof v === "number")
+    .sort((a, b) => b - a)[0];
+
+  if (peak == null) {
+    return {
+      label: "Signal Found",
+      detail: "Limit metadata is present, but usage percentage is unavailable.",
+      color: brand,
+    };
+  }
+  if (peak >= 100) {
+    return {
+      label: "Limited",
+      detail: "One local meter is at or above its recorded ceiling.",
+      color: "rgb(228, 80, 137)",
+    };
+  }
+  if (peak >= 85) {
+    return {
+      label: "Hot",
+      detail: "One limit window is running close to the ceiling.",
+      color: "rgb(242, 99, 46)",
+    };
+  }
+  if (peak >= 60) {
+    return {
+      label: "Warming",
+      detail: "Usage is elevated inside the latest logged window.",
+      color: "rgb(244, 179, 75)",
+    };
+  }
+  return {
+    label: "Calm",
+    detail: "Latest local limit snapshot has comfortable headroom.",
+    color: "rgb(59, 219, 117)",
+  };
+}
+
+function limitRatio(data: UsageData): number {
+  if (data.rateLimitReachedType) return 1;
+  const peak = [data.rateLimitPrimaryUsedPercent, data.rateLimitSecondaryUsedPercent]
+    .filter((v): v is number => typeof v === "number")
+    .sort((a, b) => b - a)[0];
+  if (peak == null) return 0.08;
+  return Math.max(0.08, Math.min(1, peak / 100));
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -539,7 +759,13 @@ function HourlyHeatmap({ hours, brand }: { hours: number[]; brand: string }) {
   );
 }
 
-function PromptsAndTopics({ data }: { data: UsageData }) {
+function PromptsAndTopics({
+  data,
+  onPreview,
+}: {
+  data: UsageData;
+  onPreview: (prompt: UsageData["recentPrompts"][number]) => void;
+}) {
   if (data.recentPrompts.length === 0 && data.topTopics.length === 0) return null;
   return (
     <div className="grid grid-cols-2 gap-3" style={{ marginBottom: 18 }}>
@@ -556,9 +782,22 @@ function PromptsAndTopics({ data }: { data: UsageData }) {
         </div>
         <ul style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
           {data.recentPrompts.map((p, i) => (
-            <li key={i} style={{ fontSize: 11, color: "rgba(255,255,255,0.78)" }}>
-              <span style={{ color: "rgba(255,255,255,0.4)" }}>{shortAgo(p.timestamp)} </span>
-              <span>{p.text}</span>
+            <li key={i}>
+              <button
+                onClick={() => onPreview(p)}
+                className="w-full text-left"
+                style={{
+                  fontSize: 11,
+                  color: "rgba(255,255,255,0.78)",
+                  borderRadius: 6,
+                  padding: "4px 6px",
+                  background: "transparent",
+                }}
+                title="Preview prompt"
+              >
+                <span style={{ color: "rgba(255,255,255,0.4)" }}>{shortAgo(p.timestamp)} </span>
+                <span>{p.text}</span>
+              </button>
             </li>
           ))}
           {data.recentPrompts.length === 0 && (
@@ -633,6 +872,116 @@ function ProjectsList({ data }: { data: UsageData }) {
   );
 }
 
+function PromptPreviewDialog({
+  prompt,
+  onClose,
+}: {
+  prompt: UsageData["recentPrompts"][number];
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{
+        background: "rgba(0,0,0,0.48)",
+        backdropFilter: "blur(18px) saturate(180%)",
+        WebkitBackdropFilter: "blur(18px) saturate(180%)",
+      }}
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[70vh] flex-col overflow-hidden"
+        style={{
+          width: "min(680px, calc(100vw - 48px))",
+          background: surface.panel,
+          border: `1px solid ${surface.hairline}`,
+          borderRadius: radius.panel,
+          boxShadow: "0 24px 52px rgba(0,0,0,0.48)",
+        }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header
+          className="flex items-center gap-3"
+          style={{
+            padding: "12px 14px",
+            borderBottom: `1px solid ${surface.hairline}`,
+            background: "color-mix(in srgb, " + surface.softPanel + ", transparent 44%)",
+          }}
+        >
+          <div className="flex min-w-0 flex-1 flex-col">
+            <span style={{ fontSize: 13, fontWeight: 700, color: text.primary }}>
+              Prompt
+            </span>
+            <span
+              className="truncate"
+              style={{ marginTop: 2, fontSize: 11, color: text.muted }}
+            >
+              {prompt.project || "Local session"} · {shortDateTime(prompt.timestamp)}
+            </span>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close prompt preview"
+            style={{
+              padding: 5,
+              borderRadius: radius.control,
+              color: text.muted,
+            }}
+          >
+            <Icons.close size={14} strokeWidth={2.2} />
+          </button>
+        </header>
+        <div className="scrollbar-thin overflow-y-auto" style={{ padding: 16 }}>
+          <pre
+            className="whitespace-pre-wrap break-words"
+            style={{
+              margin: 0,
+              color: text.primary,
+              fontSize: 13,
+              lineHeight: 1.55,
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            {prompt.text}
+          </pre>
+        </div>
+        <footer
+          className="flex justify-end"
+          style={{
+            padding: "10px 14px",
+            borderTop: `1px solid ${surface.hairline}`,
+          }}
+        >
+          <button
+            onClick={onClose}
+            style={{
+              padding: "5px 12px",
+              borderRadius: 999,
+              background: surface.softPanel,
+              border: `1px solid ${surface.hairline}`,
+              color: text.primary,
+              fontSize: 12,
+              fontWeight: 700,
+            }}
+          >
+            Done
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
 function EmptyState({ title, body }: { title: string; body: string }) {
   return (
     <div
@@ -655,6 +1004,13 @@ function fmt(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
   if (n >= 1_000) return (n / 1_000).toFixed(1) + "k";
   return n.toString();
+}
+
+function alpha(rgb: string, opacity: number): string {
+  const match = rgb.match(/\d+(\.\d+)?/g);
+  if (!match || match.length < 3) return rgb;
+  const [r, g, b] = match;
+  return `rgba(${r}, ${g}, ${b}, ${opacity})`;
 }
 
 function fmtCredits(n: number): string {

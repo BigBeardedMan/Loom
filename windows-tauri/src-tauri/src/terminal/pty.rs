@@ -10,6 +10,8 @@ use std::thread;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
+use super::transcripts::TerminalTranscriptStore;
+
 pub type SessionId = String;
 
 pub struct Session {
@@ -18,8 +20,10 @@ pub struct Session {
     pub writer: Mutex<Box<dyn Write + Send>>,
     pub child: Mutex<Box<dyn Child + Send + Sync>>,
     pub cwd: Mutex<Option<PathBuf>>,
+    pub title: Mutex<String>,
     pub shell: String,
     pub pid: u32,
+    pub transcripts: Arc<TerminalTranscriptStore>,
 }
 
 pub struct SessionRegistry {
@@ -53,7 +57,12 @@ impl SessionRegistry {
                 id: s.id.clone(),
                 shell: s.shell.clone(),
                 pid: s.pid,
-                cwd: s.cwd.lock().as_ref().map(|p| p.to_string_lossy().into_owned()),
+                cwd: s
+                    .cwd
+                    .lock()
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned()),
+                title: s.title.lock().clone(),
             })
             .collect()
     }
@@ -72,12 +81,16 @@ pub struct SessionInfo {
     pub shell: String,
     pub pid: u32,
     pub cwd: Option<String>,
+    pub title: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpawnOptions {
+    pub session_id: Option<String>,
     pub workspace_id: Option<String>,
+    pub workspace_name: Option<String>,
+    pub title: Option<String>,
     pub shell: Option<String>,
     pub cwd: Option<String>,
     pub cols: u16,
@@ -102,7 +115,12 @@ fn default_shell() -> String {
     }
 }
 
-pub fn spawn(app: AppHandle, registry: &SessionRegistry, opts: SpawnOptions) -> Result<SessionId> {
+pub fn spawn(
+    app: AppHandle,
+    registry: &SessionRegistry,
+    transcripts: Arc<TerminalTranscriptStore>,
+    opts: SpawnOptions,
+) -> Result<SessionId> {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -115,7 +133,12 @@ pub fn spawn(app: AppHandle, registry: &SessionRegistry, opts: SpawnOptions) -> 
 
     let shell_path = opts.shell.unwrap_or_else(default_shell);
     let mut cmd = CommandBuilder::new(&shell_path);
+    let id = opts
+        .session_id
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let title = opts.title.unwrap_or_else(|| "Terminal Session".to_string());
 
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
     let mut args = opts.args;
     if args.is_empty() {
         #[cfg(target_os = "windows")]
@@ -173,6 +196,7 @@ pub fn spawn(app: AppHandle, registry: &SessionRegistry, opts: SpawnOptions) -> 
     }
     cmd.env("TERM", "xterm-256color");
     cmd.env("LOOM_TERM", "1");
+    cmd.env("LOOM_SESSION_ID", &id);
     for (k, v) in opts.env {
         cmd.env(k, v);
     }
@@ -184,32 +208,47 @@ pub fn spawn(app: AppHandle, registry: &SessionRegistry, opts: SpawnOptions) -> 
     let master = pair.master;
     let mut reader = master.try_clone_reader().context("clone pty reader")?;
 
-    let id = Uuid::new_v4().to_string();
+    let cwd_for_transcript = cwd_path
+        .as_ref()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    transcripts.register(
+        &id,
+        opts.workspace_id,
+        opts.workspace_name,
+        cwd_for_transcript,
+        title.clone(),
+    );
     let session = Arc::new(Session {
         id: id.clone(),
         master: Mutex::new(master),
         writer: Mutex::new(writer),
         child: Mutex::new(child),
         cwd: Mutex::new(cwd_path),
+        title: Mutex::new(title),
         shell: shell_path,
         pid,
+        transcripts: transcripts.clone(),
     });
     registry.insert(session.clone());
 
     let app_clone = app.clone();
     let id_clone = id.clone();
+    let transcripts_read = transcripts.clone();
     thread::spawn(move || {
         let mut buf = [0u8; 8192];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
+                    transcripts_read.append(&id_clone, &buf[..n]);
                     let chunk = buf[..n].to_vec();
                     let _ = app_clone.emit(&format!("terminal://{id_clone}/data"), chunk);
                 }
                 Err(_) => break,
             }
         }
+        transcripts_read.close(&id_clone);
         let _ = app_clone.emit(&format!("terminal://{id_clone}/exit"), 0i32);
     });
 
@@ -224,6 +263,7 @@ pub fn spawn(app: AppHandle, registry: &SessionRegistry, opts: SpawnOptions) -> 
             .ok()
             .map(|s| s.exit_code() as i32)
             .unwrap_or(-1);
+        session_wait.transcripts.close(&id_wait);
         let _ = app_wait.emit(&format!("terminal://{id_wait}/exit"), exit_code);
     });
 
@@ -234,7 +274,11 @@ pub fn write(registry: &SessionRegistry, id: &str, bytes: Vec<u8>) -> Result<()>
     let session = registry
         .get(id)
         .ok_or_else(|| anyhow!("session not found: {id}"))?;
-    session.writer.lock().write_all(&bytes).context("write to pty")?;
+    session
+        .writer
+        .lock()
+        .write_all(&bytes)
+        .context("write to pty")?;
     Ok(())
 }
 
@@ -258,6 +302,7 @@ pub fn resize(registry: &SessionRegistry, id: &str, cols: u16, rows: u16) -> Res
 pub fn kill(registry: &SessionRegistry, id: &str) -> Result<()> {
     if let Some(session) = registry.remove(id) {
         let _ = session.child.lock().kill();
+        session.transcripts.close(id);
     }
     Ok(())
 }
@@ -267,6 +312,34 @@ pub fn set_cwd(registry: &SessionRegistry, id: &str, cwd: PathBuf) -> Result<()>
         .get(id)
         .ok_or_else(|| anyhow!("session not found: {id}"))?;
     *session.cwd.lock() = Some(cwd);
+    let cwd_string = session
+        .cwd
+        .lock()
+        .as_ref()
+        .map(|p| p.to_string_lossy().into_owned());
+    session.transcripts.update(id, cwd_string, None);
+    Ok(())
+}
+
+pub fn update_metadata(
+    registry: &SessionRegistry,
+    id: &str,
+    cwd: Option<PathBuf>,
+    title: Option<String>,
+) -> Result<()> {
+    let session = registry
+        .get(id)
+        .ok_or_else(|| anyhow!("session not found: {id}"))?;
+    let cwd_string = if let Some(cwd) = cwd {
+        *session.cwd.lock() = Some(cwd.clone());
+        Some(cwd.to_string_lossy().into_owned())
+    } else {
+        None
+    };
+    if let Some(title) = title.as_deref().filter(|v| !v.trim().is_empty()) {
+        *session.title.lock() = title.to_string();
+    }
+    session.transcripts.update(id, cwd_string, title);
     Ok(())
 }
 

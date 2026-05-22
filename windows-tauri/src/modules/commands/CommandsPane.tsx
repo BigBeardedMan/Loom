@@ -17,6 +17,8 @@ export function CommandsPane({ workspace, blockId }: Props) {
   const [records, setRecords] = useState<CommandRecord[]>([]);
   const [filterToWorkspace, setFilterToWorkspace] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [outputCache, setOutputCache] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
@@ -70,11 +72,23 @@ export function CommandsPane({ workspace, blockId }: Props) {
       });
       const sid = target?.id ?? sessions[0]?.id;
       if (!sid) return;
-      const bytes = Array.from(new TextEncoder().encode(record.command + "\r"));
+      const bytes = Array.from(new TextEncoder().encode(captureCommandText(record.command) + "\r"));
       await ipc.terminal.write(sid, bytes);
     } catch (e) {
       setError(String(e));
     }
+  };
+
+  const toggleExpand = async (record: CommandRecord) => {
+    if (expandedId === record.id) {
+      setExpandedId(null);
+      return;
+    }
+    if (record.outputPath && outputCache[record.id] == null) {
+      const body = await ipc.commandHistory.readOutput(record.outputPath).catch((e) => String(e));
+      setOutputCache((prev) => ({ ...prev, [record.id]: body }));
+    }
+    setExpandedId(record.id);
   };
 
   return (
@@ -176,6 +190,9 @@ export function CommandsPane({ workspace, blockId }: Props) {
                 copiedId={copiedId}
                 onCopy={() => copyCommand(r)}
                 onSend={() => sendToTerminal(r)}
+                expanded={expandedId === r.id}
+                output={outputCache[r.id]}
+                onToggleExpand={() => toggleExpand(r)}
               />
             ))}
           </div>
@@ -190,11 +207,17 @@ function Row({
   copiedId,
   onCopy,
   onSend,
+  expanded,
+  output,
+  onToggleExpand,
 }: {
   record: CommandRecord;
   copiedId: string | null;
   onCopy: () => void;
   onSend: () => void;
+  expanded: boolean;
+  output?: string;
+  onToggleExpand: () => void;
 }) {
   const succeeded = record.exitCode === 0;
   return (
@@ -258,6 +281,20 @@ function Row({
         >
           <Icons.rerunReverse size={10} strokeWidth={2} />
         </button>
+        {record.outputPath && (
+          <button
+            onClick={onToggleExpand}
+            aria-label={expanded ? "Hide captured output" : "Show captured output"}
+            title={expanded ? "Hide captured output" : "Show captured output"}
+            style={{ padding: 3, color: "rgba(255,255,255,0.55)", borderRadius: 4 }}
+          >
+            {expanded ? (
+              <Icons.chevronUp size={10} strokeWidth={2} />
+            ) : (
+              <Icons.chevronDown size={10} strokeWidth={2} />
+            )}
+          </button>
+        )}
       </div>
       <div
         className="flex items-center gap-1.5"
@@ -277,8 +314,30 @@ function Row({
           </>
         )}
       </div>
+      {expanded && (
+        <pre
+          className="scrollbar-thin overflow-auto whitespace-pre-wrap"
+          style={{
+            marginTop: 6,
+            maxHeight: 240,
+            padding: 8,
+            background: "rgba(0,0,0,0.18)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            borderRadius: 4,
+            fontSize: 11,
+            color: "rgba(255,255,255,0.85)",
+            fontFamily: "var(--font-mono)",
+          }}
+        >
+          {output || "(empty)"}
+        </pre>
+      )}
     </div>
   );
+}
+
+function captureCommandText(command: string): string {
+  return `Invoke-LoomCapture -Command '${command.replace(/'/g, "''")}'`;
 }
 
 function lastSegment(p: string): string {

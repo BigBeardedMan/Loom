@@ -4,7 +4,10 @@ import SwiftData
 struct WorkspaceView: View {
     @Environment(WorkspaceLayout.self) private var layout
     @Environment(UpdateService.self) private var updates
+    @Environment(UsageService.self) private var usage
+    @Environment(DictationService.self) private var dictation
     @Environment(WorkspaceContext.self) private var workspaceContext
+    @Environment(TerminalTranscriptStore.self) private var terminalHistory
     @Environment(\.openURL) private var openURL
     @Query(sort: \Workspace.createdAt) private var workspaces: [Workspace]
     @State private var showCommandPalette: Bool = false
@@ -14,6 +17,7 @@ struct WorkspaceView: View {
     @State private var dragTarget: DropTarget?
     @State private var renamingBlockID: UUID?
     @State private var selectedUsageTool: CLITool? = nil
+    @State private var transcriptPreview: TerminalTranscriptSession?
 
     private var deckCapacity: Int {
         let cap = WorkspaceLayout.capacity(for: deckSize)
@@ -37,23 +41,30 @@ struct WorkspaceView: View {
             LoomTheme.background
                 .ignoresSafeArea()
 
-            VStack(spacing: 12) {
+            VStack(spacing: 10) {
                 topBar
 
                 HStack(alignment: .top, spacing: 12) {
                     leftRail
-                        .frame(width: 240)
+                        .frame(width: 268)
 
                     deckOrUsage
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .padding(14)
+            .padding(12)
+
+            if let session = transcriptPreview {
+                transcriptPreviewOverlay(session)
+                    .transition(.opacity.combined(with: .scale(scale: 0.985)))
+                    .zIndex(10)
+            }
         }
         .loomAppearance()
         .onChange(of: layout.selectedWorkspaceID) { _, _ in handleWorkspaceChange() }
         .onChange(of: selectedWorkspace?.folderPath) { _, _ in syncTerminalCwd() }
+        .animation(.easeOut(duration: 0.16), value: transcriptPreview?.id)
         .task { handleWorkspaceChange() }
     }
 
@@ -95,39 +106,34 @@ struct WorkspaceView: View {
     // MARK: - Top bar
 
     private var topBar: some View {
-        HStack(spacing: 12) {
-            Button {
-                openURL(URL(string: "https://github.com/BigBeardedMan/Loom")!)
-            } label: {
-                Image("LoomBanner")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 132, height: 44)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(LoomTheme.hairline, lineWidth: 1)
-                    }
-            }
-            .buttonStyle(.plain)
-            .pointingHandCursor()
-            .help("Open Loom on GitHub")
-            .accessibilityLabel("Loom, open on GitHub")
-
-            usageTabs
+        HStack(spacing: 10) {
+            brandButton
+            verticalHairline
+            commandPaletteButton
 
             Spacer()
 
-            if selectedUsageTool == nil {
+            if let tool = selectedUsageTool {
+                selectedUsageStatus(tool)
+            } else {
                 addBlockStrip
             }
+
+            dictationButton
 
             if updates.available != nil {
                 updatePill
             }
         }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(LoomTheme.chrome)
+        .overlay(
+            RoundedRectangle(cornerRadius: LoomTheme.panelRadius)
+                .stroke(LoomTheme.hairline, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: LoomTheme.panelRadius))
+        .shadow(color: .black.opacity(0.10), radius: 12, x: 0, y: 5)
         .animation(.easeInOut(duration: 0.18), value: updates.available)
         .sheet(isPresented: $showCommandPalette) {
             CommandPalette(isPresented: $showCommandPalette)
@@ -135,6 +141,134 @@ struct WorkspaceView: View {
         .onReceive(NotificationCenter.default.publisher(for: .loomOpenPalette)) { _ in
             showCommandPalette = true
         }
+    }
+
+    private var brandButton: some View {
+        Button {
+            openURL(URL(string: "https://github.com/BigBeardedMan/Loom")!)
+        } label: {
+            HStack(spacing: 8) {
+                LoomLogoMark(size: 24)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Loom")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(LoomTheme.primaryText)
+                    Text("Testing Edition")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(LoomTheme.orange)
+                        .tracking(0.45)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(LoomTheme.softPanel.opacity(0.58))
+            .overlay(
+                RoundedRectangle(cornerRadius: LoomTheme.rowRadius)
+                    .stroke(LoomTheme.hairline, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: LoomTheme.rowRadius))
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .help("Open Loom on GitHub")
+        .accessibilityLabel("Loom, open on GitHub")
+    }
+
+    private var verticalHairline: some View {
+        Rectangle()
+            .fill(LoomTheme.hairline)
+            .frame(width: 1, height: 28)
+    }
+
+    @ViewBuilder
+    private var workspaceIdentity: some View {
+        if let selectedWorkspace {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(selectedWorkspace.color.color)
+                    .frame(width: 8, height: 8)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text(selectedWorkspace.name)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(LoomTheme.primaryText)
+                            .lineLimit(1)
+                        Image(systemName: selectedWorkspace.kind.systemImage)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(LoomTheme.mutedText)
+                    }
+                    Text(selectedWorkspace.displayFolderPath.isEmpty ? selectedWorkspace.kind.label : selectedWorkspace.displayFolderPath)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(LoomTheme.mutedText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            .frame(minWidth: 150, alignment: .leading)
+        } else {
+            HStack(spacing: 8) {
+                Image(systemName: "rectangle.stack")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(LoomTheme.mutedText)
+                Text("No workspace")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(LoomTheme.primaryText)
+            }
+        }
+    }
+
+    private var commandPaletteButton: some View {
+        Button {
+            showCommandPalette = true
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Command")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("⌘K")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(LoomTheme.tertiaryText)
+            }
+            .foregroundStyle(LoomTheme.mutedText)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(LoomTheme.softPanel.opacity(0.54))
+            .overlay(
+                RoundedRectangle(cornerRadius: LoomTheme.controlRadius)
+                    .stroke(LoomTheme.hairline, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: LoomTheme.controlRadius))
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .help("Open command palette")
+    }
+
+    private func selectedUsageStatus(_ tool: CLITool) -> some View {
+        Button {
+            selectedUsageTool = nil
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: tool.systemImage)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(tool.brandColor)
+                Text("\(tool.label) dashboard")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(LoomTheme.primaryText)
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(LoomTheme.mutedText)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(tool.brandColor.opacity(0.12))
+            .overlay(Capsule().stroke(tool.brandColor.opacity(0.32), lineWidth: 1))
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .help("Return to workspace")
     }
 
     private var updatePill: some View {
@@ -158,7 +292,7 @@ struct WorkspaceView: View {
             .padding(.vertical, 6)
             .background(LoomTheme.green)
             .clipShape(Capsule())
-            .shadow(color: LoomTheme.green.opacity(0.5), radius: 8, x: 0, y: 2)
+            .shadow(color: LoomTheme.green.opacity(0.34), radius: 7, x: 0, y: 2)
         }
         .buttonStyle(.plain)
         .pointingHandCursor()
@@ -166,36 +300,73 @@ struct WorkspaceView: View {
         .help("Restart Loom with the staged build")
     }
 
-    private var usageTabs: some View {
-        HStack(spacing: 6) {
-            usageTab(.claude, label: "Claude Usage")
-            usageTab(.codex,  label: "Codex Usage")
-            usageTab(.gemini, label: "Gemini Usage")
-        }
-    }
-
-    private func usageTab(_ tool: CLITool, label: String) -> some View {
-        let isSelected = selectedUsageTool == tool
-        return Button {
-            selectedUsageTool = isSelected ? nil : tool
+    private var dictationButton: some View {
+        Button {
+            dictation.toggle()
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: tool.systemImage)
+                Image(systemName: dictation.state.isError
+                    ? "exclamationmark.triangle.fill"
+                    : (dictation.state.isActive ? "mic.fill" : "mic"))
                     .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(isSelected ? .white : tool.brandColor)
-                Text(label)
+                Text(dictationButtonTitle)
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(isSelected ? .white : LoomTheme.primaryText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
+            .foregroundStyle(dictation.state.isActive || dictation.state.isError ? .white : LoomTheme.primaryText)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(isSelected ? tool.brandColor : LoomTheme.softPanel.opacity(0.7))
-            .overlay(Capsule().stroke(LoomTheme.hairline, lineWidth: 1))
+            .background(dictation.state.isError
+                ? Color.red.opacity(0.9)
+                : (dictation.state.isActive ? LoomTheme.purple : LoomTheme.softPanel.opacity(0.66)))
+            .overlay(Capsule().stroke(dictation.state.isError
+                ? Color.red.opacity(0.5)
+                : (dictation.state.isActive ? LoomTheme.purple.opacity(0.5) : LoomTheme.hairline), lineWidth: 1))
             .clipShape(Capsule())
+            .overlay(alignment: .topTrailing) {
+                if dictation.state.isActive {
+                    Circle()
+                        .fill(.red)
+                        .frame(width: 7, height: 7)
+                        .offset(x: 1, y: -1)
+                }
+            }
         }
         .buttonStyle(.plain)
         .pointingHandCursor()
-        .help(isSelected ? "Click a workspace to return" : "Open \(label) dashboard")
+        .help(dictationHelpText)
+        .accessibilityLabel(dictation.state.isError
+            ? "Dictation error"
+            : (dictation.state.isActive ? "Stop dictation" : "Start dictation"))
+    }
+
+    private var dictationButtonTitle: String {
+        switch dictation.state {
+        case .idle:
+            return "Dictate"
+        case .requestingPermission, .transcribing:
+            return dictation.state.label
+        case .listening:
+            return dictation.state.label
+        case .error:
+            return "Dictation Error"
+        }
+    }
+
+    private var dictationHelpText: String {
+        switch dictation.state {
+        case .idle:
+            return "Start dictation (F5)"
+        case .requestingPermission:
+            return "Requesting microphone and speech access"
+        case .listening:
+            return dictation.liveTranscript.isEmpty ? "Listening… press F5 to insert or Esc to cancel" : dictation.liveTranscript
+        case .transcribing:
+            return "Transcribing…"
+        case .error(let message):
+            return message
+        }
     }
 
     private var addBlockStrip: some View {
@@ -204,9 +375,9 @@ struct WorkspaceView: View {
                 addBlockButton(panel)
             }
         }
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 5)
         .padding(.vertical, 4)
-        .background(LoomTheme.softPanel.opacity(0.6))
+        .background(LoomTheme.softPanel.opacity(0.56))
         .overlay(Capsule().stroke(LoomTheme.hairline, lineWidth: 1))
         .clipShape(Capsule())
     }
@@ -227,7 +398,7 @@ struct WorkspaceView: View {
             .foregroundStyle(canAddBlock ? LoomTheme.primaryText : LoomTheme.mutedText.opacity(0.55))
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(LoomTheme.softPanel.opacity(canAddBlock ? 1 : 0.4))
+            .background(canAddBlock ? LoomTheme.panel.opacity(0.7) : LoomTheme.softPanel.opacity(0.34))
             .overlay(Capsule().stroke(LoomTheme.hairline, lineWidth: 1))
             .clipShape(Capsule())
         }
@@ -244,9 +415,84 @@ struct WorkspaceView: View {
         return LoomPanel {
             WorkspaceSidebarView(
                 selectedWorkspaceID: $bindable.selectedWorkspaceID,
-                selectedUsageTool: $selectedUsageTool
+                selectedUsageTool: $selectedUsageTool,
+                transcriptPreview: $transcriptPreview
             )
         }
+    }
+
+    private func transcriptPreviewOverlay(_ session: TerminalTranscriptSession) -> some View {
+        GeometryReader { geo in
+            ZStack {
+                Color.black.opacity(0.46)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        transcriptPreview = nil
+                    }
+
+                TerminalTranscriptDetailView(
+                    session: session,
+                    primaryActionTitle: session.state == .closed ? "Restore Session" : "Start Fresh Shell Here",
+                    primaryActionSystemImage: session.state == .closed ? "arrow.uturn.backward.circle" : "plus.rectangle.on.rectangle",
+                    onPrimaryAction: {
+                        if session.state == .closed {
+                            restoreClosedTerminal(session)
+                        } else {
+                            let cwd = URL(fileURLWithPath: session.cwd)
+                            layout.addTerminalBlock(cwd: cwd)
+                            transcriptPreview = nil
+                        }
+                    },
+                    onDismiss: {
+                        transcriptPreview = nil
+                    }
+                )
+                .environment(terminalHistory)
+                .frame(
+                    width: transcriptPreviewWidth(in: geo.size),
+                    height: transcriptPreviewHeight(in: geo.size)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(LoomTheme.hairline, lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.38), radius: 28, x: 0, y: 18)
+                .contentShape(RoundedRectangle(cornerRadius: 14))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .onExitCommand {
+            transcriptPreview = nil
+        }
+    }
+
+    private func restoreClosedTerminal(_ session: TerminalTranscriptSession) {
+        guard let restore = terminalHistory.restoreClosedSession(
+            session,
+            fallbackCwd: layout.defaultCwd
+        ) else {
+            let cwd = URL(fileURLWithPath: session.cwd)
+            layout.addTerminalBlock(cwd: cwd)
+            transcriptPreview = nil
+            return
+        }
+        selectedUsageTool = nil
+        transcriptPreview = nil
+        layout.restoreTerminalBlock(restore)
+    }
+
+    private func transcriptPreviewWidth(in size: CGSize) -> CGFloat {
+        let available = max(320, size.width - 48)
+        let preferred = max(620, size.width * 0.74)
+        return min(980, min(preferred, available))
+    }
+
+    private func transcriptPreviewHeight(in size: CGSize) -> CGFloat {
+        let available = max(320, size.height - 48)
+        let preferred = max(440, size.height * 0.76)
+        return min(760, min(preferred, available))
     }
 
     // MARK: - Deck or Usage overlay
@@ -279,10 +525,10 @@ struct WorkspaceView: View {
                     ZStack(alignment: .topLeading) {
                         if draggingBlockID != nil, case let .pin(pin) = dragTarget {
                             let rect = DeckMetrics.pinFrame(pin: pin, deckSize: geo.size, gap: metrics.gap)
-                            RoundedRectangle(cornerRadius: 14)
+                            RoundedRectangle(cornerRadius: LoomTheme.panelRadius)
                                 .fill(LoomTheme.blue.opacity(0.13))
                                 .overlay {
-                                    RoundedRectangle(cornerRadius: 14)
+                                    RoundedRectangle(cornerRadius: LoomTheme.panelRadius)
                                         .stroke(
                                             LoomTheme.blue.opacity(0.65),
                                             style: StrokeStyle(lineWidth: 2, dash: [6, 4])
@@ -421,7 +667,11 @@ struct WorkspaceView: View {
         switch block.kind {
         case .terminal:
             if !block.terminalSessions.isEmpty {
-                TerminalPaneView(block: block)
+                TerminalPaneView(
+                    block: block,
+                    workspaceID: selectedWorkspace?.id,
+                    workspaceName: selectedWorkspace?.name
+                )
             } else {
                 Color.black
             }
@@ -430,7 +680,10 @@ struct WorkspaceView: View {
         case .tasks:
             KanbanPaneView()
         case .agent:
-            AgentPaneView(cwd: selectedWorkspace?.folderURL)
+            AgentPaneView(
+                cwd: selectedWorkspace?.folderURL,
+                handlesExternalRuns: block.id == layout.blocks.first(where: { $0.kind == .agent })?.id
+            )
         case .notes:
             NotesPaneView(workspaceID: layout.selectedWorkspaceID)
         case .preview:
@@ -441,23 +694,12 @@ struct WorkspaceView: View {
     }
 
     private var deckEmptyState: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "rectangle.dashed")
-                .font(.system(size: 32, weight: .light))
-                .foregroundStyle(LoomTheme.mutedText)
-            Text("No blocks here.")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(LoomTheme.primaryText)
-            Text("Use the buttons in the top bar to add a block to this workspace.")
-                .font(.system(size: 11))
-                .foregroundStyle(LoomTheme.mutedText)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(40)
-        .background(LoomTheme.panel.opacity(0.4))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(LoomTheme.hairline, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
+        LoomEmptyState(
+            systemImage: "rectangle.dashed",
+            title: "Empty deck",
+            detail: "Add Terminal, Editor, Tasks, Agent, or Commands from the command bar.",
+            tint: selectedWorkspace?.color.color ?? LoomTheme.blue
+        )
     }
 
 }
@@ -711,15 +953,15 @@ struct LoomPanel<Content: View>: View {
         }
         .background(LoomTheme.panel)
         .overlay(
-            RoundedRectangle(cornerRadius: 14)
+            RoundedRectangle(cornerRadius: LoomTheme.panelRadius)
                 .stroke(borderColor, lineWidth: borderWidth)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .clipShape(RoundedRectangle(cornerRadius: LoomTheme.panelRadius))
         .shadow(
-            color: .black.opacity(isDragging ? 0.55 : 0.28),
-            radius: isDragging ? 28 : 18,
+            color: LoomTheme.panelShadow(active: isDragging),
+            radius: isDragging ? 24 : 10,
             x: 0,
-            y: isDragging ? 18 : 12
+            y: isDragging ? 16 : 5
         )
         .scaleEffect(isDragging ? 1.015 : 1)
         .animation(.easeOut(duration: 0.18), value: isDragging)
@@ -740,13 +982,17 @@ struct LoomPanel<Content: View>: View {
     private func titleBar(_ title: String) -> some View {
         let bar = HStack(spacing: 8) {
             if let systemImage {
-                Image(systemName: systemImage)
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(LoomTheme.orange)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(LoomTheme.orange.opacity(0.14))
+                        .frame(width: 22, height: 20)
+                    Image(systemName: systemImage)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(LoomTheme.orange)
+                }
             }
             titleText(title)
             Spacer()
-            Circle().fill(LoomTheme.green).frame(width: 7, height: 7)
             if onDragChanged != nil {
                 Image(systemName: "square.grid.2x2.fill")
                     .font(.system(size: 9, weight: .bold))
@@ -758,16 +1004,19 @@ struct LoomPanel<Content: View>: View {
                     Image(systemName: "xmark")
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(LoomTheme.mutedText)
-                        .padding(4)
-                        .contentShape(Rectangle())
+                        .frame(width: 22, height: 20)
+                        .background(LoomTheme.softPanel.opacity(0.5))
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .contentShape(RoundedRectangle(cornerRadius: 5))
                 }
                 .buttonStyle(.plain)
+                .pointingHandCursor()
                 .help("Close block")
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(Color.black.opacity(0.16))
+        .padding(.vertical, 8)
+        .background(LoomTheme.inset)
         .overlay(Divider().overlay(LoomTheme.hairline), alignment: .bottom)
         .contentShape(Rectangle())
 

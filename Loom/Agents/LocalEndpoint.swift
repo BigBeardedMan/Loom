@@ -1,14 +1,16 @@
 import Foundation
 
 /// User-configured local LLM endpoint reachable over HTTP on localhost or the
-/// LAN. Two shapes are supported today: native Ollama and any OpenAI-compatible
-/// chat-completions server (LM Studio, llama.cpp's `llama-server`, Jan, vLLM,
-/// LocalAI). Auth tokens, when needed, live in Keychain — `LocalEndpoint`
-/// itself only stores `requiresAuth` so the UI knows to render the field.
+/// LAN. Supported shapes: native Ollama, LM Studio with native model discovery,
+/// and generic OpenAI-compatible chat-completions servers (llama.cpp's
+/// `llama-server`, Jan, vLLM, LocalAI). Auth tokens, when needed, live in
+/// Keychain — `LocalEndpoint` itself only stores `requiresAuth` so the UI knows
+/// to render the field.
 struct LocalEndpoint: Codable, Identifiable, Hashable, Sendable {
     enum Kind: String, Codable, Hashable, Sendable, CaseIterable, Identifiable {
         case ollama
         case openAICompatible
+        case lmstudio
 
         var id: String { rawValue }
 
@@ -16,6 +18,7 @@ struct LocalEndpoint: Codable, Identifiable, Hashable, Sendable {
             switch self {
             case .ollama:           return "Ollama"
             case .openAICompatible: return "OpenAI-compatible"
+            case .lmstudio:         return "LM Studio"
             }
         }
 
@@ -23,6 +26,7 @@ struct LocalEndpoint: Codable, Identifiable, Hashable, Sendable {
             switch self {
             case .ollama:           return "http://localhost:11434"
             case .openAICompatible: return "http://localhost:1234/v1"
+            case .lmstudio:         return "http://localhost:1234/v1"
             }
         }
 
@@ -30,6 +34,7 @@ struct LocalEndpoint: Codable, Identifiable, Hashable, Sendable {
             switch self {
             case .ollama:           return "auto-discovered via /api/tags"
             case .openAICompatible: return "set the model id used in chat requests"
+            case .lmstudio:         return "auto-discovered via /api/v1/models"
             }
         }
     }

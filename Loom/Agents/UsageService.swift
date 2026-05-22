@@ -4,10 +4,10 @@ import SwiftUI
 
 /// CLI agent we know how to read on-disk usage from. Add a case here to
 /// surface a new vendor in the Usage view.
-enum CLITool: String, CaseIterable, Identifiable, Hashable {
+enum CLITool: String, CaseIterable, Identifiable, Hashable, Sendable {
     case claude
     case codex
-    case gemini
+    case lmstudio
 
     var id: String { rawValue }
 
@@ -15,7 +15,7 @@ enum CLITool: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .claude: return "Claude Code"
         case .codex:  return "Codex"
-        case .gemini: return "Gemini"
+        case .lmstudio: return "LM Studio"
         }
     }
 
@@ -23,7 +23,7 @@ enum CLITool: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .claude: return "claude"
         case .codex:  return "codex"
-        case .gemini: return "gemini"
+        case .lmstudio: return "lmstudio"
         }
     }
 
@@ -31,7 +31,7 @@ enum CLITool: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .claude: return "sparkles"
         case .codex:  return "chevron.left.forwardslash.chevron.right"
-        case .gemini: return "diamond"
+        case .lmstudio: return "cpu"
         }
     }
 
@@ -39,12 +39,19 @@ enum CLITool: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .claude: return Color(red: 0.95, green: 0.39, blue: 0.18)
         case .codex:  return Color(red: 0.23, green: 0.86, blue: 0.46)
-        case .gemini: return Color(red: 0.18, green: 0.50, blue: 0.96)
+        case .lmstudio: return Color(red: 0.62, green: 0.40, blue: 0.95)
+        }
+    }
+
+    var supportsLimitSignals: Bool {
+        switch self {
+        case .codex: return true
+        case .claude, .lmstudio: return false
         }
     }
 }
 
-enum UsageTimeframe: String, CaseIterable, Identifiable, Hashable {
+enum UsageTimeframe: String, CaseIterable, Identifiable, Hashable, Sendable {
     case day, week, month, year
 
     var id: String { rawValue }
@@ -138,13 +145,13 @@ enum UsageTimeframe: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
-struct BucketBoundary: Hashable {
+struct BucketBoundary: Hashable, Sendable {
     let start: Date
     let end: Date
     let label: String
 }
 
-struct UsageBucket: Identifiable, Hashable {
+struct UsageBucket: Identifiable, Hashable, Sendable {
     let start: Date
     let end: Date
     let tokens: Int
@@ -153,7 +160,7 @@ struct UsageBucket: Identifiable, Hashable {
     var id: Date { start }
 }
 
-struct ProjectUsage: Hashable, Identifiable {
+struct ProjectUsage: Hashable, Identifiable, Sendable {
     let displayName: String
     let path: String
     let sessions: Int
@@ -162,7 +169,7 @@ struct ProjectUsage: Hashable, Identifiable {
     var id: String { path }
 }
 
-struct ModelUsage: Hashable, Identifiable {
+struct ModelUsage: Hashable, Identifiable, Sendable {
     let model: String
     let tokens: Int
 
@@ -180,7 +187,7 @@ struct ModelUsage: Hashable, Identifiable {
     }
 }
 
-struct ProjectTokenSlice: Hashable, Identifiable {
+struct ProjectTokenSlice: Hashable, Identifiable, Sendable {
     let displayName: String
     let path: String
     let tokens: Int
@@ -188,14 +195,14 @@ struct ProjectTokenSlice: Hashable, Identifiable {
     var id: String { path }
 }
 
-struct PromptTopic: Hashable, Identifiable {
+struct PromptTopic: Hashable, Identifiable, Sendable {
     let keyword: String
     let count: Int
 
     var id: String { keyword }
 }
 
-struct PromptPreview: Hashable, Identifiable {
+struct PromptPreview: Hashable, Identifiable, Sendable {
     let text: String
     let timestamp: Date
     let project: String
@@ -203,13 +210,38 @@ struct PromptPreview: Hashable, Identifiable {
     var id: String { "\(timestamp.timeIntervalSince1970)-\(text.prefix(20))" }
 }
 
-struct CLIToolUsage: Identifiable, Hashable {
+struct UsageLimitSnapshot: Hashable, Sendable {
+    let primaryUsedPercent: Double?
+    let primaryWindowMinutes: Int?
+    let primaryResetsAt: Date?
+    let secondaryUsedPercent: Double?
+    let secondaryWindowMinutes: Int?
+    let secondaryResetsAt: Date?
+    let planType: String?
+    let credits: Double?
+    let reachedType: String?
+    let observedAt: Date?
+}
+
+struct UsageLimitWarning: Hashable, Identifiable, Sendable {
+    let id: String
+    let tool: CLITool
+    let peakUsedPercent: Double?
+    let reachedType: String?
+    let observedAt: Date?
+}
+
+struct CLIToolUsage: Identifiable, Hashable, Sendable {
     let tool: CLITool
     let isInstalled: Bool
+    let timeframe: UsageTimeframe
+    let windowStart: Date
+    let windowEnd: Date
     /// Sessions whose log file has been touched within the "live" window.
     let activeSessions: Int
     let sessionsToday: Int
     let sessionsTotal: Int
+    let windowSessions: Int
     let inputTokens: Int
     let outputTokens: Int
     let cachedTokens: Int
@@ -234,18 +266,28 @@ struct CLIToolUsage: Identifiable, Hashable {
     let hourlyDistribution: [Int]
     /// Total user prompts the CLI received in the current timeframe.
     let promptCount: Int
+    /// Locally logged CLI limit snapshot. Only Codex exposes this today.
+    let limitSnapshot: UsageLimitSnapshot?
 
     var id: String { tool.rawValue }
 
     var totalTokens: Int { inputTokens + outputTokens + cachedTokens }
 
-    static func unavailable(_ tool: CLITool) -> CLIToolUsage {
+    static func unavailable(
+        _ tool: CLITool,
+        timeframe: UsageTimeframe = .day,
+        referenceDate: Date = .now
+    ) -> CLIToolUsage {
         CLIToolUsage(
             tool: tool,
             isInstalled: false,
+            timeframe: timeframe,
+            windowStart: referenceDate.addingTimeInterval(-timeframe.totalSpan),
+            windowEnd: referenceDate,
             activeSessions: 0,
             sessionsToday: 0,
             sessionsTotal: 0,
+            windowSessions: 0,
             inputTokens: 0,
             outputTokens: 0,
             cachedTokens: 0,
@@ -258,7 +300,8 @@ struct CLIToolUsage: Identifiable, Hashable {
             topTopics: [],
             recentPrompts: [],
             hourlyDistribution: Array(repeating: 0, count: 24),
-            promptCount: 0
+            promptCount: 0,
+            limitSnapshot: nil
         )
     }
 }
@@ -273,6 +316,9 @@ struct CLIToolUsage: Identifiable, Hashable {
 @Observable
 @MainActor
 final class UsageService {
+    /// Warn when a local limit snapshot reaches the product threshold.
+    nonisolated static let limitWarningThresholdPercent: Double = 85
+
     /// How many sessions across all known CLIs were touched within
     /// `liveWindow`. Drives the Prompt-workspace badge.
     var activeSessionCount: Int = 0
@@ -300,6 +346,13 @@ final class UsageService {
     /// Surfaces I/O failures while reading log directories.
     var lastError: String?
 
+    /// Latest warning-worthy limit snapshots by tool. The UI filters these
+    /// through acknowledgements so a viewed warning stays quiet until a newer
+    /// snapshot crosses the threshold again.
+    var limitWarnings: [CLITool: UsageLimitWarning] = [:]
+
+    var limitWarningThresholdPercent: Double { Self.limitWarningThresholdPercent }
+
     /// Active = log file touched in the last 5 minutes. CLIs flush to disk on
     /// every assistant turn, so this is a reliable "is somebody actively
     /// chatting" signal without being so tight that it flickers between turns.
@@ -307,14 +360,20 @@ final class UsageService {
 
     private var lightTimer: Timer?
     private let lightPollInterval: TimeInterval = 3.0
+    private var limitWarningTimer: Timer?
+    private let limitWarningPollInterval: TimeInterval = 20 * 60
 
     private var refreshTask: Task<Void, Never>?
+    private var limitWarningRefreshTask: Task<Void, Never>?
     /// Bumped on every `requestRefresh()` so a still-running detached snapshot
     /// can detect that a newer request superseded it. `Task.isCancelled` was
     /// unreliable here — the detached body never checkpoints, so the flag
     /// often hadn't propagated by the time the older task tried to write
     /// back its (now-stale) snapshot.
     private var refreshGeneration: Int = 0
+    private var limitWarningRefreshGeneration: Int = 0
+    private var acknowledgedLimitWarningIDs: Set<String>
+    private let acknowledgedLimitWarningDefaultsKey = "loom.usage.acknowledgedLimitWarnings.v1"
 
     private let claudeProjectsRoot: URL = {
         FileManager.default.homeDirectoryForCurrentUser
@@ -326,27 +385,48 @@ final class UsageService {
             .appendingPathComponent(".codex/sessions", isDirectory: true)
     }()
 
-    private let geminiRoot: URL = {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".gemini", isDirectory: true)
+    private let lmStudioSessionsRoot: URL = {
+        UpdateService.appSupportRoot
+            .appendingPathComponent("lmstudio-agent-sessions", isDirectory: true)
     }()
+
+    init() {
+        acknowledgedLimitWarningIDs = Set(
+            UserDefaults.standard.stringArray(forKey: acknowledgedLimitWarningDefaultsKey) ?? []
+        )
+    }
 
     func start() {
         guard lightTimer == nil else { return }
         refreshActiveCountInBackground()
+        refreshLimitWarningsInBackground()
         lightTimer = Timer.scheduledTimer(
             withTimeInterval: lightPollInterval,
             repeats: true
         ) { [weak self] _ in
             Task { @MainActor in self?.refreshActiveCountInBackground() }
         }
+        limitWarningTimer = Timer.scheduledTimer(
+            withTimeInterval: limitWarningPollInterval,
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor in self?.refreshLimitWarningsInBackground() }
+        }
     }
 
     func stop() {
         lightTimer?.invalidate()
         lightTimer = nil
+        limitWarningTimer?.invalidate()
+        limitWarningTimer = nil
         refreshTask?.cancel()
         refreshTask = nil
+        limitWarningRefreshTask?.cancel()
+        limitWarningRefreshTask = nil
+    }
+
+    func requestLimitWarningRefresh() {
+        refreshLimitWarningsInBackground()
     }
 
     /// Recompute the full per-tool snapshot off the main actor.
@@ -357,19 +437,23 @@ final class UsageService {
         let live = liveWindow
         let claudeRoot = claudeProjectsRoot
         let codexRoot = codexSessionsRoot
-        let geminiRoot = geminiRoot
-        let boundaries = timeframe.boundaries()
-        let span = timeframe.totalSpan
+        let lmStudioRoot = lmStudioSessionsRoot
+        let requestedTimeframe = timeframe
+        let referenceDate = Date()
+        let boundaries = requestedTimeframe.boundaries(now: referenceDate)
+        let windowStart = referenceDate.addingTimeInterval(-requestedTimeframe.totalSpan)
         isRefreshing = true
         refreshTask = Task { [weak self] in
             let snapshot = await Task.detached(priority: .utility) {
                 Self.computeSnapshot(
                     claudeRoot: claudeRoot,
                     codexRoot: codexRoot,
-                    geminiRoot: geminiRoot,
+                    lmStudioRoot: lmStudioRoot,
                     liveWindow: live,
+                    timeframe: requestedTimeframe,
                     boundaries: boundaries,
-                    timeframeSpan: span
+                    windowStart: windowStart,
+                    windowEnd: referenceDate
                 )
             }.value
             guard let self else { return }
@@ -378,9 +462,32 @@ final class UsageService {
             guard myGeneration == self.refreshGeneration else { return }
             self.tools = snapshot
             self.activeSessionCount = snapshot.reduce(0) { $0 + $1.activeSessions }
+            self.applyLimitSnapshots(snapshot.reduce(into: [CLITool: UsageLimitSnapshot]()) { partial, tool in
+                if let limitSnapshot = tool.limitSnapshot {
+                    partial[tool.tool] = limitSnapshot
+                }
+            })
             self.lastRefreshedAt = .now
             self.isRefreshing = false
         }
+    }
+
+    func hasUnacknowledgedLimitWarning(for tool: CLITool) -> Bool {
+        guard let warning = limitWarnings[tool] else { return false }
+        return !acknowledgedLimitWarningIDs.contains(warning.id)
+    }
+
+    func acknowledgeLimitWarning(for tool: CLITool) {
+        guard let warning = limitWarnings[tool] else { return }
+        acknowledgedLimitWarningIDs.insert(warning.id)
+        persistAcknowledgedLimitWarnings()
+    }
+
+    private func persistAcknowledgedLimitWarnings() {
+        UserDefaults.standard.set(
+            Array(acknowledgedLimitWarningIDs),
+            forKey: acknowledgedLimitWarningDefaultsKey
+        )
     }
 
     // MARK: - Light path (active count only)
@@ -389,18 +496,122 @@ final class UsageService {
         let live = liveWindow
         let claudeRoot = claudeProjectsRoot
         let codexRoot = codexSessionsRoot
+        let lmStudioRoot = lmStudioSessionsRoot
         Task { [weak self] in
             let total = await Task.detached(priority: .utility) {
                 let cutoff = Date().addingTimeInterval(-live)
                 let claude = Self.countActiveJSONL(in: claudeRoot, cutoff: cutoff, recursive: false)
                 let codex  = Self.countActiveJSONL(in: codexRoot,  cutoff: cutoff, recursive: true)
-                return claude + codex
+                let lmStudio = Self.countActiveJSON(in: lmStudioRoot, cutoff: cutoff)
+                return claude + codex + lmStudio
             }.value
             guard let self else { return }
             if self.activeSessionCount != total {
                 self.activeSessionCount = total
             }
         }
+    }
+
+    // MARK: - Limit warning path
+
+    private func refreshLimitWarningsInBackground() {
+        limitWarningRefreshTask?.cancel()
+        limitWarningRefreshGeneration &+= 1
+        let myGeneration = limitWarningRefreshGeneration
+        let codexRoot = codexSessionsRoot
+
+        limitWarningRefreshTask = Task { [weak self] in
+            let snapshots = await Task.detached(priority: .utility) {
+                Self.computeLimitSnapshots(codexRoot: codexRoot)
+            }.value
+            guard let self, myGeneration == self.limitWarningRefreshGeneration else { return }
+            self.applyLimitSnapshots(snapshots)
+        }
+    }
+
+    private func applyLimitSnapshots(_ snapshots: [CLITool: UsageLimitSnapshot]) {
+        let warnings = snapshots.reduce(into: [CLITool: UsageLimitWarning]()) { partial, entry in
+            guard entry.key.supportsLimitSignals else { return }
+            if let warning = Self.limitWarning(
+                tool: entry.key,
+                snapshot: entry.value,
+                threshold: Self.limitWarningThresholdPercent
+            ) {
+                partial[entry.key] = warning
+            }
+        }
+        if limitWarnings != warnings {
+            limitWarnings = warnings
+        }
+    }
+
+    private nonisolated static func computeLimitSnapshots(
+        codexRoot: URL
+    ) -> [CLITool: UsageLimitSnapshot] {
+        var snapshots: [CLITool: UsageLimitSnapshot] = [:]
+        if let codex = readLatestCodexLimitSnapshot(root: codexRoot) {
+            snapshots[.codex] = codex
+        }
+        return snapshots
+    }
+
+    private nonisolated static func readLatestCodexLimitSnapshot(root: URL) -> UsageLimitSnapshot? {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: root.path),
+              let enumerator = fm.enumerator(
+                at: root,
+                includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+                options: [.skipsHiddenFiles]
+              ) else {
+            return nil
+        }
+
+        var latest: UsageLimitSnapshot?
+        for case let url as URL in enumerator {
+            guard url.pathExtension == "jsonl" else { continue }
+            guard let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate else { continue }
+            guard let data = try? Data(contentsOf: url),
+                  let text = String(data: data, encoding: .utf8),
+                  let snapshot = parseCodexLatestLimitSnapshot(in: text, fallback: mtime) else {
+                continue
+            }
+            let observedAt = snapshot.observedAt ?? .distantPast
+            if latest?.observedAt.map({ observedAt > $0 }) ?? true {
+                latest = snapshot
+            }
+        }
+        return latest
+    }
+
+    private nonisolated static func limitWarning(
+        tool: CLITool,
+        snapshot: UsageLimitSnapshot,
+        threshold: Double
+    ) -> UsageLimitWarning? {
+        let reached = snapshot.reachedType?.nilIfEmpty
+        let peak = [
+            snapshot.primaryUsedPercent,
+            snapshot.secondaryUsedPercent
+        ].compactMap { $0 }.max()
+
+        guard reached != nil || peak.map({ $0 >= threshold }) == true else {
+            return nil
+        }
+
+        let observed = snapshot.observedAt?.timeIntervalSince1970.description ?? "unknown"
+        let primary = snapshot.primaryUsedPercent?.description ?? "nil"
+        let secondary = snapshot.secondaryUsedPercent?.description ?? "nil"
+        let reachedPart = reached ?? "nil"
+        let id = "\(tool.rawValue)|\(observed)|\(primary)|\(secondary)|\(reachedPart)"
+
+        return UsageLimitWarning(
+            id: id,
+            tool: tool,
+            peakUsedPercent: peak,
+            reachedType: reached,
+            observedAt: snapshot.observedAt
+        )
     }
 
     /// Walk a directory and count `.jsonl` files modified after `cutoff`.
@@ -449,36 +660,67 @@ final class UsageService {
         return count
     }
 
+    private nonisolated static func countActiveJSON(in root: URL, cutoff: Date) -> Int {
+        let urls = (try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        return urls.reduce(0) { partial, url in
+            guard url.pathExtension == "json",
+                  let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                    .contentModificationDate,
+                  mtime >= cutoff else {
+                return partial
+            }
+            return partial + 1
+        }
+    }
+
     // MARK: - Full snapshot
 
     private nonisolated static func computeSnapshot(
         claudeRoot: URL,
         codexRoot: URL,
-        geminiRoot: URL,
+        lmStudioRoot: URL,
         liveWindow: TimeInterval,
+        timeframe: UsageTimeframe,
         boundaries: [BucketBoundary],
-        timeframeSpan: TimeInterval
+        windowStart: Date,
+        windowEnd: Date
     ) -> [CLIToolUsage] {
         let cutoff = Date().addingTimeInterval(-liveWindow)
         let calendar = Calendar.current
         let startOfToday = calendar.startOfDay(for: .now)
-        let windowStart = Date().addingTimeInterval(-timeframeSpan)
 
         let claude = readClaudeUsage(
             root: claudeRoot,
             liveCutoff: cutoff,
             startOfToday: startOfToday,
+            timeframe: timeframe,
             boundaries: boundaries,
-            windowStart: windowStart
+            windowStart: windowStart,
+            windowEnd: windowEnd
         )
         let codex = readCodexUsage(
             root: codexRoot,
             liveCutoff: cutoff,
             startOfToday: startOfToday,
-            boundaries: boundaries
+            timeframe: timeframe,
+            boundaries: boundaries,
+            windowStart: windowStart,
+            windowEnd: windowEnd
         )
-        let gemini = readGeminiUsage(root: geminiRoot)
-        return [claude, codex, gemini]
+        let lmStudio = readLMStudioUsage(
+            root: lmStudioRoot,
+            liveCutoff: cutoff,
+            startOfToday: startOfToday,
+            timeframe: timeframe,
+            boundaries: boundaries,
+            windowStart: windowStart,
+            windowEnd: windowEnd
+        )
+        return [claude, codex, lmStudio]
     }
 
     // MARK: - Claude reader
@@ -487,17 +729,20 @@ final class UsageService {
         root: URL,
         liveCutoff: Date,
         startOfToday: Date,
+        timeframe: UsageTimeframe,
         boundaries: [BucketBoundary],
-        windowStart: Date
+        windowStart: Date,
+        windowEnd: Date
     ) -> CLIToolUsage {
         let fm = FileManager.default
         guard fm.fileExists(atPath: root.path) else {
-            return .unavailable(.claude)
+            return .unavailable(.claude, timeframe: timeframe, referenceDate: windowEnd)
         }
 
         var sessionsTotal = 0
         var sessionsToday = 0
         var activeSessions = 0
+        var windowSessions = 0
         var inputTokens = 0
         var outputTokens = 0
         var cachedTokens = 0
@@ -536,7 +781,8 @@ final class UsageService {
                 if mtime >= liveCutoff   { activeSessions += 1 }
                 if lastActivity == nil || mtime > lastActivity! { lastActivity = mtime }
 
-                if mtime >= windowStart {
+                if mtime >= windowStart, mtime <= windowEnd {
+                    windowSessions += 1
                     projectSessionCount[projectDir, default: 0] += 1
                     if let prev = projectLastActivity[projectDir] {
                         if mtime > prev { projectLastActivity[projectDir] = mtime }
@@ -622,9 +868,13 @@ final class UsageService {
         return CLIToolUsage(
             tool: .claude,
             isInstalled: true,
+            timeframe: timeframe,
+            windowStart: windowStart,
+            windowEnd: windowEnd,
             activeSessions: activeSessions,
             sessionsToday: sessionsToday,
             sessionsTotal: sessionsTotal,
+            windowSessions: windowSessions,
             inputTokens: inputTokens,
             outputTokens: outputTokens,
             cachedTokens: cachedTokens,
@@ -637,7 +887,8 @@ final class UsageService {
             topTopics: topTopics,
             recentPrompts: trimmedRecent,
             hourlyDistribution: hourlyDistribution,
-            promptCount: promptCount
+            promptCount: promptCount,
+            limitSnapshot: nil
         )
     }
 
@@ -752,10 +1003,6 @@ final class UsageService {
         let lineOutput = parseInt(nsLine, range: match.range(at: 4))
         let lineTotal  = lineInput + lineCached + lineOutput
 
-        inputTokens  += lineInput
-        cachedTokens += lineCached
-        outputTokens += lineOutput
-
         var model: String?
         if let modelRegex = Self.claudeModelRegex,
            let m = modelRegex.firstMatch(in: line, options: [], range: range),
@@ -772,18 +1019,20 @@ final class UsageService {
         // the timestamp field isn't present (rare — usually internal events).
         let timestamp = parseClaudeTimestamp(line: line, fallback: fileMtime)
 
+        guard timestamp >= windowStart, lineTotal > 0 else { return }
+        inputTokens  += lineInput
+        cachedTokens += lineCached
+        outputTokens += lineOutput
         if let model {
             modelTokens[model, default: 0] += lineTotal
         }
-        if timestamp >= windowStart, lineTotal > 0 {
-            projectTokens[projectURL, default: 0] += lineTotal
-            if let idx = bucketIndex(for: timestamp, in: boundaries) {
-                bucketTokens[idx] += lineTotal
-            }
-            let hour = calendar.component(.hour, from: timestamp)
-            if hour >= 0 && hour < 24 {
-                hourlyDistribution[hour] += lineTotal
-            }
+        projectTokens[projectURL, default: 0] += lineTotal
+        if let idx = bucketIndex(for: timestamp, in: boundaries) {
+            bucketTokens[idx] += lineTotal
+        }
+        let hour = calendar.component(.hour, from: timestamp)
+        if hour >= 0 && hour < 24 {
+            hourlyDistribution[hour] += lineTotal
         }
     }
 
@@ -956,28 +1205,43 @@ final class UsageService {
         root: URL,
         liveCutoff: Date,
         startOfToday: Date,
-        boundaries: [BucketBoundary]
+        timeframe: UsageTimeframe,
+        boundaries: [BucketBoundary],
+        windowStart: Date,
+        windowEnd: Date
     ) -> CLIToolUsage {
         let fm = FileManager.default
         guard fm.fileExists(atPath: root.path) else {
-            return .unavailable(.codex)
+            return .unavailable(.codex, timeframe: timeframe, referenceDate: windowEnd)
         }
 
         var sessionsTotal = 0
         var sessionsToday = 0
         var activeSessions = 0
+        var windowSessions = 0
         var inputTokens = 0
         var outputTokens = 0
         var cachedTokens = 0
         var lastActivity: Date?
         var models: Set<String> = []
+        var bucketTokens = [Int](repeating: 0, count: boundaries.count)
+        var hourlyDistribution = [Int](repeating: 0, count: 24)
+        var modelTokens: [String: Int] = [:]
+        var projectTokens: [String: Int] = [:]
+        var projectSessionCount: [String: Int] = [:]
+        var projectLastActivity: [String: Date] = [:]
+        var topicCounts: [String: Int] = [:]
+        var promptCount = 0
+        var recentPrompts: [PromptPreview] = []
+        var latestLimitSnapshot: UsageLimitSnapshot?
+        let calendar = Calendar.current
 
         guard let enumerator = fm.enumerator(
             at: root,
             includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
             options: [.skipsHiddenFiles]
         ) else {
-            return .unavailable(.codex)
+            return .unavailable(.codex, timeframe: timeframe, referenceDate: windowEnd)
         }
 
         for case let url as URL in enumerator {
@@ -985,47 +1249,263 @@ final class UsageService {
             guard let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
                 .contentModificationDate else { continue }
             sessionsTotal += 1
-            if mtime >= startOfToday { sessionsToday += 1 }
             if mtime >= liveCutoff   { activeSessions += 1 }
-            if lastActivity == nil || mtime > lastActivity! { lastActivity = mtime }
 
-            if let data = try? Data(contentsOf: url),
-               let text = String(data: data, encoding: .utf8) {
-                let totals = parseCodexLastTotals(in: text)
-                inputTokens  += totals.input
-                outputTokens += totals.output
-                cachedTokens += totals.cached
-                if let model = parseCodexModel(in: text) {
-                    models.insert(model)
+            guard let data = try? Data(contentsOf: url),
+                  let text = String(data: data, encoding: .utf8) else {
+                if mtime >= startOfToday { sessionsToday += 1 }
+                if lastActivity == nil || mtime > lastActivity! { lastActivity = mtime }
+                continue
+            }
+
+            var sessionStartedAt = mtime
+            var sessionActivity = mtime
+            var sessionProject = url.deletingLastPathComponent().path
+            var sessionModel: String?
+
+            for rawLine in text.split(separator: "\n", omittingEmptySubsequences: true) {
+                guard let lineData = String(rawLine).data(using: .utf8),
+                      let rawJSON = try? JSONSerialization.jsonObject(with: lineData),
+                      let json = rawJSON as? [String: Any] else {
+                    continue
+                }
+                let timestamp = stringValue(json, path: ["timestamp"]).flatMap(parseISO8601) ?? mtime
+                if timestamp > sessionActivity { sessionActivity = timestamp }
+
+                let topType = stringValue(json, path: ["type"])
+                let payloadType = stringValue(json, path: ["payload", "type"])
+                if topType == "session_meta" {
+                    if let metaTimestamp = stringValue(json, path: ["payload", "timestamp"]).flatMap(parseISO8601) {
+                        sessionStartedAt = metaTimestamp
+                    }
+                    if let cwd = stringValue(json, path: ["payload", "cwd"]) {
+                        sessionProject = cwd
+                    }
+                } else if topType == "turn_context" {
+                    if let cwd = stringValue(json, path: ["payload", "cwd"]) {
+                        sessionProject = cwd
+                    }
+                    if let model = stringValue(json, path: ["payload", "model"]) {
+                        sessionModel = model
+                        models.insert(model)
+                    }
+                }
+
+                if topType == "event_msg", payloadType == "token_count" {
+                    if let snapshot = parseCodexLimitSnapshotFromLine(json, observedAt: timestamp) {
+                        let observedAt = snapshot.observedAt ?? .distantPast
+                        if latestLimitSnapshot?.observedAt.map({ observedAt > $0 }) ?? true {
+                            latestLimitSnapshot = snapshot
+                        }
+                    }
+                    guard timestamp >= windowStart,
+                          let usage = codexLastTokenUsageDictionary(from: json),
+                          let totals = parseCodexTokenUsage(from: usage) else {
+                        continue
+                    }
+                    let total = totals.input + totals.output + totals.cached
+                    guard total > 0 else { continue }
+                    inputTokens += totals.input
+                    outputTokens += totals.output
+                    cachedTokens += totals.cached
+                    let projectKey = sessionProject
+                    projectTokens[projectKey, default: 0] += total
+                    if let model = sessionModel {
+                        modelTokens[model, default: 0] += total
+                    }
+                    if let idx = bucketIndex(for: timestamp, in: boundaries) {
+                        bucketTokens[idx] += total
+                    }
+                    let hour = calendar.component(.hour, from: timestamp)
+                    if hour >= 0 && hour < 24 {
+                        hourlyDistribution[hour] += total
+                    }
+                } else if let prompt = codexPrompt(from: json), timestamp >= windowStart {
+                    promptCount += 1
+                    for word in extractTopicKeywords(from: prompt) {
+                        topicCounts[word, default: 0] += 1
+                    }
+                    recentPrompts.append(PromptPreview(
+                        text: String(prompt.replacingOccurrences(of: "\n", with: " ").prefix(140)),
+                        timestamp: timestamp,
+                        project: codexProjectDisplayName(sessionProject)
+                    ))
+                } else if let snapshot = parseCodexLimitSnapshotFromLine(json, observedAt: timestamp) {
+                    let observedAt = snapshot.observedAt ?? .distantPast
+                    if latestLimitSnapshot?.observedAt.map({ observedAt > $0 }) ?? true {
+                        latestLimitSnapshot = snapshot
+                    }
+                }
+            }
+
+            if sessionStartedAt >= startOfToday { sessionsToday += 1 }
+            if lastActivity == nil || sessionActivity > lastActivity! { lastActivity = sessionActivity }
+            if sessionActivity >= windowStart, sessionActivity <= windowEnd {
+                windowSessions += 1
+                projectSessionCount[sessionProject, default: 0] += 1
+                if let prev = projectLastActivity[sessionProject] {
+                    if sessionActivity > prev { projectLastActivity[sessionProject] = sessionActivity }
+                } else {
+                    projectLastActivity[sessionProject] = sessionActivity
                 }
             }
         }
 
+        let chartBuckets: [UsageBucket] = zip(boundaries, bucketTokens).map { boundary, tokens in
+            UsageBucket(start: boundary.start, end: boundary.end, tokens: tokens, label: boundary.label)
+        }
+        let topProjects = projectSessionCount.compactMap { path, count -> ProjectUsage? in
+            guard let last = projectLastActivity[path] else { return nil }
+            return ProjectUsage(
+                displayName: codexProjectDisplayName(path),
+                path: path,
+                sessions: count,
+                lastActivity: last
+            )
+        }
+        .sorted { $0.lastActivity > $1.lastActivity }
+        .prefix(5)
+        .map { $0 }
+        let tokensByModel = modelTokens
+            .map { ModelUsage(model: $0.key, tokens: $0.value) }
+            .sorted { $0.tokens > $1.tokens }
+        let tokensByProject = projectTokens
+            .map { ProjectTokenSlice(displayName: codexProjectDisplayName($0.key), path: $0.key, tokens: $0.value) }
+            .sorted { $0.tokens > $1.tokens }
+        let topTopics = topicCounts
+            .filter { $0.value >= 2 }
+            .map { PromptTopic(keyword: $0.key, count: $0.value) }
+            .sorted { $0.count > $1.count }
+            .prefix(12)
+            .map { $0 }
+        let trimmedRecent = recentPrompts
+            .sorted { $0.timestamp > $1.timestamp }
+            .prefix(8)
+            .map { $0 }
+
         return CLIToolUsage(
             tool: .codex,
             isInstalled: true,
+            timeframe: timeframe,
+            windowStart: windowStart,
+            windowEnd: windowEnd,
             activeSessions: activeSessions,
             sessionsToday: sessionsToday,
             sessionsTotal: sessionsTotal,
+            windowSessions: windowSessions,
             inputTokens: inputTokens,
             outputTokens: outputTokens,
             cachedTokens: cachedTokens,
             lastActivity: lastActivity,
             models: models.sorted(),
-            chartBuckets: [],
-            topProjects: [],
-            tokensByModel: [],
-            tokensByProject: [],
-            topTopics: [],
-            recentPrompts: [],
-            hourlyDistribution: Array(repeating: 0, count: 24),
-            promptCount: 0
+            chartBuckets: chartBuckets,
+            topProjects: topProjects,
+            tokensByModel: tokensByModel,
+            tokensByProject: tokensByProject,
+            topTopics: topTopics,
+            recentPrompts: trimmedRecent,
+            hourlyDistribution: hourlyDistribution,
+            promptCount: promptCount,
+            limitSnapshot: latestLimitSnapshot
         )
     }
 
-    /// Codex emits a `token_count` event on every turn. The last one in a
-    /// rollout file holds cumulative `total_token_usage`, so we just need to
-    /// find the most recent match.
+    private nonisolated static func codexProjectDisplayName(_ path: String) -> String {
+        let url = URL(fileURLWithPath: path)
+        let name = url.lastPathComponent.nilIfEmpty ?? path
+        return friendlyProjectName(name)
+    }
+
+    private nonisolated static func codexLastTokenUsageDictionary(from json: [String: Any]) -> [String: Any]? {
+        dictValue(json, path: ["payload", "info", "last_token_usage"])
+            ?? dictValue(json, path: ["payload", "last_token_usage"])
+            ?? dictValue(json, path: ["info", "last_token_usage"])
+            ?? dictValue(json, path: ["last_token_usage"])
+    }
+
+    private nonisolated static func parseCodexTokenUsage(
+        from value: [String: Any]
+    ) -> (input: Int, output: Int, cached: Int)? {
+        let input = intValue(value["input_tokens"]) ?? 0
+        let cached = intValue(value["cached_input_tokens"])
+            ?? intValue(value["cache_read_input_tokens"])
+            ?? intValue(value["cached_tokens"])
+            ?? 0
+        let output = intValue(value["output_tokens"]) ?? 0
+        let reportedTotal = intValue(value["total_tokens"])
+        guard input > 0 || cached > 0 || output > 0 || (reportedTotal ?? 0) > 0 else {
+            return nil
+        }
+        let normalizedInput: Int
+        if let reportedTotal, reportedTotal == input + output, cached <= input {
+            normalizedInput = input - cached
+        } else {
+            normalizedInput = input
+        }
+        return (normalizedInput, output, cached)
+    }
+
+    private nonisolated static func parseCodexLimitSnapshotFromLine(
+        _ json: [String: Any],
+        observedAt: Date
+    ) -> UsageLimitSnapshot? {
+        guard var snapshot = parseCodexLimitSnapshot(from: json, observedAt: observedAt) else {
+            return nil
+        }
+        snapshot = fillCodexLimitMetadata(snapshot, from: json)
+        return snapshot
+    }
+
+    private nonisolated static func codexPrompt(from json: [String: Any]) -> String? {
+        let topType = stringValue(json, path: ["type"])
+        let payloadType = stringValue(json, path: ["payload", "type"])
+
+        if topType == "event_msg", payloadType == "user_message" {
+            if let message = stringValue(json, path: ["payload", "message"]) {
+                return message
+            }
+            if let elements = value(json, path: ["payload", "text_elements"]) {
+                var parts: [String] = []
+                collectCodexText(elements, into: &parts)
+                return parts.joined(separator: "\n").nilIfEmpty
+            }
+        }
+
+        if topType == "response_item",
+           payloadType == "message",
+           stringValue(json, path: ["payload", "role"]) == "user",
+           let content = value(json, path: ["payload", "content"]) {
+            var parts: [String] = []
+            collectCodexText(content, into: &parts)
+            return parts.joined(separator: "\n").nilIfEmpty
+        }
+        return nil
+    }
+
+    private nonisolated static func collectCodexText(_ value: Any, into parts: inout [String]) {
+        if let string = value as? String {
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { parts.append(trimmed) }
+            return
+        }
+        if let array = value as? [Any] {
+            for item in array { collectCodexText(item, into: &parts) }
+            return
+        }
+        if let dict = value as? [String: Any] {
+            if let text = stringValue(dict["text"]) {
+                parts.append(text)
+                return
+            }
+            if let content = dict["content"] {
+                collectCodexText(content, into: &parts)
+            }
+        }
+    }
+
+    /// Legacy parser for older Codex logs that only exposed cumulative
+    /// `total_token_usage`. The dashboard uses per-turn `last_token_usage`
+    /// when present so timeframe buttons do not show the same all-time data.
     private nonisolated static func parseCodexLastTotals(
         in text: String
     ) -> (input: Int, output: Int, cached: Int) {
@@ -1063,34 +1543,388 @@ final class UsageService {
         try? NSRegularExpression(pattern: #""model":"([^"]+)""#)
     }()
 
-    // MARK: - Gemini
+    private nonisolated static func parseCodexLatestLimitSnapshot(
+        in text: String,
+        fallback: Date
+    ) -> UsageLimitSnapshot? {
+        guard text.contains("rate_limits")
+            || text.contains("used_percent")
+            || text.contains("rate_limit_reached_type")
+            || text.contains(#""credits""#)
+            || text.contains("plan_type") else {
+            return nil
+        }
 
-    /// Gemini CLI doesn't currently log usage we can read locally — surface
-    /// it as installed-but-no-data rather than hiding it, so users know the
-    /// row exists.
-    private nonisolated static func readGeminiUsage(root: URL) -> CLIToolUsage {
-        let fm = FileManager.default
-        let installed = fm.fileExists(atPath: root.path)
-        return CLIToolUsage(
-            tool: .gemini,
-            isInstalled: installed,
-            activeSessions: 0,
-            sessionsToday: 0,
-            sessionsTotal: 0,
-            inputTokens: 0,
-            outputTokens: 0,
-            cachedTokens: 0,
-            lastActivity: nil,
-            models: [],
-            chartBuckets: [],
-            topProjects: [],
-            tokensByModel: [],
-            tokensByProject: [],
-            topTopics: [],
-            recentPrompts: [],
-            hourlyDistribution: Array(repeating: 0, count: 24),
-            promptCount: 0
+        var latest: UsageLimitSnapshot?
+        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard rawLine.contains("rate_limits")
+                || rawLine.contains("used_percent")
+                || rawLine.contains("rate_limit_reached_type")
+                || rawLine.contains(#""credits""#)
+                || rawLine.contains("plan_type") else {
+                continue
+            }
+            guard let data = String(rawLine).data(using: .utf8),
+                  let rawJSON = try? JSONSerialization.jsonObject(with: data),
+                  let json = rawJSON as? [String: Any] else {
+                continue
+            }
+            let observedAt = stringValue(json, path: ["timestamp"]).flatMap(parseISO8601) ?? fallback
+            guard var snapshot = parseCodexLimitSnapshot(from: json, observedAt: observedAt) else {
+                continue
+            }
+            snapshot = fillCodexLimitMetadata(snapshot, from: json)
+            if latest?.observedAt.map({ observedAt > $0 }) ?? true {
+                latest = snapshot
+            }
+        }
+        return latest
+    }
+
+    private nonisolated static func parseCodexLimitSnapshot(
+        from root: [String: Any],
+        observedAt: Date
+    ) -> UsageLimitSnapshot? {
+        guard let value = codexRateLimitDictionary(from: root),
+              hasCodexRateLimitFields(value) else {
+            return nil
+        }
+
+        let primary = value["primary"] as? [String: Any]
+        let secondary = value["secondary"] as? [String: Any]
+        return UsageLimitSnapshot(
+            primaryUsedPercent: doubleValue(primary?["used_percent"]),
+            primaryWindowMinutes: intValue(primary?["window_minutes"]),
+            primaryResetsAt: resetDate(primary?["resets_at"]),
+            secondaryUsedPercent: doubleValue(secondary?["used_percent"]),
+            secondaryWindowMinutes: intValue(secondary?["window_minutes"]),
+            secondaryResetsAt: resetDate(secondary?["resets_at"]),
+            planType: stringValue(value["plan_type"]),
+            credits: doubleValue(value["credits"]),
+            reachedType: stringValue(value["rate_limit_reached_type"]),
+            observedAt: observedAt
         )
+    }
+
+    private nonisolated static func fillCodexLimitMetadata(
+        _ snapshot: UsageLimitSnapshot,
+        from root: [String: Any]
+    ) -> UsageLimitSnapshot {
+        UsageLimitSnapshot(
+            primaryUsedPercent: snapshot.primaryUsedPercent,
+            primaryWindowMinutes: snapshot.primaryWindowMinutes,
+            primaryResetsAt: snapshot.primaryResetsAt,
+            secondaryUsedPercent: snapshot.secondaryUsedPercent,
+            secondaryWindowMinutes: snapshot.secondaryWindowMinutes,
+            secondaryResetsAt: snapshot.secondaryResetsAt,
+            planType: snapshot.planType
+                ?? stringValue(root, path: ["payload", "plan_type"])
+                ?? stringValue(root, path: ["plan_type"]),
+            credits: snapshot.credits
+                ?? doubleValue(root, path: ["payload", "credits"])
+                ?? doubleValue(root, path: ["credits"]),
+            reachedType: snapshot.reachedType
+                ?? stringValue(root, path: ["payload", "rate_limit_reached_type"])
+                ?? stringValue(root, path: ["rate_limit_reached_type"]),
+            observedAt: snapshot.observedAt
+        )
+    }
+
+    private nonisolated static func codexRateLimitDictionary(from root: [String: Any]) -> [String: Any]? {
+        let candidates = [
+            dictValue(root, path: ["payload", "rate_limits"]),
+            dictValue(root, path: ["rate_limits"]),
+            dictValue(root, path: ["payload"]),
+            root
+        ]
+        return candidates.compactMap { $0 }.first(where: hasCodexRateLimitFields)
+    }
+
+    private nonisolated static func hasCodexRateLimitFields(_ value: [String: Any]) -> Bool {
+        value["primary"] != nil
+            || value["secondary"] != nil
+            || doubleValue(value["credits"]) != nil
+            || stringValue(value["plan_type"]) != nil
+            || stringValue(value["rate_limit_reached_type"]) != nil
+    }
+
+    private nonisolated static func dictValue(
+        _ dict: [String: Any],
+        path: [String]
+    ) -> [String: Any]? {
+        var current: Any = dict
+        for key in path {
+            guard let next = (current as? [String: Any])?[key] else { return nil }
+            current = next
+        }
+        return current as? [String: Any]
+    }
+
+    private nonisolated static func value(
+        _ dict: [String: Any],
+        path: [String]
+    ) -> Any? {
+        var current: Any = dict
+        for key in path {
+            guard let next = (current as? [String: Any])?[key] else { return nil }
+            current = next
+        }
+        return current
+    }
+
+    private nonisolated static func stringValue(
+        _ dict: [String: Any],
+        path: [String]
+    ) -> String? {
+        var current: Any = dict
+        for key in path {
+            guard let next = (current as? [String: Any])?[key] else { return nil }
+            current = next
+        }
+        return stringValue(current)
+    }
+
+    private nonisolated static func doubleValue(
+        _ dict: [String: Any],
+        path: [String]
+    ) -> Double? {
+        var current: Any = dict
+        for key in path {
+            guard let next = (current as? [String: Any])?[key] else { return nil }
+            current = next
+        }
+        return doubleValue(current)
+    }
+
+    private nonisolated static func stringValue(_ value: Any?) -> String? {
+        (value as? String)?.nilIfEmpty
+    }
+
+    private nonisolated static func doubleValue(_ value: Any?) -> Double? {
+        if let value = value as? Double { return value }
+        if let value = value as? Int { return Double(value) }
+        if let value = value as? NSNumber { return value.doubleValue }
+        if let value = value as? String { return Double(value) }
+        return nil
+    }
+
+    private nonisolated static func intValue(_ value: Any?) -> Int? {
+        if let value = value as? Int { return value }
+        if let value = value as? NSNumber { return value.intValue }
+        if let value = value as? String { return Int(value) }
+        return nil
+    }
+
+    private nonisolated static func resetDate(_ value: Any?) -> Date? {
+        if let seconds = doubleValue(value) {
+            return Date(timeIntervalSince1970: seconds)
+        }
+        if let string = stringValue(value) {
+            return parseISO8601(string)
+        }
+        return nil
+    }
+
+    // MARK: - LM Studio reader
+
+    private struct LMStudioStoredRecord: Decodable {
+        var summary: LMStudioStoredSummary
+        var messages: [LMStudioStoredMessage]
+    }
+
+    private struct LMStudioStoredSummary: Decodable {
+        var workspaceKey: String
+        var workspaceName: String
+        var modelLabel: String?
+        var updatedAt: Date
+        var messageCount: Int
+        var changedFiles: [String]?
+        var finalStatus: String?
+    }
+
+    private struct LMStudioStoredMessage: Decodable {
+        var role: String
+        var text: String
+        var createdAt: Date
+    }
+
+    private nonisolated static func readLMStudioUsage(
+        root: URL,
+        liveCutoff: Date,
+        startOfToday: Date,
+        timeframe: UsageTimeframe,
+        boundaries: [BucketBoundary],
+        windowStart: Date,
+        windowEnd: Date
+    ) -> CLIToolUsage {
+        let fm = FileManager.default
+        let urls = (try? fm.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+
+        var sessionsTotal = 0
+        var sessionsToday = 0
+        var activeSessions = 0
+        var windowSessions = 0
+        var inputTokens = 0
+        var outputTokens = 0
+        var lastActivity: Date?
+        var models: Set<String> = []
+        var bucketTokens = [Int](repeating: 0, count: boundaries.count)
+        var hourlyDistribution = [Int](repeating: 0, count: 24)
+        var modelTokens: [String: Int] = [:]
+        var projectTokens: [String: Int] = [:]
+        var projectNames: [String: String] = [:]
+        var projectSessions: [String: Int] = [:]
+        var projectLastActivity: [String: Date] = [:]
+        var topicCounts: [String: Int] = [:]
+        var promptCount = 0
+        var recentPrompts: [PromptPreview] = []
+
+        let calendar = Calendar.current
+        let decoder = JSONDecoder()
+
+        for url in urls where url.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: url),
+                  let record = try? decoder.decode(LMStudioStoredRecord.self, from: data) else {
+                continue
+            }
+
+            let updatedAt = record.summary.updatedAt
+            let workspaceKey = record.summary.workspaceKey
+            let workspaceName = record.summary.workspaceName.isEmpty ? friendlyProjectName(workspaceKey) : record.summary.workspaceName
+            let model = record.summary.modelLabel?.nilIfEmpty ?? "LM Studio"
+
+            sessionsTotal += 1
+            if updatedAt >= startOfToday { sessionsToday += 1 }
+            if updatedAt >= liveCutoff { activeSessions += 1 }
+            if lastActivity == nil || updatedAt > lastActivity! { lastActivity = updatedAt }
+
+            projectNames[workspaceKey] = workspaceName
+            if updatedAt >= windowStart, updatedAt <= windowEnd {
+                windowSessions += 1
+                projectSessions[workspaceKey, default: 0] += 1
+                if let prev = projectLastActivity[workspaceKey] {
+                    if updatedAt > prev { projectLastActivity[workspaceKey] = updatedAt }
+                } else {
+                    projectLastActivity[workspaceKey] = updatedAt
+                }
+            }
+
+            var sessionTokens = 0
+            for message in record.messages {
+                let tokens = estimatedTokenCount(message.text)
+                guard tokens > 0 else { continue }
+                let role = message.role.lowercased()
+
+                let timestamp = message.createdAt
+                if timestamp >= windowStart {
+                    sessionTokens += tokens
+                    if role == "user" {
+                        inputTokens += tokens
+                    } else if role == "assistant" {
+                        outputTokens += tokens
+                    }
+                    if let idx = bucketIndex(for: timestamp, in: boundaries) {
+                        bucketTokens[idx] += tokens
+                    }
+                    let hour = calendar.component(.hour, from: timestamp)
+                    if hour >= 0 && hour < 24 {
+                        hourlyDistribution[hour] += tokens
+                    }
+                    if role == "user" {
+                        promptCount += 1
+                        for word in extractTopicKeywords(from: message.text) {
+                            topicCounts[word, default: 0] += 1
+                        }
+                        recentPrompts.append(PromptPreview(
+                            text: String(message.text.replacingOccurrences(of: "\n", with: " ").prefix(140)),
+                            timestamp: timestamp,
+                            project: workspaceName
+                        ))
+                    }
+                }
+            }
+
+            if sessionTokens > 0 {
+                models.insert(model)
+                modelTokens[model, default: 0] += sessionTokens
+                projectTokens[workspaceKey, default: 0] += sessionTokens
+            }
+        }
+
+        let chartBuckets: [UsageBucket] = zip(boundaries, bucketTokens).map { boundary, tokens in
+            UsageBucket(start: boundary.start, end: boundary.end, tokens: tokens, label: boundary.label)
+        }
+        let topProjects = projectSessions.compactMap { key, count -> ProjectUsage? in
+            guard let last = projectLastActivity[key] else { return nil }
+            return ProjectUsage(
+                displayName: projectNames[key] ?? friendlyProjectName(key),
+                path: key,
+                sessions: count,
+                lastActivity: last
+            )
+        }
+        .sorted { $0.lastActivity > $1.lastActivity }
+        .prefix(5)
+        .map { $0 }
+
+        let tokensByModel = modelTokens
+            .map { ModelUsage(model: $0.key, tokens: $0.value) }
+            .sorted { $0.tokens > $1.tokens }
+        let tokensByProject = projectTokens
+            .map { key, tokens in
+                ProjectTokenSlice(
+                    displayName: projectNames[key] ?? friendlyProjectName(key),
+                    path: key,
+                    tokens: tokens
+                )
+            }
+            .sorted { $0.tokens > $1.tokens }
+        let topTopics = topicCounts
+            .filter { $0.value >= 2 }
+            .map { PromptTopic(keyword: $0.key, count: $0.value) }
+            .sorted { $0.count > $1.count }
+            .prefix(12)
+            .map { $0 }
+        let trimmedRecent = recentPrompts
+            .sorted { $0.timestamp > $1.timestamp }
+            .prefix(8)
+            .map { $0 }
+
+        return CLIToolUsage(
+            tool: .lmstudio,
+            isInstalled: true,
+            timeframe: timeframe,
+            windowStart: windowStart,
+            windowEnd: windowEnd,
+            activeSessions: activeSessions,
+            sessionsToday: sessionsToday,
+            sessionsTotal: sessionsTotal,
+            windowSessions: windowSessions,
+            inputTokens: inputTokens,
+            outputTokens: outputTokens,
+            cachedTokens: 0,
+            lastActivity: lastActivity,
+            models: models.sorted(),
+            chartBuckets: chartBuckets,
+            topProjects: topProjects,
+            tokensByModel: tokensByModel,
+            tokensByProject: tokensByProject,
+            topTopics: topTopics,
+            recentPrompts: trimmedRecent,
+            hourlyDistribution: hourlyDistribution,
+            promptCount: promptCount,
+            limitSnapshot: nil
+        )
+    }
+
+    private nonisolated static func estimatedTokenCount(_ text: String) -> Int {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return 0 }
+        return max(1, Int(ceil(Double(trimmed.count) / 4.0)))
     }
 
     // MARK: - Helpers
@@ -1098,5 +1932,11 @@ final class UsageService {
     private nonisolated static func parseInt(_ text: NSString, range: NSRange) -> Int {
         guard range.location != NSNotFound else { return 0 }
         return Int(text.substring(with: range)) ?? 0
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }

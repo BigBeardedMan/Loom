@@ -10,13 +10,17 @@ struct WorkspaceSidebarView: View {
     @Query(sort: \IdeaNote.createdAt) private var allNotes: [IdeaNote]
     @Environment(\.modelContext) private var context
     @Environment(WorkspaceLayout.self) private var layout
+    @Environment(UsageService.self) private var usage
+    @Environment(TerminalTranscriptStore.self) private var terminalHistory
 
     @Binding var selectedWorkspaceID: UUID?
     @Binding var selectedUsageTool: CLITool?
+    @Binding var transcriptPreview: TerminalTranscriptSession?
     @State private var renamingSessionID: UUID?
     @State private var sessionRenameDraft: String = ""
     @State private var renamingNoteID: UUID?
     @State private var clearAllConfirm: ClearAllScope?
+    @State private var showRecentlyDeletedTerminals: Bool = false
     @FocusState private var renameFocused: Bool
 
     private enum ClearAllScope: Identifiable {
@@ -33,14 +37,16 @@ struct WorkspaceSidebarView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 14) {
             workspaceSection
             Divider().overlay(LoomTheme.hairline)
+            usageSection
+            Divider().overlay(LoomTheme.hairline)
             sessionsSection
-            Spacer(minLength: 0)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 14)
+        .frame(maxHeight: .infinity, alignment: .top)
         .task { seedIfEmpty() }
         .onChange(of: workspaces.map(\.id)) { _, _ in
             ensureSelection()
@@ -76,49 +82,52 @@ struct WorkspaceSidebarView: View {
         let isSelected = ws.id == selectedWorkspaceID
         let hasFolder = !ws.folderPath.isEmpty
 
-        return VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 10) {
-                Circle()
-                    .fill(ws.color.color)
-                    .frame(width: 9, height: 9)
+        return HStack(alignment: .top, spacing: 10) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(ws.color.color)
+                .frame(width: 4, height: hasFolder ? 34 : 22)
+                .padding(.top, 1)
 
-                Text(ws.name)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(LoomTheme.primaryText)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(ws.name)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(LoomTheme.primaryText)
+                        .lineLimit(1)
 
-                Image(systemName: ws.kind.systemImage)
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(LoomTheme.mutedText)
-                    .help(ws.kind.label)
+                    Image(systemName: ws.kind.systemImage)
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(isSelected ? ws.color.color : LoomTheme.mutedText)
+                        .help(ws.kind.label)
 
-                if hasFolder {
-                    Image(systemName: "folder.fill")
-                        .font(.system(size: 9))
-                        .foregroundStyle(ws.color.color.opacity(0.85))
-                        .help(ws.folderPath)
+                    if hasFolder {
+                        Image(systemName: "folder.fill")
+                            .font(.system(size: 9))
+                            .foregroundStyle(ws.color.color.opacity(0.85))
+                            .help(ws.folderPath)
+                    }
+
+                    Spacer()
                 }
 
-                Spacer()
-            }
-
-            if hasFolder {
-                Text(ws.displayFolderPath)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(LoomTheme.mutedText)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .padding(.leading, 19)
+                if hasFolder {
+                    Text(ws.displayFolderPath)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(LoomTheme.mutedText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(isSelected ? ws.color.color.opacity(0.13) : LoomTheme.softPanel.opacity(0.7))
+        .background(isSelected ? ws.color.color.opacity(0.12) : LoomTheme.softPanel.opacity(0.42))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(isSelected ? ws.color.color.opacity(0.65) : LoomTheme.hairline, lineWidth: 1)
+            RoundedRectangle(cornerRadius: LoomTheme.rowRadius)
+                .stroke(isSelected ? ws.color.color.opacity(0.52) : LoomTheme.hairline, lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .contentShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: LoomTheme.rowRadius))
+        .contentShape(RoundedRectangle(cornerRadius: LoomTheme.rowRadius))
         .onTapGesture {
             if selectedUsageTool != nil {
                 selectedUsageTool = nil
@@ -134,6 +143,93 @@ struct WorkspaceSidebarView: View {
                 Button("Clear folder", role: .destructive) { clearFolder(for: ws) }
             }
         }
+    }
+
+    // MARK: - Usage
+
+    private var usageSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionHeader(title: "Usage", trailing: {
+                Button {
+                    usage.requestRefresh()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(LoomTheme.mutedText)
+                }
+                .buttonStyle(.plain)
+                .help("Refresh usage")
+                .accessibilityLabel("Refresh usage")
+            })
+
+            VStack(spacing: 6) {
+                ForEach(CLITool.allCases) { tool in
+                    usageRow(tool)
+                }
+            }
+        }
+    }
+
+    private func usageRow(_ tool: CLITool) -> some View {
+        let isSelected = selectedUsageTool == tool
+        let resolved = usage.tools.first(where: { $0.tool == tool })
+            ?? .unavailable(tool, timeframe: usage.timeframe)
+        let hasWarning = tool.supportsLimitSignals && usage.hasUnacknowledgedLimitWarning(for: tool)
+
+        return Button {
+            selectedUsageTool = isSelected ? nil : tool
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: tool.systemImage)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(isSelected ? .white : tool.brandColor)
+                    .frame(width: 18)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(tool.label)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(isSelected ? .white : LoomTheme.primaryText)
+                        .lineLimit(1)
+                    Text(usageSummary(for: resolved, warning: hasWarning))
+                        .font(.system(size: 10))
+                        .foregroundStyle(isSelected ? .white.opacity(0.78) : LoomTheme.mutedText)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 4)
+
+                if hasWarning {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(isSelected ? .white : LoomTheme.orange)
+                } else if resolved.activeSessions > 0 {
+                    Text(resolved.activeSessions.formatted())
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(isSelected ? .white : LoomTheme.green)
+                }
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
+            .background(isSelected ? tool.brandColor : LoomTheme.softPanel.opacity(0.42))
+            .overlay(
+                RoundedRectangle(cornerRadius: LoomTheme.rowRadius)
+                    .stroke(isSelected ? tool.brandColor.opacity(0.58) : LoomTheme.hairline, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: LoomTheme.rowRadius))
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .help(isSelected ? "Return to workspace" : "Open \(tool.label) usage")
+        .accessibilityLabel(isSelected ? "Return to workspace" : "Open \(tool.label) usage")
+    }
+
+    private func usageSummary(for tool: CLIToolUsage, warning: Bool) -> String {
+        if warning { return "Limit attention needed" }
+        if tool.activeSessions > 0 {
+            return tool.activeSessions == 1 ? "1 active session" : "\(tool.activeSessions) active sessions"
+        }
+        if tool.isInstalled { return "Local logs ready" }
+        return "No local logs"
     }
 
     private func chooseFolder(for ws: Workspace) {
@@ -194,31 +290,235 @@ struct WorkspaceSidebarView: View {
 
     private var terminalSessionsSection: some View {
         let sessions = terminalBlocks
+        let closed = terminalHistory.recentlyClosed(workspaceID: selectedWorkspaceID)
+        let visibleClosed = Array(closed.prefix(5))
         return VStack(alignment: .leading, spacing: 10) {
-            sectionHeader(title: "Terminal Sessions", trailing: {
-                HStack(spacing: 6) {
-                    countBadge(sessions.count)
-                    if !sessions.isEmpty {
-                        clearAllButton {
-                            clearAllConfirm = .terminals
+            if showRecentlyDeletedTerminals {
+                recentlyDeletedTerminalsSection
+            } else {
+                sectionHeader(title: "Terminal Sessions", trailing: {
+                    HStack(spacing: 6) {
+                        countBadge(sessions.count)
+                        if !sessions.isEmpty {
+                            clearAllButton {
+                                clearAllConfirm = .terminals
+                            }
+                        }
+                    }
+                })
+
+                if sessions.isEmpty {
+                    emptyHint("No terminal blocks open. Use ＋Terminal in the top bar.")
+                } else {
+                    ScrollView(showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(sessions) { block in
+                                terminalRow(block)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 220)
+                }
+
+                Spacer(minLength: 8)
+
+                if !visibleClosed.isEmpty {
+                    sectionHeader(title: "Recently Closed", trailing: {
+                        countBadge(visibleClosed.count)
+                    })
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(visibleClosed) { session in
+                            closedTerminalRow(session)
                         }
                     }
                 }
+
+                recentlyDeletedTerminalButton
+            }
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private var recentlyDeletedTerminalButton: some View {
+        Button {
+            showRecentlyDeletedTerminals = true
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "trash")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("Recently Deleted")
+                    .font(.system(size: 11, weight: .medium))
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .bold))
+            }
+            .foregroundStyle(LoomTheme.mutedText)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(LoomTheme.softPanel.opacity(0.45))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+    }
+
+    private var recentlyDeletedTerminalsSection: some View {
+        let deleted = terminalHistory.recentlyDeleted(workspaceID: selectedWorkspaceID)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Button {
+                    showRecentlyDeletedTerminals = false
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 10, weight: .bold))
+                    Text("Back")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(LoomTheme.mutedText)
+                .pointingHandCursor()
+                Spacer()
+            }
+
+            sectionHeader(title: "Recently Deleted", trailing: {
+                countBadge(deleted.count)
             })
 
-            if sessions.isEmpty {
-                emptyHint("No terminal blocks open. Use ＋Terminal in the top bar.")
+            if deleted.isEmpty {
+                emptyHint("Deleted terminal sessions will show up here.")
             } else {
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 6) {
-                        ForEach(sessions) { block in
-                            terminalRow(block)
+                        ForEach(deleted) { session in
+                            deletedTerminalRow(session)
                         }
                     }
                 }
-                .frame(maxHeight: 320)
+                .frame(maxHeight: 360)
             }
         }
+    }
+
+    private func closedTerminalRow(_ session: TerminalTranscriptSession) -> some View {
+        transcriptRow(
+            session,
+            icon: "arrow.uturn.backward.circle",
+            tint: LoomTheme.green,
+            primaryAction: {
+                restoreClosedTerminal(session)
+            },
+            trailing: {
+                HStack(spacing: 6) {
+                    Button {
+                        transcriptPreview = session
+                    } label: {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open transcript")
+                    .accessibilityLabel("Open transcript")
+
+                    Button {
+                        terminalHistory.moveToDeleted(session)
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Move to Recently Deleted")
+                    .accessibilityLabel("Move terminal transcript to Recently Deleted")
+                }
+            }
+        )
+    }
+
+    private func restoreClosedTerminal(_ session: TerminalTranscriptSession) {
+        guard let restore = terminalHistory.restoreClosedSession(
+            session,
+            fallbackCwd: layout.defaultCwd
+        ) else {
+            transcriptPreview = session
+            return
+        }
+        selectedUsageTool = nil
+        transcriptPreview = nil
+        layout.restoreTerminalBlock(restore)
+    }
+
+    private func deletedTerminalRow(_ session: TerminalTranscriptSession) -> some View {
+        transcriptRow(
+            session,
+            icon: "trash",
+            tint: LoomTheme.orange,
+            primaryAction: {
+                transcriptPreview = session
+            },
+            trailing: {
+                HStack(spacing: 6) {
+                    Button {
+                        terminalHistory.recoverDeleted(session)
+                    } label: {
+                        Image(systemName: "arrow.uturn.backward")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Recover")
+                    .accessibilityLabel("Recover terminal transcript")
+
+                    Button(role: .destructive) {
+                        terminalHistory.deletePermanently(session)
+                    } label: {
+                        Image(systemName: "xmark.bin")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Delete permanently")
+                    .accessibilityLabel("Delete terminal transcript permanently")
+                }
+            }
+        )
+    }
+
+    private func transcriptRow<Trailing: View>(
+        _ session: TerminalTranscriptSession,
+        icon: String,
+        tint: Color,
+        primaryAction: @escaping () -> Void,
+        @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(session.displayTitle)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(LoomTheme.primaryText)
+                    .lineLimit(1)
+                Text(session.displayCwd)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(LoomTheme.mutedText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 4)
+            trailing()
+                .foregroundStyle(LoomTheme.mutedText)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(LoomTheme.softPanel.opacity(0.5))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(LoomTheme.hairline, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .contentShape(RoundedRectangle(cornerRadius: 6))
+        .onTapGesture(perform: primaryAction)
     }
 
     private func terminalRow(_ block: WorkspaceBlock) -> some View {
@@ -267,6 +567,7 @@ struct WorkspaceSidebarView: View {
             }
             .buttonStyle(.plain)
             .help("Close terminal")
+            .accessibilityLabel("Close terminal")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
@@ -379,6 +680,7 @@ struct WorkspaceSidebarView: View {
             }
             .buttonStyle(.plain)
             .help("Delete idea")
+            .accessibilityLabel("Delete idea")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
@@ -491,6 +793,7 @@ struct WorkspaceSidebarView: View {
         }
         .buttonStyle(.plain)
         .help("Clear all")
+        .accessibilityLabel("Clear all")
     }
 
     private func emptyHint(_ text: String) -> some View {

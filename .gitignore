@@ -5,6 +5,7 @@ DerivedData/
 /build/
 .swiftpm/
 Loom.xcodeproj/
+LoomTestingEdition.xcodeproj/
 *.xcworkspace/xcuserdata/
 site/
 

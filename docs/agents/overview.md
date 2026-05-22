@@ -4,8 +4,10 @@ The Agent pane is a streaming chat surface. Behind the picker, Loom routes promp
 
 | Family | Providers today | How auth works |
 | ------ | --------------- | -------------- |
-| **CLI subprocess** | [Claude Code](claude-code.md) (Codex, Gemini stubbed) | Piggybacks on the CLI's existing OAuth login. No API key in Loom. |
+| **CLI subprocess** | [Claude Code](claude-code.md), Codex, Gemini, [lmstudio](lmstudio-cli.md) | Piggybacks on the CLI's existing login or local server. No API key in Loom. |
 | **HTTP streaming** | [Ollama](local-llms.md), [OpenAI-compatible](local-llms.md), [Anthropic API](anthropic-api.md) | Configurable base URL, optional bearer token in Keychain. |
+
+The [`lmstudio` CLI](lmstudio-cli.md) is Loom's own terminal agent for local models. Install it with `bin/install-lmstudio.sh`, then run `lmstudio` in any terminal pane. Its tasks land in the Loom Tasks pane automatically via `~/.loom/tasks/`.
 
 ## Picker
 

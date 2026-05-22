@@ -1,3 +1,4 @@
+use crate::agents::lmstudio;
 use crate::db::{endpoints, kanban, notes, workspace};
 use crate::state::AppState;
 use tauri::State;
@@ -27,10 +28,7 @@ pub async fn workspace_update(
 }
 
 #[tauri::command]
-pub async fn workspace_delete(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), String> {
+pub async fn workspace_delete(state: State<'_, AppState>, id: String) -> Result<(), String> {
     workspace::delete(&state.db, &id).map_err(|e| e.to_string())
 }
 
@@ -94,10 +92,7 @@ pub async fn kanban_move_card(
 }
 
 #[tauri::command]
-pub async fn kanban_delete_card(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), String> {
+pub async fn kanban_delete_card(state: State<'_, AppState>, id: String) -> Result<(), String> {
     kanban::delete_card(&state.db, &id).map_err(|e| e.to_string())
 }
 
@@ -118,10 +113,7 @@ pub async fn note_upsert(
 }
 
 #[tauri::command]
-pub async fn note_delete(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), String> {
+pub async fn note_delete(state: State<'_, AppState>, id: String) -> Result<(), String> {
     notes::delete(&state.db, &id).map_err(|e| e.to_string())
 }
 
@@ -141,10 +133,7 @@ pub async fn endpoint_upsert(
 }
 
 #[tauri::command]
-pub async fn endpoint_delete(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), String> {
+pub async fn endpoint_delete(state: State<'_, AppState>, id: String) -> Result<(), String> {
     endpoints::delete(&state.db, &id).map_err(|e| e.to_string())
 }
 
@@ -157,21 +146,46 @@ pub async fn endpoint_test(
     let endpoint = endpoints::get(&state.db, &id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("endpoint {id} not found"))?;
-    let probe_path = match endpoint.kind.as_str() {
-        "ollama" => "/api/tags",
-        _ => "/v1/models",
+    if endpoint.kind == "lmstudio" {
+        match lmstudio::fetch_models_with_auth(&endpoint.base_url, auth_token.as_deref()).await {
+            Ok(models) => {
+                let loaded = models.iter().filter(|model| model.loaded).count();
+                return Ok(EndpointTestResult {
+                    ok: true,
+                    status: 200,
+                    message: format!("{} models, {} loaded", models.len(), loaded),
+                });
+            }
+            Err(error)
+                if lmstudio::server_is_up_with_auth(&endpoint.base_url, auth_token.as_deref())
+                    .await =>
+            {
+                return Ok(EndpointTestResult {
+                    ok: true,
+                    status: 200,
+                    message: format!("LM Studio reachable, model metadata unavailable: {error}"),
+                });
+            }
+            Err(error) => {
+                return Ok(EndpointTestResult {
+                    ok: false,
+                    status: 0,
+                    message: error,
+                });
+            }
+        }
+    }
+
+    let probe_url = match endpoint.kind.as_str() {
+        "ollama" => format!("{}/api/tags", endpoint.base_url.trim_end_matches('/')),
+        _ => lmstudio::openai_models_url(&endpoint.base_url),
     };
-    let url = format!(
-        "{}{}",
-        endpoint.base_url.trim_end_matches('/'),
-        probe_path
-    );
     let client = reqwest::Client::builder()
         .user_agent(format!("Loom/{}", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .map_err(|e| e.to_string())?;
-    let mut req = client.get(&url);
+    let mut req = client.get(&probe_url);
     if endpoint.requires_auth {
         if let Some(token) = auth_token.as_deref().filter(|s| !s.is_empty()) {
             req = req.bearer_auth(token);

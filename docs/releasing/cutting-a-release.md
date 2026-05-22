@@ -1,48 +1,65 @@
-# Cutting a release
+# Cutting a Loom release
 
-Loom's release script is `bin/release.sh`. It bumps nothing for you — bump `MARKETING_VERSION` in `project.yml` first, commit, then run the script.
+Stable Loom releases ship from `main` with `bin/release.sh`. Bump
+`MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in `project.yml`, update
+`docs/releasing/current-release-notes.md`, commit, push, then run the script.
 
 ## Prereqs
 
-- `xcodegen` and `xcodebuild` (Xcode CLI tools).
-- `hdiutil` (built-in).
-- `gh` CLI authenticated (`gh auth login -h github.com`).
+- `xcodegen` and `xcodebuild` from full Xcode.
+- `hdiutil` (built in to macOS).
+- `gh` CLI authenticated for `BigBeardedMan/Loom`.
+- OpenSSL 3 for signing the checksum sidecar.
+- Production release signing keys in Keychain or `~/.loom/release-signing`.
 - A clean working tree at the commit you want to tag.
 
-## The flow
+## Flow
 
 ```bash
-# 1. Bump MARKETING_VERSION (and CURRENT_PROJECT_VERSION) in project.yml.
+# 1. Bump MARKETING_VERSION and CURRENT_PROJECT_VERSION in project.yml.
 # 2. Update docs/releasing/current-release-notes.md.
-# 3. Commit + push.
-bin/release.sh                 # run from the repo root
+# 3. Commit + push main.
+bin/release.sh
 ```
 
 What the script does:
 
-1. **Reads version** — `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` from `project.yml`.
-2. **Pre-flight** — verifies `gh` is authed (via `gh api user`, not `gh auth status` which trips on stale background accounts), the local tag doesn't already exist, and the GitHub release doesn't already exist.
-3. **Regenerates the Xcode project** — `xcodegen generate`.
-4. **Builds Release** — `xcodebuild -project Loom.xcodeproj -scheme Loom -configuration Release build`.
-5. **Locates the built `.app`** — searches `~/Library/Developer/Xcode/DerivedData/.../Build/Products/Release/Loom.app`.
-6. **Packages the DMG** — copies `Loom.app` and an `/Applications` alias into a staging temp dir, runs `hdiutil create -format UDZO`, names the file `Loom-<version>.dmg`.
-7. **Tags and pushes** — `git tag -a vX.Y.Z -m "Loom <version> (<build>)"`, `git push origin vX.Y.Z`.
-8. **Creates or updates the GitHub release** — writes the notes from `docs/releasing/current-release-notes.md`, then attaches the DMG, checksum, and signature.
+1. Reads `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` from `project.yml`.
+2. Verifies `gh`, OpenSSL, signing keys, a clean tree, and a free `vX.Y.Z` tag.
+3. Regenerates `Loom.xcodeproj` with `xcodegen generate`.
+4. Builds `Loom.app` in Release configuration.
+5. Validates bundle name, bundle ID, executable, version, and embedded update public key.
+6. Packages `Loom-<version>.dmg`.
+7. Writes and signs `Loom-<version>.dmg.sha256`.
+8. Tags and pushes `v<version>`.
+9. Creates or updates the GitHub Release with the DMG, checksum, signature, and release notes.
 
-The release notes include `docs/releasing/current-release-notes.md` plus install and auto-update instructions. Keep that file focused on the update you are about to tag; it is the changelog section that appears on the GitHub release.
+Windows assets are built by the `Windows Release` GitHub Actions workflow after
+the `v<version>` tag is pushed. That workflow appends the x64/arm64 NSIS
+installers, installer signatures, `latest-windows.json`, bridge recovery
+installers, and legacy installer aliases to the same GitHub Release.
 
-## Post-release
+## Compatibility
 
-Every running Loom on every machine picks the new build up via the [auto-update](../updates/auto-update.md) path within 60 seconds.
+Loom 9 keeps the stable macOS updater on `/releases/latest` and the Windows
+updater on stable `v*` releases. Windows release assets include both
+versioned installers (`Loom_<version>_<arch>-setup.exe`) and legacy aliases
+(`Loom_<arch>-setup.exe`) so older installed builds can find the update. The
+bridge recovery installers are uploaded first so older helpers that select the
+first compatible asset can still hand off to the real versioned installer.
 
-## What can go wrong
+## Post-release checks
 
-- **`error: tag vX.Y.Z already exists locally`** — you forgot to bump `MARKETING_VERSION`. Bump it, commit, retry.
-- **`error: built Release/Loom.app not found under DerivedData`** — `xcodebuild` failed silently. Re-run with `-quiet` removed from the script to see the actual compile errors.
-- **`gh release create` 422** — the release already exists on GitHub. Bump version, retry.
+- `git ls-remote --heads origin main` points at the release commit.
+- `git ls-remote --tags origin v<version>` exists.
+- `gh release view v<version>` shows the DMG, checksum, signature, Windows
+  installers, installer signatures, bridge installers, and `latest-windows.json`.
+- The DMG checksum verifies with `shasum -a 256 -c`.
+- The Windows Release workflow completes successfully for x64 and arm64.
 
-## Why ad-hoc signing?
+## Common failures
 
-Loom is a personal tool with no Apple Developer Program enrollment. Ad-hoc signing (`CODE_SIGN_IDENTITY: "-"`) is enough for local distribution; users do the right-click → Open dance once and macOS remembers.
-
-If you ever do enroll, change `DEVELOPMENT_TEAM` and `CODE_SIGN_IDENTITY` in `project.yml`. The DMG flow doesn't change.
+- `tag vX.Y.Z already exists`: bump `MARKETING_VERSION`, commit, and retry.
+- `built app has wrong bundle identifier`: production metadata was overwritten by a testing-channel merge; fix `project.yml` and `Info.plist`.
+- `Release is missing a .sha256.sig signature`: the macOS update pill will refuse to stage the DMG until the signature asset exists.
+- Windows CI created the release first: `bin/release.sh` appends the DMG assets to the existing release instead of creating a duplicate.

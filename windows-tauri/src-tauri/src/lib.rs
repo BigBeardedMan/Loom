@@ -85,7 +85,10 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
 
 #[tauri::command]
 fn app_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
+    // Testing Edition exposes the alphanumeric LOOM_BUILD_CODE baked in by
+    // build.rs. Tauri/Cargo still carry the unified Testing semver for
+    // installer metadata, but the in-app build label comes from the release.
+    env!("LOOM_BUILD_CODE")
 }
 
 #[tauri::command]
@@ -192,7 +195,7 @@ pub fn run() {
 
             app.manage(AppState::new(db, data_dir.clone(), logs_dir.clone()));
             app.manage(watcher_registry);
-            app.manage(agents::live_tasks::LiveTasksState::default());
+            app.manage(agents::live_tasks::LiveTasksState::new(data_dir.clone()));
             agents::live_tasks::start_poller(app.handle().clone());
 
             install_tray(app.handle())?;
@@ -227,7 +230,18 @@ pub fn run() {
             terminal::commands::terminal_kill,
             terminal::commands::terminal_list,
             terminal::commands::terminal_set_cwd,
+            terminal::commands::terminal_update_metadata,
             terminal::commands::terminal_foreground_command,
+            terminal::transcripts::terminal_transcripts_recent,
+            terminal::transcripts::terminal_transcript_read,
+            terminal::transcripts::terminal_transcript_restore,
+            terminal::transcripts::terminal_transcript_move_to_deleted,
+            terminal::transcripts::terminal_transcript_recover_deleted,
+            terminal::transcripts::terminal_transcript_delete_permanently,
+            terminal::transcripts::terminal_transcripts_prune,
+            terminal::transcripts::terminal_transcripts_config,
+            terminal::transcripts::terminal_transcripts_set_config,
+            terminal::transcripts::terminal_transcripts_folder,
             terminal::command_history::command_history_list,
             terminal::command_history::command_history_read_output,
             fs_walk::fs_walk_tree,
@@ -247,6 +261,15 @@ pub fn run() {
             agents::usage_service::usage_read,
             agents::live_tasks::live_tasks_list,
             agents::live_tasks::live_tasks_set_staleness,
+            agents::live_tasks::live_tasks_clear_group,
+            agents::live_tasks::live_tasks_clear_all,
+            agents::lmstudio::lmstudio_models,
+            agents::lmstudio::lmstudio_runtime_status,
+            agents::lmstudio::lmstudio_prepare,
+            agents::lmstudio::lmstudio_load,
+            agents::lmstudio::lmstudio_unload,
+            agents::lmstudio::lmstudio_download,
+            agents::lmstudio::lmstudio_download_status,
             keychain::keychain_get,
             keychain::keychain_set,
             keychain::keychain_delete,

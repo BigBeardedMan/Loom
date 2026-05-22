@@ -9,7 +9,7 @@ import { PreviewPane } from "../build/PreviewPane";
 import { LoomPanel } from "../../components/LoomPanel";
 import { BlockTitleBar } from "../../components/BlockTitleBar";
 import { Icons } from "../../lib/icons";
-import { cockpit, surface, text } from "../../lib/theme";
+import { cockpit, radius, surface, text } from "../../lib/theme";
 import type { Block, BlockPin } from "./LayoutPersistence";
 import type { Workspace } from "../../lib/ipc";
 import { UsageView } from "../usage/UsageView";
@@ -137,7 +137,7 @@ export function WorkspaceView() {
         className="flex h-full items-center justify-center"
         style={{ fontSize: 12, color: text.muted }}
       >
-        Select or create a workspace to begin.
+        Select Prompt, Ideas, or Review to begin.
       </div>
     );
   }
@@ -153,7 +153,7 @@ export function WorkspaceView() {
           style={{
             padding: 40,
             border: `1px solid var(--color-loom-hairline)`,
-            borderRadius: 14,
+            borderRadius: radius.panel,
             background: "var(--color-loom-panel)",
             color: text.tertiary,
             textAlign: "center",
@@ -220,7 +220,7 @@ export function WorkspaceView() {
               top: pinPreview.y,
               width: pinPreview.width,
               height: pinPreview.height,
-              borderRadius: 14,
+              borderRadius: radius.panel,
               background: "rgba(45, 128, 245, 0.13)",
               border: "2px dashed rgba(45, 128, 245, 0.65)",
               pointerEvents: "none",

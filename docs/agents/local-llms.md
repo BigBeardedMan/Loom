@@ -1,13 +1,14 @@
 # Local LLMs
 
-Loom can stream chat from any LLM you run on `localhost` or your LAN. Two integrations are built in:
+Loom can stream chat from any LLM you run on `localhost` or your LAN. Three integrations are built in:
 
 | Kind | Best for | Wire format |
 | ---- | -------- | ----------- |
 | **Ollama** | `ollama serve` running locally or on a homelab box | `POST /api/chat` (NDJSON stream), `GET /api/tags` for models |
-| **OpenAI-compatible** | LM Studio, llama.cpp's `llama-server`, Jan, vLLM, LocalAI, anything that speaks `/v1/chat/completions` | OpenAI SSE stream |
+| **LM Studio** | LM Studio's local server, with richer model discovery through `/api/v0/models` | OpenAI SSE stream plus LM Studio model metadata |
+| **OpenAI-compatible** | llama.cpp's `llama-server`, Jan, vLLM, LocalAI, anything that speaks `/v1/chat/completions` | OpenAI SSE stream |
 
-Both are added in [Settings → Providers](../settings/providers.md).
+All three are added in [Settings → Providers](../settings/providers.md).
 
 ## Ollama setup
 
@@ -29,21 +30,38 @@ The Agent pane picker now has a `Local · Ollama` group with one entry per pulle
 
 Run `ollama serve` on another machine with `OLLAMA_HOST=0.0.0.0:11434 ollama serve`, then in Loom set **Base URL** to `http://<host>:11434`. /api/tags discovery and /api/chat streaming work the same over LAN.
 
-## OpenAI-compatible setup (LM Studio, llama.cpp, Jan, vLLM)
+## LM Studio setup
 
-These tools all expose an OpenAI-shaped HTTP API. Pick one, start its server, then add an endpoint in Loom.
-
-### LM Studio
+LM Studio exposes an OpenAI-shaped chat API plus a native model-discovery API that tells Loom which models are installed and loaded.
 
 1. In LM Studio: **Developer** → **Local Server** → start the server (default port `1234`).
-2. Note the **model identifier** in the active session — e.g. `lmstudio-community/Llama-3.1-8B-Instruct`.
+2. Load a model in LM Studio, or use the `lms` CLI to load one.
 3. Loom → **Settings → Providers → Add**.
    - **Display name:** `LM Studio`
-   - **Kind:** OpenAI-compatible
+   - **Kind:** LM Studio
    - **Base URL:** `http://localhost:1234/v1`
-   - **Model:** the identifier from step 2.
+   - **Default model:** optional fallback only; Loom auto-discovers installed models through `/api/v0/models`.
    - **Requires auth:** off.
-4. **Save**.
+4. **Test connection** → should report installed and loaded model counts.
+5. **Save**.
+
+If the LM Studio server is already running when you open **Settings → Providers**,
+Loom offers an **Add LM Studio** shortcut that creates this endpoint for you.
+Loaded models appear first in the Agent picker with their context and
+quantization details.
+
+On Windows, the Agent pane also exposes a compact LM Studio runtime strip. Use
+**Refresh** to re-read `/api/v0/models`, **Prepare** to start the `lms` server
+and load the selected or recommended model, and **Auto-scale** to request the
+target context size with `--parallel 1 --gpu max`. The terminal launch menu can
+insert `lmstudio`, `lmstudio --allow-bash`, `lmstudio --bypass-permissions`, or
+`lms server status` into the active shell.
+
+> Prefer a terminal? The [`lmstudio` CLI](lmstudio-cli.md) ships with Loom and gives you a `claude`-style agent loop in any terminal, backed by the same LM Studio server. Tasks flow into Loom's Tasks pane automatically.
+
+## OpenAI-compatible setup (llama.cpp, Jan, vLLM)
+
+These tools expose an OpenAI-shaped HTTP API. Pick one, start its server, then add an endpoint in Loom.
 
 ### llama.cpp
 
@@ -63,11 +81,23 @@ Same shape: configure **Base URL** to wherever the server listens (commonly `htt
 
 ## Auth tokens
 
-Some local servers (or the LAN proxies in front of them) want a bearer token. Toggle **Requires auth** in the editor and paste the token. It's stored in macOS Keychain under account `local_endpoint_<UUID>` and sent as `Authorization: Bearer <token>` on every request.
+Some local servers (or the LAN proxies in front of them) want a bearer token.
+Toggle **Requires auth** in the editor and paste the token. It's stored in
+macOS Keychain or Windows Credential Manager and sent as
+`Authorization: Bearer <token>` on every request.
 
 ## Streaming and cancel
 
 All HTTP providers stream tokens live into the assistant bubble. Hit the **Stop** button (top right of the agent pane during a turn) to cancel — the URLSession task is canceled and the bubble shows whatever was already emitted.
+
+LM Studio defaults to **Agent Mode** in the Agent pane. Use the wand button to
+switch back to plain chat. In Agent Mode, the permission menu supports:
+
+- **Ask:** prompt before file edits and shell commands.
+- **Plan:** allow read/list/task updates only.
+- **Accept Edits:** auto-approve file edits, still ask for shell commands.
+- **Bypass Permissions:** auto-approve file edits and shell commands for the
+  current run.
 
 ## Troubleshooting
 

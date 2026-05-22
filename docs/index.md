@@ -15,7 +15,7 @@ Loom is a personal, single-user tool. No subscription model, hosted control plan
 - New here? Read [Install](getting-started/install.md), then [First run](getting-started/first-run.md).
 - Want to wire up your local model? See [Local LLMs](agents/local-llms.md).
 - Cutting a build? See [Cutting a release](releasing/cutting-a-release.md).
-- Publishing an update? Keep [Current release notes](releasing/current-release-notes.md) accurate before tagging.
+- Publishing a Loom update? Keep [Current release notes](releasing/current-release-notes.md) accurate before tagging.
 
 ## What's in Loom
 
@@ -24,9 +24,9 @@ Loom is a personal, single-user tool. No subscription model, hosted control plan
 | [Workspaces](workspaces/overview.md) | Three kinds — Prompt, Ideas, Review — each with its own pane lineup. |
 | [Agents](agents/overview.md) | Claude Code via OAuth subprocess, optional Anthropic API key, plus local LLMs over HTTP. |
 | [Tasks](tasks/overview.md) | SwiftData kanban with task → agent and task → terminal handoff. |
-| [Terminal](terminal/overview.md) | SwiftTerm-backed pane with CLI agent auto-detection. |
+| [Terminal](terminal/overview.md) | SwiftTerm-backed pane with CLI agent auto-detection, local transcripts, and recovery. |
 | [Editor](editor/overview.md) | File tree with breadcrumb. CodeEdit integration is on the roadmap. |
-| [Settings](settings/appearance.md) | Theme, stale-task window, local providers, Anthropic key. |
+| [Settings](settings/appearance.md) | Theme, stale-task window, providers, MCP, Shell history, and Anthropic key. |
 | [Updates](updates/auto-update.md) | Polls GitHub Releases on a 60s interval; Update pill swaps in the new build. |
 | [Releasing](releasing/cutting-a-release.md) | `bin/release.sh` ships a signed-ish DMG and tags the commit. |
 

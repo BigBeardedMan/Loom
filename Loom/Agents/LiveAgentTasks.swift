@@ -6,28 +6,40 @@ enum AgentSource: String, Codable, Hashable {
     case claude
     case codex
     case gemini
+    case lmstudio
+    case ollama
+    case openAICompatible
 
     var label: String {
         switch self {
-        case .claude: return "Claude Code"
-        case .codex:  return "Codex"
-        case .gemini: return "Gemini"
+        case .claude:           return "Claude Code"
+        case .codex:            return "Codex"
+        case .gemini:           return "Gemini"
+        case .lmstudio:         return "LM Studio"
+        case .ollama:           return "Ollama"
+        case .openAICompatible: return "Local"
         }
     }
 
     var systemImage: String {
         switch self {
-        case .claude: return "sparkles"
-        case .codex:  return "chevron.left.forwardslash.chevron.right"
-        case .gemini: return "diamond"
+        case .claude:           return "sparkles"
+        case .codex:            return "chevron.left.forwardslash.chevron.right"
+        case .gemini:           return "diamond"
+        case .lmstudio:         return "cpu"
+        case .ollama:           return "shippingbox"
+        case .openAICompatible: return "server.rack"
         }
     }
 
     var brandColor: Color {
         switch self {
-        case .claude: return Color(red: 0.95, green: 0.39, blue: 0.18)
-        case .codex:  return Color(red: 0.23, green: 0.86, blue: 0.46)
-        case .gemini: return Color(red: 0.18, green: 0.50, blue: 0.96)
+        case .claude:           return Color(red: 0.95, green: 0.39, blue: 0.18)
+        case .codex:            return Color(red: 0.23, green: 0.86, blue: 0.46)
+        case .gemini:           return Color(red: 0.18, green: 0.50, blue: 0.96)
+        case .lmstudio:         return Color(red: 0.62, green: 0.40, blue: 0.95)
+        case .ollama:           return Color(red: 0.85, green: 0.85, blue: 0.85)
+        case .openAICompatible: return Color(red: 0.55, green: 0.65, blue: 0.75)
         }
     }
 }
@@ -134,14 +146,9 @@ struct LiveAgentTaskGroup: Identifiable, Hashable {
 /// Claude Code writes per-task JSON files at `~/.claude/tasks/<session>/<id>.json`.
 /// Codex emits an `update_plan` function call inside its rollout JSONL at
 /// `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`; we surface the
-/// latest plan from each active rollout. Gemini CLI does not currently log
-/// plan or task state to disk in any format we can read.
-///
-/// Clearing a session works for all sources. Claude gets a file-level delete
-/// (the live session rewrites on its next turn). Codex/Gemini can't be
-/// deleted without losing conversation history, so we record a dismissal
-/// timestamp and hide the session until its on-disk activity advances past
-/// that mark.
+/// latest plan from each active rollout. Our own `lmstudio` CLI mirrors the
+/// Claude layout under `~/.loom/tasks/<session>/<id>.json`. Gemini CLI does
+/// not currently log plan or task state to disk in any format we can read.
 @Observable
 @MainActor
 final class LiveAgentTasksService {
@@ -169,6 +176,10 @@ final class LiveAgentTasksService {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex/sessions", isDirectory: true)
     }()
+    private let loomTasksRoot: URL = {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".loom/tasks", isDirectory: true)
+    }()
     private var refreshInFlight: Bool = false
 
     /// Sessions the user has explicitly cleared, mapped to the `lastActivity`
@@ -177,7 +188,7 @@ final class LiveAgentTasksService {
     /// naturally reappear on their next plan/task update while truly
     /// stuck/zombie ones stay gone. Used for sources where we can't safely
     /// delete the underlying files (Codex, Gemini) and as a belt-and-suspenders
-    /// for Claude.
+    /// for file-backed sources.
     private static let dismissedSessionsKey = "loom.tasks.dismissedSessions"
     private var dismissedSessions: [String: Date] = {
         let raw = UserDefaults.standard.dictionary(forKey: LiveAgentTasksService.dismissedSessionsKey)
@@ -220,6 +231,7 @@ final class LiveAgentTasksService {
         let claudeRoot = claudeTasksRoot
         let claudeProjectsRoot = claudeProjectsRoot
         let codexRoot = codexSessionsRoot
+        let loomRoot = loomTasksRoot
         let cutoff = Date().addingTimeInterval(-activeWindow)
         let dismissed = dismissedSessions
         Task { [weak self] in
@@ -228,6 +240,7 @@ final class LiveAgentTasksService {
                     claudeRoot: claudeRoot,
                     claudeProjectsRoot: claudeProjectsRoot,
                     codexRoot: codexRoot,
+                    loomRoot: loomRoot,
                     cutoff: cutoff,
                     dismissed: dismissed
                 )
@@ -238,12 +251,8 @@ final class LiveAgentTasksService {
         }
     }
 
-    /// Clear every visible session and refresh. For Claude this deletes the
-    /// on-disk task JSON files (the live session will rewrite them on its
-    /// next turn, so the clear only "sticks" for crashed/zombie sessions).
-    /// For Codex/Gemini we can't delete files without losing conversation
-    /// history, so we record a dismissal timestamp; the session stays hidden
-    /// until its on-disk activity advances past that mark.
+    /// Clear every visible session and refresh. File-backed sources delete
+    /// task JSON; log-backed sources are dismissed until their logs advance.
     func clearAll() {
         for group in groups {
             dismiss(group: group)
@@ -252,9 +261,7 @@ final class LiveAgentTasksService {
         refresh()
     }
 
-    /// Clear a single session and refresh. Same per-source semantics as
-    /// `clearAll()`: Claude gets a file delete, Codex/Gemini get hidden until
-    /// the underlying rollout/session moves forward.
+    /// Clear one session using the same per-source semantics as `clearAll()`.
     func clear(group: LiveAgentTaskGroup) {
         dismiss(group: group)
         saveDismissed()
@@ -262,9 +269,7 @@ final class LiveAgentTasksService {
     }
 
     private func dismiss(group: LiveAgentTaskGroup) {
-        if group.source == .claude {
-            deleteTaskFiles(for: group)
-        }
+        deleteTaskFiles(for: group)
         dismissedSessions[group.id] = group.lastActivity
     }
 
@@ -274,8 +279,14 @@ final class LiveAgentTasksService {
     }
 
     private func deleteTaskFiles(for group: LiveAgentTaskGroup) {
-        guard group.source == .claude else { return }
-        let sessionDir = claudeTasksRoot.appendingPathComponent(group.sessionID, isDirectory: true)
+        let rootForGroup: URL?
+        switch group.source {
+        case .claude:   rootForGroup = claudeTasksRoot
+        case .lmstudio: rootForGroup = loomTasksRoot
+        default:        rootForGroup = nil
+        }
+        guard let root = rootForGroup else { return }
+        let sessionDir = root.appendingPathComponent(group.sessionID, isDirectory: true)
         let fm = FileManager.default
         let entries = (try? fm.contentsOfDirectory(at: sessionDir, includingPropertiesForKeys: nil, options: [])) ?? []
         for url in entries where url.pathExtension == "json" {
@@ -293,6 +304,7 @@ final class LiveAgentTasksService {
         claudeRoot: URL,
         claudeProjectsRoot: URL,
         codexRoot: URL,
+        loomRoot: URL,
         cutoff: Date,
         dismissed: [String: Date]
     ) -> [LiveAgentTaskGroup] {
@@ -303,11 +315,71 @@ final class LiveAgentTasksService {
             cutoff: cutoff
         ))
         collected.append(contentsOf: collectCodexGroups(root: codexRoot, cutoff: cutoff))
+        collected.append(contentsOf: collectLoomGroups(root: loomRoot, cutoff: cutoff))
         let filtered = collected.filter { group in
             guard let dismissedAt = dismissed[group.id] else { return true }
             return group.lastActivity > dismissedAt
         }
         return filtered.sorted { $0.lastActivity > $1.lastActivity }
+    }
+
+    // MARK: - Loom (lmstudio CLI)
+
+    /// `~/.loom/tasks/<session>/<id>.json` mirrors the Claude layout exactly,
+    /// so we reuse the same scanner and just stamp `source = .lmstudio`. Our
+    /// `lmstudio` CLI is the writer.
+    nonisolated static func collectLoomGroups(root: URL, cutoff: Date) -> [LiveAgentTaskGroup] {
+        var collected: [LiveAgentTaskGroup] = []
+        for session in activeClaudeSessions(root: root, cutoff: cutoff) {
+            let tasks = readLoomTasks(in: session)
+            guard !tasks.isEmpty else { continue }
+            collected.append(LiveAgentTaskGroup(
+                sessionID: session.id,
+                source: .lmstudio,
+                modelLabel: nil,
+                lastActivity: session.mostRecentMtime,
+                tasks: tasks
+            ))
+        }
+        return collected
+    }
+
+    nonisolated private static func readLoomTasks(in session: ClaudeSessionRef) -> [LiveAgentTask] {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(
+            at: session.url,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        let decoder = JSONDecoder()
+        var tasks: [LiveAgentTask] = []
+        for url in entries where url.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: url) else { continue }
+            guard let payload = try? decoder.decode(ClaudeTaskFile.self, from: data) else { continue }
+            let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .now
+            let status = LiveAgentTaskStatus(rawValue: payload.status ?? "pending") ?? .pending
+            if status == .deleted { continue }
+            let composite = "lmstudio:\(session.id):\(payload.id)"
+            tasks.append(LiveAgentTask(
+                id: composite,
+                source: .lmstudio,
+                modelLabel: nil,
+                sessionID: session.id,
+                taskID: payload.id,
+                subject: payload.subject ?? "(no subject)",
+                description: payload.description ?? "",
+                activeForm: payload.activeForm ?? "",
+                status: status,
+                updatedAt: mtime
+            ))
+        }
+        return tasks.sorted { lhs, rhs in
+            if lhs.status.sortPriority != rhs.status.sortPriority {
+                return lhs.status.sortPriority < rhs.status.sortPriority
+            }
+            return lhs.updatedAt > rhs.updatedAt
+        }
     }
 
     // MARK: - Claude

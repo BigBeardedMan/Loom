@@ -56,9 +56,11 @@ pub fn parse_claude_agents_list(stdout: &str) -> Vec<AgentDescriptor> {
         }
 
         if let Some(agent) = current.as_mut() {
-            let lower = line.trim_start().to_ascii_lowercase();
-            if let Some(rest) = lower.strip_prefix("description:") {
-                agent.description = rest.trim().to_string();
+            let field = line.trim_start();
+            let lower = field.to_ascii_lowercase();
+            if lower.starts_with("description:") {
+                let original_rest = &field["description:".len()..];
+                agent.description = original_rest.trim().to_string();
             } else if let Some(rest) = lower.strip_prefix("tools:") {
                 agent.tools = rest
                     .split(|c: char| c == ',' || c.is_whitespace())

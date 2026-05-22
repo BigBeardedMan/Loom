@@ -8,6 +8,8 @@ import SwiftTerm
 struct TerminalPaneView: View {
     @Environment(WorkspaceLayout.self) private var layout
     let block: WorkspaceBlock
+    let workspaceID: UUID?
+    let workspaceName: String?
 
     var body: some View {
         // SwiftUI only diffs an array of children when each child is keyed.
@@ -90,7 +92,12 @@ struct TerminalPaneView: View {
     }
 
     private func pane(for session: TerminalSession) -> some View {
-        TerminalSinglePane(block: block, session: session)
+        TerminalSinglePane(
+            block: block,
+            session: session,
+            workspaceID: workspaceID,
+            workspaceName: workspaceName
+        )
             .frame(minWidth: 240, minHeight: 140)
     }
 }
@@ -102,8 +109,11 @@ struct TerminalPaneView: View {
 private struct TerminalSinglePane: View {
     let block: WorkspaceBlock
     let session: TerminalSession
+    let workspaceID: UUID?
+    let workspaceName: String?
     @Environment(WorkspaceLayout.self) private var layout
     @Environment(CommandHistoryService.self) private var history
+    @Environment(TerminalTranscriptStore.self) private var transcripts
     /// Per-pane toggle: live PTY view (default) or a stack of cards
     /// rendered from the JSONL log filtered to this session. Local @State
     /// because flipping modes is a per-glance preference, not something
@@ -124,6 +134,14 @@ private struct TerminalSinglePane: View {
             }
         }
         .background(Color(red: 0.018, green: 0.022, blue: 0.026))
+        .onAppear {
+            session.attachTranscriptStore(
+                transcripts,
+                workspaceID: workspaceID,
+                workspaceName: workspaceName,
+                title: block.displayTitle
+            )
+        }
     }
 
     private var header: some View {
@@ -215,6 +233,27 @@ private struct TerminalSinglePane: View {
             .help("Close this pane")
         }
 
+        Menu {
+            Section("LM Studio") {
+                Button("lmstudio") { session.submit("lmstudio") }
+                Button("lmstudio --allow-bash") { session.submit("lmstudio --allow-bash") }
+                Button("lmstudio --bypass-permissions") { session.submit("lmstudio --bypass-permissions") }
+                Button("lms server status") { session.submit("lms server status") }
+            }
+            Divider()
+            Button("claude")   { session.submit("claude") }
+            Button("codex")    { session.submit("codex") }
+            Button("gemini")   { session.submit("gemini") }
+        } label: {
+            Image(systemName: "sparkles")
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.55))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Launch an agent CLI in this terminal")
+
         Button {
             session.sendInterrupt()
         } label: {
@@ -241,6 +280,7 @@ struct TerminalNSView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> LoomTerminalView {
         session.start()
+        DictationTerminalTargetRegistry.shared.noteActiveTerminal(session.terminalView)
         return session.terminalView
     }
 

@@ -5,15 +5,16 @@ import os
 
 private let updateLog = Logger(subsystem: "com.chasesims.Loom", category: "updates")
 
-/// Side-channel updater. A staged Loom.app sits at
-/// `~/Library/Application Support/Loom/staging/Loom.app`, with a sibling
+/// Side-channel updater for stable Loom. A staged `Loom.app` sits at
+/// `~/Library/Application Support/Loom/staging/`, with a sibling
 /// `manifest.json` describing it. The running app polls the manifest; when its
-/// version differs from the running bundle, the in-app "Update" button lights
-/// up. Clicking it spawns a detached helper that waits for this process to
-/// quit, swaps the staged bundle into `/Applications/Loom.app`, and relaunches.
+/// build code differs from the running bundle's, the in-app "Update" button
+/// lights up. Clicking it spawns a detached helper that waits for this process
+/// to quit, swaps the staged bundle into `/Applications/Loom.app`, and
+/// relaunches.
 ///
-/// The whole point is to never `cp` over a live `/Applications/Loom.app` —
-/// macOS handles that poorly and crashes the running instance.
+/// The whole point is to never `cp` over a live installed bundle. macOS
+/// handles that poorly and crashes the running instance.
 struct StagedUpdate: Equatable {
     var version: String
     var build: String
@@ -155,6 +156,25 @@ final class UpdateService {
     /// in-memory `lastFetchedTag` short-circuit — that flag is meant to keep
     /// the *background* poll from re-downloading the same DMG every minute,
     /// not to lock the user out of retrying after a failure.
+    /// Wrap GitHubReleaseFetcher.fetchLatest in a one-shot retry for transient
+    /// network errors (-1001 timed out, -1009 not connected, -1004 cannot
+    /// connect to host). Other errors propagate immediately. Adds at most one
+    /// 3s backoff before retry.
+    private func fetchLatestWithRetry(repo: String) async throws -> GitHubReleaseFetcher.Release {
+        do {
+            return try await GitHubReleaseFetcher.fetchLatest(repo: repo)
+        } catch let error as URLError where
+            error.code == .timedOut
+            || error.code == .notConnectedToInternet
+            || error.code == .cannotConnectToHost
+            || error.code == .networkConnectionLost {
+            // Wait 3s, then try one more time. The 30s per-request
+            // timeout still applies on the retry.
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            return try await GitHubReleaseFetcher.fetchLatest(repo: repo)
+        }
+    }
+
     func checkRemote(forceRestage: Bool = false) async {
         // Set the guard flag *before* the first await — otherwise two callers
         // can both pass the `!isFetchingRemote` check during the network round
@@ -164,7 +184,7 @@ final class UpdateService {
         defer { isFetchingRemote = false }
 
         do {
-            let release = try await GitHubReleaseFetcher.fetchLatest(repo: Self.remoteRepo)
+            let release = try await fetchLatestWithRetry(repo: Self.remoteRepo)
             let runningVersion = Self.runningVersionTriple().version
             guard GitHubReleaseFetcher.isNewer(tag: release.versionTag, than: runningVersion) else {
                 lastRemoteError = nil

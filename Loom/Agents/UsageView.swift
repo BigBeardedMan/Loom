@@ -1,12 +1,37 @@
 import SwiftUI
 
-/// Single-tool usage dashboard. Each top-bar tab (Claude / Codex / Gemini)
+private enum UsageDashboardMode: Hashable {
+    case usage
+    case limits
+}
+
+private struct LimitPressure {
+    let label: String
+    let detail: String
+    let color: Color
+}
+
+private struct LimitMeterRow: Identifiable {
+    let label: String
+    let usedPercent: Double?
+    let windowMinutes: Int?
+    let resetsAt: Date?
+
+    var id: String { label }
+}
+
+/// Single-tool usage dashboard. Each top-bar tab (Claude / Codex / LM Studio)
 /// instantiates its own UsageView with the matching `tool`, so each CLI gets
 /// a dedicated full-width dashboard. Dismissed by clicking any workspace in
 /// the sidebar.
 struct UsageView: View {
     @Environment(UsageService.self) private var usage
     let tool: CLITool
+    @State private var mode: UsageDashboardMode = .usage
+
+    private var canShowLimits: Bool {
+        tool.supportsLimitSignals
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,7 +44,11 @@ struct UsageView: View {
                 } else {
                     ScrollView {
                         VStack(spacing: 14) {
-                            toolDashboard
+                            if mode == .limits && canShowLimits {
+                                limitsDashboard
+                            } else {
+                                toolDashboard
+                            }
                         }
                         .padding(16)
                     }
@@ -40,11 +69,30 @@ struct UsageView: View {
         .task {
             usage.requestRefresh()
         }
+        .onAppear {
+            normalizeModeForTool()
+        }
+        .onChange(of: tool) { _, _ in
+            normalizeModeForTool()
+        }
+    }
+
+    private func normalizeModeForTool() {
+        if !canShowLimits && mode == .limits {
+            mode = .usage
+        }
     }
 
     private var toolDashboard: some View {
-        let resolved = usage.tools.first(where: { $0.tool == tool }) ?? .unavailable(tool)
+        let resolved = usage.tools.first(where: { $0.tool == tool })
+            ?? .unavailable(tool, timeframe: usage.timeframe)
         return headlineColumn(title: "\(tool.label) Usage", tool: resolved)
+    }
+
+    private var limitsDashboard: some View {
+        let resolved = usage.tools.first(where: { $0.tool == tool })
+            ?? .unavailable(tool, timeframe: usage.timeframe)
+        return limitsColumn(title: "\(tool.label) Limits", tool: resolved)
     }
 
     private var refreshingOverlay: some View {
@@ -122,6 +170,8 @@ struct UsageView: View {
                 .foregroundStyle(LoomTheme.mutedText)
 
             if tool.isInstalled {
+                usageHero(tool)
+
                 statGrid(tool)
 
                 if !tool.chartBuckets.isEmpty {
@@ -173,19 +223,330 @@ struct UsageView: View {
         }
     }
 
-    private var controlBar: some View {
-        @Bindable var usage = usage
-        return HStack(spacing: 10) {
-            Picker("Timeframe", selection: $usage.timeframe) {
-                ForEach(UsageTimeframe.allCases) { tf in
-                    Text(tf.label).tag(tf)
+    private func usageHero(_ tool: CLIToolUsage) -> some View {
+        HStack(spacing: 10) {
+            heroStat("Tokens", formatTokens(tool.totalTokens), systemImage: "number", tint: tool.tool.brandColor)
+            heroStat("Prompts", formatCount(tool.promptCount), systemImage: "text.bubble", tint: tool.tool.brandColor)
+            heroStat("Active", formatCount(tool.activeSessions), systemImage: "dot.radiowaves.left.and.right", tint: tool.activeSessions > 0 ? LoomTheme.green : tool.tool.brandColor)
+        }
+    }
+
+    private func heroStat(_ label: String, _ value: String, systemImage: String, tint: Color) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(tint)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(value)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(LoomTheme.primaryText)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                Text(label.uppercased())
+                    .font(.system(size: 8, weight: .bold))
+                    .tracking(0.45)
+                    .foregroundStyle(LoomTheme.mutedText)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(LoomTheme.panel.opacity(0.68))
+        .overlay(
+            RoundedRectangle(cornerRadius: LoomTheme.rowRadius)
+                .stroke(LoomTheme.hairline, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: LoomTheme.rowRadius))
+    }
+
+    private func limitsColumn(title: String, tool: CLIToolUsage) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "gauge.with.dots.needle.67percent")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(tool.tool.brandColor)
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(LoomTheme.primaryText)
+                Spacer()
+                Text(tool.tool.shortLabel.uppercased())
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .tracking(0.6)
+                    .foregroundStyle(tool.tool.brandColor)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(tool.tool.brandColor.opacity(0.14))
+                    .clipShape(Capsule())
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(LoomTheme.inset)
+            .overlay(Divider().overlay(LoomTheme.hairline), alignment: .bottom)
+
+            limitBody(tool)
+                .padding(14)
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(LoomTheme.softPanel.opacity(0.7))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(LoomTheme.hairline, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    @ViewBuilder
+    private func limitBody(_ tool: CLIToolUsage) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if tool.isInstalled {
+                limitHero(tool)
+
+                if let snapshot = tool.limitSnapshot, hasLimitData(snapshot) {
+                    let rows = limitRows(snapshot)
+                    if !rows.isEmpty {
+                        LazyVGrid(
+                            columns: [
+                                GridItem(.flexible(), spacing: 10),
+                                GridItem(.flexible(), spacing: 10)
+                            ],
+                            alignment: .leading,
+                            spacing: 10
+                        ) {
+                            ForEach(rows) { row in
+                                limitMeterCard(row, tint: tool.tool.brandColor)
+                            }
+                        }
+                    }
+                    limitMetadata(snapshot)
+                } else {
+                    noLimitSignal(tool)
+                }
+
+                localSignalGrid(tool)
+            } else {
+                noLimitSignal(tool)
+            }
+        }
+    }
+
+    private func limitHero(_ tool: CLIToolUsage) -> some View {
+        let pressure = limitPressure(for: tool)
+        return HStack(alignment: .center, spacing: 14) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("LIMIT PRESSURE")
+                    .font(.system(size: 9, weight: .bold))
+                    .tracking(0.7)
+                    .foregroundStyle(LoomTheme.mutedText)
+                Text(pressure.label)
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundStyle(LoomTheme.primaryText)
+                    .lineLimit(1)
+                Text(pressure.detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(LoomTheme.mutedText)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 12)
+            ZStack {
+                Circle()
+                    .stroke(pressure.color.opacity(0.18), lineWidth: 11)
+                    .frame(width: 76, height: 76)
+                Circle()
+                    .trim(from: 0, to: max(0.08, CGFloat(limitPressureRatio(for: tool))))
+                    .stroke(
+                        pressure.color,
+                        style: StrokeStyle(lineWidth: 11, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(-90))
+                    .frame(width: 76, height: 76)
+                Image(systemName: "bolt.horizontal.circle.fill")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(pressure.color)
+            }
+        }
+        .padding(14)
+        .background(
+            LinearGradient(
+                colors: [
+                    tool.tool.brandColor.opacity(0.16),
+                    pressure.color.opacity(0.10),
+                    LoomTheme.inset.opacity(0.8)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(tool.tool.brandColor.opacity(0.25), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func limitMeterCard(_ row: LimitMeterRow, tint: Color) -> some View {
+        let width = min(max((row.usedPercent ?? 0) / 100, 0), 1)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(row.label)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(LoomTheme.primaryText)
+                Spacer()
+                Text(row.usedPercent.map(formatPercent) ?? "Unknown")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(LoomTheme.primaryText)
+            }
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 999)
+                        .fill(LoomTheme.hairline.opacity(0.9))
+                    RoundedRectangle(cornerRadius: 999)
+                        .fill(limitColor(for: row.usedPercent, fallback: tint))
+                        .frame(width: proxy.size.width * width)
                 }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: 260)
+            .frame(height: 7)
+            HStack(spacing: 8) {
+                Text(row.windowMinutes.map(formatWindow) ?? "Window unknown")
+                    .lineLimit(1)
+                Spacer()
+                if let resetsAt = row.resetsAt {
+                    Text("resets \(absoluteTime(resetsAt))")
+                        .lineLimit(1)
+                }
+            }
+            .font(.system(size: 10))
+            .foregroundStyle(LoomTheme.mutedText)
+        }
+        .padding(12)
+        .background(LoomTheme.inset.opacity(0.72))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(LoomTheme.hairline, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func limitMetadata(_ snapshot: UsageLimitSnapshot) -> some View {
+        HStack(spacing: 8) {
+            if let plan = snapshot.planType {
+                metadataPill("Plan \(plan)")
+            }
+            if let credits = snapshot.credits {
+                metadataPill("Credits \(formatCredits(credits))")
+            }
+            if let reached = snapshot.reachedType {
+                metadataPill("Reached \(reached)")
+            }
+            if let observed = snapshot.observedAt {
+                metadataPill("Observed \(relativeTime(observed))")
+            }
+        }
+    }
+
+    private func metadataPill(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(LoomTheme.mutedText)
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(LoomTheme.inset.opacity(0.8))
+            .clipShape(Capsule())
+    }
+
+    private func noLimitSignal(_ tool: CLIToolUsage) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(tool.tool.brandColor)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("No local limit signal found")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(LoomTheme.primaryText)
+                Text("\(tool.tool.label) has not written readable limit data to its local logs yet.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(LoomTheme.mutedText)
+                    .lineLimit(2)
+            }
+            Spacer()
+        }
+        .padding(12)
+        .background(LoomTheme.inset.opacity(0.72))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(LoomTheme.hairline, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func localSignalGrid(_ tool: CLIToolUsage) -> some View {
+        let columns: [GridItem] = [
+            GridItem(.flexible(), alignment: .leading),
+            GridItem(.flexible(), alignment: .leading),
+            GridItem(.flexible(), alignment: .leading)
+        ]
+        return LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
+            statCell("Active", formatCount(tool.activeSessions))
+            statCell("Last activity", tool.lastActivity.map(relativeTime) ?? "None")
+            statCell("Local tokens", formatTokens(tool.totalTokens))
+        }
+    }
+
+    private var controlBar: some View {
+        @Bindable var usage = usage
+        return HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: LoomTheme.controlRadius)
+                    .fill(tool.brandColor.opacity(0.14))
+                    .frame(width: 28, height: 26)
+                Image(systemName: tool.systemImage)
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(tool.brandColor)
+            }
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(tool.label)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(LoomTheme.primaryText)
+                Text(mode == .limits && canShowLimits ? "Local limit signals" : usage.timeframe.headlineLabel)
+                    .font(.system(size: 10))
+                    .foregroundStyle(LoomTheme.mutedText)
+            }
 
             Spacer()
+
+            HStack(spacing: 0) {
+                ForEach(UsageTimeframe.allCases) { tf in
+                    usageModeButton(
+                        title: tf.label,
+                        isActive: mode == .usage && usage.timeframe == tf
+                    ) {
+                        mode = .usage
+                        usage.timeframe = tf
+                    }
+                }
+                if canShowLimits {
+                    usageModeButton(title: "Limits", isActive: mode == .limits) {
+                        mode = .limits
+                        usage.acknowledgeLimitWarning(for: tool)
+                    }
+                    .overlay(alignment: .topLeading) {
+                        if usage.hasUnacknowledgedLimitWarning(for: tool) {
+                            LoomNotificationBadge()
+                                .offset(x: -5, y: -6)
+                        }
+                    }
+                }
+            }
+            .padding(2)
+            .background(LoomTheme.softPanel.opacity(0.75))
+            .clipShape(RoundedRectangle(cornerRadius: LoomTheme.rowRadius))
+            .overlay(
+                RoundedRectangle(cornerRadius: LoomTheme.rowRadius)
+                    .stroke(LoomTheme.hairline, lineWidth: 1)
+            )
 
             if let stamp = usage.lastRefreshedAt {
                 Text("updated \(relativeTime(stamp))")
@@ -193,19 +554,41 @@ struct UsageView: View {
                     .foregroundStyle(LoomTheme.mutedText)
             }
 
-            Button {
-                usage.requestRefresh()
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(LoomTheme.mutedText)
+            if usage.isRefreshing {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.7)
             }
-            .buttonStyle(.plain)
-            .help("Recompute totals")
+
+            LoomIconButton(
+                systemName: "arrow.clockwise",
+                help: "Recompute totals",
+                tint: tool.brandColor,
+                action: { usage.requestRefresh() }
+            )
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
         .background(LoomTheme.inset)
+    }
+
+    private func usageModeButton(
+        title: String,
+        isActive: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(isActive ? Color.white : LoomTheme.mutedText)
+                .lineLimit(1)
+                .frame(width: title == "Limits" ? 58 : 52, height: 24)
+                .background(isActive ? tool.brandColor : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .help(title == "Limits" ? "Show local limit signals" : "Show \(title.lowercased()) usage")
+        .accessibilityLabel(title == "Limits" ? "Show local limit signals" : "Show \(title) usage")
     }
 
     private var placeholder: some View {
@@ -230,9 +613,9 @@ struct UsageView: View {
             return Text("Awaiting first session")
         }
         if let last = tool.lastActivity {
-            return Text("Last activity \(relativeTime(last))")
+            return Text("\(tool.timeframe.headlineLabel) - last activity \(relativeTime(last))")
         }
-        return Text("No usage recorded yet")
+        return Text("\(tool.timeframe.headlineLabel) - no usage recorded")
     }
 
     private func statGrid(_ tool: CLIToolUsage) -> some View {
@@ -242,9 +625,9 @@ struct UsageView: View {
             GridItem(.flexible(), alignment: .leading)
         ]
         return LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
-            statCell("Sessions today",  formatCount(tool.sessionsToday))
-            statCell("Sessions total",  formatCount(tool.sessionsTotal))
-            statCell("Total tokens",    formatTokens(tool.totalTokens))
+            statCell("\(tool.timeframe.label) sessions", formatCount(tool.windowSessions))
+            statCell("All sessions",    formatCount(tool.sessionsTotal))
+            statCell("Window tokens",   formatTokens(tool.totalTokens))
             statCell("Input",           formatTokens(tool.inputTokens))
             statCell("Output",          formatTokens(tool.outputTokens))
             statCell("Cached",          formatTokens(tool.cachedTokens))
@@ -360,6 +743,14 @@ struct UsageView: View {
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
                 .foregroundStyle(LoomTheme.primaryText)
         }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(LoomTheme.panel.opacity(0.54))
+        .overlay(
+            RoundedRectangle(cornerRadius: LoomTheme.rowRadius)
+                .stroke(LoomTheme.hairline, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: LoomTheme.rowRadius))
     }
 
     @ViewBuilder
@@ -368,7 +759,7 @@ struct UsageView: View {
         let peak = max(buckets.map(\.tokens).max() ?? 0, 1)
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(usage.timeframe.headlineLabel)
+                Text(tool.timeframe.headlineLabel)
                     .font(.system(size: 9, weight: .bold))
                     .tracking(0.5)
                     .foregroundStyle(LoomTheme.mutedText)
@@ -440,6 +831,119 @@ struct UsageView: View {
         }
     }
 
+    private func hasLimitData(_ snapshot: UsageLimitSnapshot) -> Bool {
+        snapshot.primaryUsedPercent != nil
+            || snapshot.primaryWindowMinutes != nil
+            || snapshot.primaryResetsAt != nil
+            || snapshot.secondaryUsedPercent != nil
+            || snapshot.secondaryWindowMinutes != nil
+            || snapshot.secondaryResetsAt != nil
+            || snapshot.planType != nil
+            || snapshot.credits != nil
+            || snapshot.reachedType != nil
+            || snapshot.observedAt != nil
+    }
+
+    private func limitRows(_ snapshot: UsageLimitSnapshot) -> [LimitMeterRow] {
+        [
+            LimitMeterRow(
+                label: primaryLimitLabel(windowMinutes: snapshot.primaryWindowMinutes),
+                usedPercent: snapshot.primaryUsedPercent,
+                windowMinutes: snapshot.primaryWindowMinutes,
+                resetsAt: snapshot.primaryResetsAt
+            ),
+            LimitMeterRow(
+                label: "Week",
+                usedPercent: snapshot.secondaryUsedPercent,
+                windowMinutes: snapshot.secondaryWindowMinutes,
+                resetsAt: snapshot.secondaryResetsAt
+            )
+        ].filter {
+            $0.usedPercent != nil || $0.windowMinutes != nil || $0.resetsAt != nil
+        }
+    }
+
+    private func primaryLimitLabel(windowMinutes: Int?) -> String {
+        guard let windowMinutes else { return "Primary limit" }
+        return "\(formatLimitDuration(windowMinutes)) limit"
+    }
+
+    private func limitPressure(for tool: CLIToolUsage) -> LimitPressure {
+        guard let snapshot = tool.limitSnapshot, hasLimitData(snapshot) else {
+            return LimitPressure(
+                label: "No Signal",
+                detail: "Loom is watching local logs for limit snapshots.",
+                color: tool.tool.brandColor
+            )
+        }
+
+        if let reached = snapshot.reachedType, !reached.isEmpty {
+            return LimitPressure(
+                label: "Limited",
+                detail: "Codex reported a reached \(reached) limit.",
+                color: LoomTheme.pink
+            )
+        }
+
+        let peak = [
+            snapshot.primaryUsedPercent,
+            snapshot.secondaryUsedPercent
+        ].compactMap { $0 }.max()
+
+        guard let peak else {
+            return LimitPressure(
+                label: "Signal Found",
+                detail: "Limit metadata is present, but usage percentage is not available.",
+                color: tool.tool.brandColor
+            )
+        }
+
+        if peak >= 100 {
+            return LimitPressure(
+                label: "Limited",
+                detail: "One local meter is at or above its recorded ceiling.",
+                color: LoomTheme.pink
+            )
+        }
+        if peak >= 85 {
+            return LimitPressure(
+                label: "Hot",
+                detail: "One limit window is running close to the ceiling.",
+                color: LoomTheme.orange
+            )
+        }
+        if peak >= 60 {
+            return LimitPressure(
+                label: "Warming",
+                detail: "Usage is elevated inside the latest logged window.",
+                color: Color(red: 0.96, green: 0.77, blue: 0.20)
+            )
+        }
+        return LimitPressure(
+            label: "Calm",
+            detail: "Latest local limit snapshot has comfortable headroom.",
+            color: LoomTheme.green
+        )
+    }
+
+    private func limitPressureRatio(for tool: CLIToolUsage) -> Double {
+        guard let snapshot = tool.limitSnapshot else { return 0.08 }
+        if snapshot.reachedType != nil { return 1 }
+        let peak = [
+            snapshot.primaryUsedPercent,
+            snapshot.secondaryUsedPercent
+        ].compactMap { $0 }.max() ?? 8
+        return min(max(peak / 100, 0.08), 1)
+    }
+
+    private func limitColor(for percent: Double?, fallback: Color) -> Color {
+        guard let percent else { return fallback.opacity(0.45) }
+        if percent >= 100 { return LoomTheme.pink }
+        if percent >= 85 { return LoomTheme.orange }
+        if percent >= 60 { return Color(red: 0.96, green: 0.77, blue: 0.20) }
+        return fallback
+    }
+
     private func formatCount(_ value: Int) -> String {
         value.formatted()
     }
@@ -462,9 +966,50 @@ struct UsageView: View {
         return (formatter.string(from: NSNumber(value: n)) ?? "\(n)") + "B"
     }
 
+    private func formatPercent(_ value: Double) -> String {
+        if abs(value.rounded() - value) < 0.05 {
+            return "\(Int(value.rounded()))%"
+        }
+        return String(format: "%.1f%%", value)
+    }
+
+    private func formatWindow(_ minutes: Int) -> String {
+        if minutes >= 1_440, minutes % 1_440 == 0 {
+            return "\(minutes / 1_440)d window"
+        }
+        if minutes >= 60, minutes % 60 == 0 {
+            return "\(minutes / 60)h window"
+        }
+        return "\(minutes)m window"
+    }
+
+    private func formatLimitDuration(_ minutes: Int) -> String {
+        if minutes >= 1_440, minutes % 1_440 == 0 {
+            let days = minutes / 1_440
+            return days == 7 ? "Week" : "\(days)d"
+        }
+        if minutes >= 60, minutes % 60 == 0 {
+            return "\(minutes / 60)h"
+        }
+        return "\(minutes)m"
+    }
+
+    private func formatCredits(_ value: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 2
+        return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    }
+
     private func relativeTime(_ date: Date) -> String {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
         return formatter.localizedString(for: date, relativeTo: .now)
+    }
+
+    private func absoluteTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d, h:mm a"
+        return formatter.string(from: date)
     }
 }

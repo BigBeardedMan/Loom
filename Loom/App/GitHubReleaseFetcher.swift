@@ -9,15 +9,24 @@ import Foundation
 /// unauthenticated rate limit (60 req/hr/IP) is well above what we need.
 ///
 /// **Integrity:** Every release MUST publish a `<dmg-name>.sha256` asset
-/// and a `<dmg-name>.sha256.sig` signature made with Loom's embedded release
-/// signing key. The checksum catches corruption; the signature is the trust
-/// check that prevents a replaced GitHub asset from being installed.
+/// containing the SHA-256 of the DMG (hex, optionally followed by whitespace
+/// and the filename — `shasum`/`sha256sum` output works as-is). The fetcher
+/// downloads the DMG, computes its SHA-256, and refuses to mount if the
+/// hash doesn't match or the checksum asset is missing. Without this, an
+/// attacker who compromises the GitHub release (stolen PAT, MITM'd CDN)
+/// could replace the DMG with arbitrary code and Loom would silently install
+/// it at `/Applications/Loom.app`.
 enum GitHubReleaseFetcher {
     struct Release {
-        /// Tag as published, e.g. "v1.0.0".
+        /// Tag as published. Main line uses `v1.0.0`; Testing Edition uses
+        /// `testing-3.3.0` and similar.
         var tag: String
-        /// Tag with the leading "v" stripped, e.g. "1.0.0". Used for compare.
-        var versionTag: String { tag.hasPrefix("v") ? String(tag.dropFirst()) : tag }
+        /// Tag with the well-known prefix stripped. For `v1.0.0` this is
+        /// `1.0.0`; for `testing-3.3.0` it's `3.3.0`. The result is what we
+        /// compare against the running app's `CFBundleShortVersionString`.
+        var versionTag: String {
+            GitHubReleaseFetcher.releaseVersionTag(from: tag)
+        }
         var assets: [Asset]
 
         /// First .dmg asset on the release (we publish exactly one per tag).
@@ -78,8 +87,13 @@ enum GitHubReleaseFetcher {
         var request = URLRequest(url: url)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("Loom-Updater", forHTTPHeaderField: "User-Agent")
-        // 10s timeout — we'd rather drop a poll than block the loop.
-        request.timeoutInterval = 10
+        // 8.0.18: 30s timeout (was 10s). The previous 10s budget timed
+        // out on slower networks and DNS-laggy connections; the user's
+        // logs showed NSURLErrorDomain -1001 hitting repeatedly even
+        // though the API itself was up. 30s is conservative enough for
+        // typical home internet variability while still letting us
+        // surface real outages within a minute.
+        request.timeoutInterval = 30
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
@@ -90,6 +104,45 @@ enum GitHubReleaseFetcher {
         }
 
         let payload = try JSONDecoder().decode(LatestReleasePayload.self, from: data)
+        return release(from: payload)
+    }
+
+    /// Walks the most recent 30 releases (including pre-releases, which is
+    /// what `/releases/latest` deliberately excludes) and returns the highest
+    /// semver whose tag starts with `tagPrefix`. GitHub's release list is not
+    /// always ordered by publish time after release edits/reuses, so trusting
+    /// the first matching `testing-*` tag can strand clients on an older
+    /// release. Returns nil when no matching release exists.
+    static func fetchLatestPrerelease(repo: String, tagPrefix: String) async throws -> Release? {
+        let url = URL(string: "https://api.github.com/repos/\(repo)/releases?per_page=30")!
+        var request = URLRequest(url: url)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("Loom-Updater", forHTTPHeaderField: "User-Agent")
+        // 8.0.18: 30s (was 10s). See note on fetchLatest above.
+        request.timeoutInterval = 30
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw FetcherError.malformedPayload
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw FetcherError.badStatus(http.statusCode)
+        }
+
+        let payloads = try JSONDecoder().decode([LatestReleasePayload].self, from: data)
+        let matchingPayloads = payloads.filter { $0.tag_name.hasPrefix(tagPrefix) }
+        guard let payload = matchingPayloads.max(by: { lhs, rhs in
+            isNewer(
+                tag: releaseVersionTag(from: rhs.tag_name),
+                than: releaseVersionTag(from: lhs.tag_name)
+            )
+        }) else {
+            return nil
+        }
+        return release(from: payload)
+    }
+
+    private static func release(from payload: LatestReleasePayload) -> Release {
         let assets = payload.assets.compactMap { asset -> Asset? in
             guard let url = URL(string: asset.browser_download_url) else { return nil }
             return Asset(name: asset.name, url: url)
@@ -117,6 +170,17 @@ enum GitHubReleaseFetcher {
         // Strip pre-release / build suffix; we only care about the numeric prefix.
         let core = s.split(whereSeparator: { $0 == "-" || $0 == "+" }).first.map(String.init) ?? s
         return core.split(separator: ".").map { Int($0) ?? 0 }
+    }
+
+    private static func releaseVersionTag(from tag: String) -> String {
+        var stripped = tag
+        if stripped.hasPrefix("testing-") {
+            stripped = String(stripped.dropFirst("testing-".count))
+        }
+        if stripped.hasPrefix("v") {
+            stripped = String(stripped.dropFirst())
+        }
+        return stripped
     }
 
     // MARK: - Stage
@@ -301,7 +365,8 @@ enum GitHubReleaseFetcher {
     /// the full line or just the hex (some publishers emit only the digest).
     private static func fetchChecksumBody(at url: URL) async throws -> Data {
         var request = URLRequest(url: url)
-        request.timeoutInterval = 10
+        // 8.0.18: 30s (was 10s). See note on fetchLatest above.
+        request.timeoutInterval = 30
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw FetcherError.badStatus(http.statusCode)

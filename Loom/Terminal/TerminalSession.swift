@@ -11,7 +11,7 @@ import UniformTypeIdentifiers
 @Observable
 @MainActor
 final class TerminalSession: Identifiable {
-    let id = UUID()
+    let id: UUID
     var cwd: URL
     var lastReportedTitle: String = ""
 
@@ -19,10 +19,19 @@ final class TerminalSession: Identifiable {
     /// keeps its scrollback and child process across SwiftUI mount cycles.
     let terminalView: LoomTerminalView
     private let bridge: ProcessBridge
+    private var transcriptStore: TerminalTranscriptStore?
+    private var transcriptRecorder: TerminalTranscriptRecorder?
+    private var pendingTranscriptRestore: TerminalTranscriptRestore?
     private var hasStarted = false
 
-    init(cwd: URL = FileManager.default.homeDirectoryForCurrentUser) {
+    init(
+        sessionID: UUID = UUID(),
+        cwd: URL = FileManager.default.homeDirectoryForCurrentUser,
+        restoredTranscript: TerminalTranscriptRestore? = nil
+    ) {
+        self.id = sessionID
         self.cwd = cwd
+        self.pendingTranscriptRestore = restoredTranscript
         self.terminalView = LoomTerminalView(
             frame: NSRect(x: 0, y: 0, width: 800, height: 480)
         )
@@ -41,6 +50,7 @@ final class TerminalSession: Identifiable {
         // Pass argv[0] as "-zsh" so the shell treats itself as a login shell
         // and runs zprofile/zshrc — that's where Homebrew's PATH lands.
         let execName = "-" + (shellPath as NSString).lastPathComponent
+        feedRestoredTranscriptIfNeeded()
         terminalView.startProcess(
             executable: shellPath,
             args: ["-l"],
@@ -73,13 +83,78 @@ final class TerminalSession: Identifiable {
         }
     }
 
+    private func feedRestoredTranscriptIfNeeded() {
+        guard let restore = pendingTranscriptRestore else { return }
+        pendingTranscriptRestore = nil
+
+        let body = Self.terminalOutputText(restore.transcriptText)
+        let title = restore.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayTitle = title.isEmpty ? "Terminal Session" : title
+        let header = "\u{1B}[2m--- Restored \(displayTitle) from Recently Closed ---\u{1B}[0m\r\n"
+        let trimNotice = Self.restoreTrimNotice(restore)
+        let footer = "\r\n\u{1B}[2m--- Fresh shell starts below. Reconnect or relaunch commands when ready. ---\u{1B}[0m\r\n"
+        terminalView.feed(text: header + trimNotice + body + footer)
+    }
+
+    private static func restoreTrimNotice(_ restore: TerminalTranscriptRestore) -> String {
+        guard restore.wasTruncated else { return "" }
+        let imported = ByteCountFormatter.string(
+            fromByteCount: Int64(restore.importedByteLimit),
+            countStyle: .file
+        )
+        let total = ByteCountFormatter.string(
+            fromByteCount: restore.transcriptByteCount,
+            countStyle: .file
+        )
+        return "\u{1B}[2m--- Imported latest \(imported) of \(total). Open transcript preview for the saved file. ---\u{1B}[0m\r\n"
+    }
+
+    private static func terminalOutputText(_ text: String) -> String {
+        let normalized = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let trimmed = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = trimmed.isEmpty ? "(empty transcript)" : normalized
+        return body
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .joined(separator: "\r\n")
+    }
+
     /// Send a Ctrl-C to whatever is running.
     func sendInterrupt() {
         terminalView.send(txt: "\u{03}")
     }
 
     func cleanup() {
+        transcriptStore?.close(sessionID: id)
+        transcriptRecorder?.close()
+        transcriptRecorder = nil
+        terminalView.transcriptRecorder = nil
         terminalView.terminate()
+    }
+
+    func attachTranscriptStore(
+        _ store: TerminalTranscriptStore,
+        workspaceID: UUID?,
+        workspaceName: String?,
+        title: String
+    ) {
+        guard TerminalTranscriptStore.persistenceEnabled else { return }
+        if transcriptStore === store, transcriptRecorder != nil {
+            store.update(sessionID: id, cwd: cwd, title: title)
+            return
+        }
+        transcriptStore = store
+        let url = store.register(
+            sessionID: id,
+            workspaceID: workspaceID,
+            workspaceName: workspaceName,
+            cwd: cwd,
+            title: title
+        )
+        let recorder = TerminalTranscriptRecorder(url: url, sessionID: id)
+        transcriptRecorder = recorder
+        terminalView.transcriptRecorder = recorder
     }
 
     var tabLabel: String {
@@ -119,10 +194,9 @@ final class TerminalSession: Identifiable {
         return Self.knownCLIAgents.contains(cmd)
     }
 
-    /// CLI agents whose foreground state we recognize. Drives both the
-    /// "active session" badge above and the click-to-position cursor logic
-    /// in `LoomTerminalView` below.
-    static let knownCLIAgents: Set<String> = ["claude", "codex", "gemini"]
+    /// CLI agents whose foreground state we recognize for the active-session
+    /// badge and terminal prompt click-to-position behavior.
+    static let knownCLIAgents: Set<String> = ["claude", "codex", "gemini", "lmstudio"]
 
     fileprivate static func processName(pid: pid_t) -> String? {
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
@@ -150,6 +224,12 @@ final class TerminalSession: Identifiable {
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else { return }
         let url = URL(fileURLWithPath: path).standardized
         if url != cwd { cwd = url }
+        transcriptStore?.update(sessionID: id, cwd: url)
+    }
+
+    fileprivate func updateReportedTitle(_ title: String) {
+        lastReportedTitle = title
+        transcriptStore?.update(sessionID: id, title: title)
     }
 
     private func configureAppearance() {
@@ -233,11 +313,12 @@ final class TerminalSession: Identifiable {
 /// Drop those tiny frames and only forward real ones.
 ///
 /// Also hosts the click-to-position-cursor gesture: when the user single-
-/// clicks on the same row as the shell cursor we send ESC[C / ESC[D bytes
-/// to walk the cursor to the clicked column — same UX as Warp/iTerm2 with
-/// shell integration. Implemented as a gesture recognizer (not a mouseDown
-/// override) because SwiftTerm's `mouseDown` isn't `open`.
+/// clicks near editable terminal input we send arrow-key bytes to walk the
+/// cursor to the clicked cell. Implemented as a gesture recognizer (not a
+/// mouseDown override) because SwiftTerm's `mouseDown` isn't `open`.
 final class LoomTerminalView: LocalProcessTerminalView {
+    var transcriptRecorder: TerminalTranscriptRecorder?
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         installClickToPosition()
@@ -252,6 +333,47 @@ final class LoomTerminalView: LocalProcessTerminalView {
     override func setFrameSize(_ newSize: NSSize) {
         guard newSize.width >= 80, newSize.height >= 40 else { return }
         super.setFrameSize(newSize)
+    }
+
+    override func dataReceived(slice: ArraySlice<UInt8>) {
+        transcriptRecorder?.append(slice)
+        super.dataReceived(slice: slice)
+    }
+
+    @MainActor
+    func insertDictationText(_ text: String) -> Bool {
+        guard window != nil, process.childfd >= 0 else { return false }
+        DictationTerminalTargetRegistry.shared.noteActiveTerminal(self)
+        send(txt: text)
+        return true
+    }
+
+    @MainActor
+    func replaceDictationText(previous: String, next: String) -> Bool {
+        guard window != nil, process.childfd >= 0 else { return false }
+        DictationTerminalTargetRegistry.shared.noteActiveTerminal(self)
+
+        let sharedPrefix = Self.commonPrefixLength(previous, next)
+        let deleteCount = previous.dropFirst(sharedPrefix).count
+        let suffix = String(next.dropFirst(sharedPrefix))
+        guard deleteCount > 0 || !suffix.isEmpty else { return true }
+
+        send(txt: String(repeating: "\u{7F}", count: deleteCount) + suffix)
+        return true
+    }
+
+    private static func commonPrefixLength(_ lhs: String, _ rhs: String) -> Int {
+        var count = 0
+        var lhsIndex = lhs.startIndex
+        var rhsIndex = rhs.startIndex
+        while lhsIndex < lhs.endIndex,
+              rhsIndex < rhs.endIndex,
+              lhs[lhsIndex] == rhs[rhsIndex] {
+            count += 1
+            lhs.formIndex(after: &lhsIndex)
+            rhs.formIndex(after: &rhsIndex)
+        }
+        return count
     }
 
     // MARK: - Pasteboard
@@ -525,6 +647,7 @@ final class LoomTerminalView: LocalProcessTerminalView {
     }
 
     @objc private func handleSingleClick(_ recognizer: NSClickGestureRecognizer) {
+        DictationTerminalTargetRegistry.shared.noteActiveTerminal(self)
         // Skip when the click had any modifier — those are reserved for
         // selection (shift), word lookup (command), etc.
         if let event = NSApp.currentEvent,
@@ -557,12 +680,9 @@ final class LoomTerminalView: LocalProcessTerminalView {
         let clampedCol = max(0, min(clickedCol, term.cols - 1))
         let colDelta = clampedCol - cursorCol
 
-        // Same-row clicks stay safe for any prompt (shell, TUI). Cross-row
-        // clicks only fire when a CLI agent owns the PTY — sending up/down
-        // arrows into zsh would walk command history, not move the cursor.
+        guard canClickToPositionForeground else { return }
         if rowDelta != 0 {
-            guard abs(rowDelta) <= Self.verticalClickRadius,
-                  isInteractiveTUIForeground else { return }
+            guard abs(rowDelta) <= Self.verticalClickRadius else { return }
         }
         guard rowDelta != 0 || colDelta != 0 else { return }
 
@@ -580,17 +700,39 @@ final class LoomTerminalView: LocalProcessTerminalView {
         send(txt: sequence)
     }
 
-    /// True when a known CLI agent (claude/codex/gemini) is the foreground
-    /// process — i.e. up/down arrows are safe to send as visual cursor moves
-    /// rather than being interpreted as shell history navigation.
-    private var isInteractiveTUIForeground: Bool {
-        let fd = process.childfd
-        guard fd >= 0 else { return false }
-        let pgid = tcgetpgrp(fd)
-        guard pgid > 0 else { return false }
-        guard let name = TerminalSession.processName(pid: pgid)?.lowercased() else { return false }
-        return TerminalSession.knownCLIAgents.contains(name)
+    /// True when the foreground process is a prompt-style shell/agent where
+    /// arrow-key cursor walking is expected. Full-screen apps and mouse-aware
+    /// TUIs keep ownership of clicks.
+    private var canClickToPositionForeground: Bool {
+        guard let name = foregroundProcessName else { return false }
+        if Self.clickToPositionBlockedCommands.contains(name) { return false }
+        guard terminal.mouseMode == .off || TerminalSession.knownCLIAgents.contains(name) else {
+            return false
+        }
+        return Self.clickToPositionAllowedCommands.contains(name)
+            || TerminalSession.knownCLIAgents.contains(name)
     }
+
+    private var foregroundProcessName: String? {
+        let fd = process.childfd
+        guard fd >= 0 else { return nil }
+        let pgid = tcgetpgrp(fd)
+        guard pgid > 0 else { return nil }
+        guard let name = TerminalSession.processName(pid: pgid)?.lowercased() else { return nil }
+        return name
+    }
+
+    private static let clickToPositionAllowedCommands: Set<String> = [
+        "bash", "dash", "fish", "irb", "ksh", "lua", "mysql", "node",
+        "psql", "python", "python3", "redis-cli", "ruby", "sh", "sqlite3",
+        "tcsh", "zsh"
+    ]
+
+    private static let clickToPositionBlockedCommands: Set<String> = [
+        "btop", "emacs", "fzf", "htop", "lazygit", "less", "man",
+        "more", "nano", "nvim", "screen", "scp", "sftp", "ssh",
+        "tail", "tmux", "top", "vi", "vim", "watch"
+    ]
 
     /// Mirrors SwiftTerm's internal `computeFontDimensions`: cell width is the
     /// "W" advancement, cell height is ascent + descent + leading. Snapped to
@@ -626,7 +768,7 @@ private final class ProcessBridge: NSObject, LocalProcessTerminalViewDelegate {
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
         let session = self.session
         Task { @MainActor in
-            session?.lastReportedTitle = title
+            session?.updateReportedTitle(title)
         }
     }
 

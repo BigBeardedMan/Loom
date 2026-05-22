@@ -4,7 +4,7 @@
 :root {
   color-scheme: dark light;
 
-  --color-loom-bg-from: #050608;
+  --color-loom-bg-from: #050607;
   --color-loom-bg-to: #090a0b;
   --color-loom-panel: rgba(14, 15, 18, 0.92);
   --color-loom-soft-panel: rgba(22, 25, 32, 0.9);
@@ -15,21 +15,21 @@
   --color-loom-text-muted: rgba(255, 255, 255, 0.55);
   --color-loom-text-tertiary: rgba(255, 255, 255, 0.35);
 
-  --color-ws-orange: #f24620;
-  --color-ws-green: #3adb75;
-  --color-ws-blue: #2d80f5;
-  --color-ws-pink: #f23388;
-  --color-ws-yellow: #f5c533;
-  --color-ws-purple: #9e57f0;
+  --color-ws-orange: #f2632e;
+  --color-ws-green: #3bdb75;
+  --color-ws-blue: #2e80f5;
+  --color-ws-pink: #f2338c;
+  --color-ws-yellow: #f5c433;
+  --color-ws-purple: #9e66f2;
   --color-loom-accent: var(--color-ws-blue);
 
-  --radius-panel: 14px;
+  --radius-panel: 12px;
   --radius-row: 8px;
-  --radius-control: 6px;
+  --radius-control: 7px;
 
-  --shadow-panel: 0 12px 18px rgba(0, 0, 0, 0.28);
-  --shadow-panel-drag: 0 18px 28px rgba(0, 0, 0, 0.55);
-  --shadow-pill: 0 4px 8px rgba(58, 219, 117, 0.5);
+  --shadow-panel: 0 10px 22px rgba(0, 0, 0, 0.30);
+  --shadow-panel-drag: 0 18px 34px rgba(0, 0, 0, 0.55);
+  --shadow-pill: 0 4px 10px rgba(59, 219, 117, 0.44);
 
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Segoe UI Variable",
     "SF Pro Text", system-ui, sans-serif;
@@ -94,10 +94,28 @@ body {
     var(--color-loom-bg-to)
   );
   background-attachment: fixed;
+  overflow: hidden;
 }
 
 * {
   box-sizing: border-box;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  appearance: none;
+  background: none;
+  border: 0;
+}
+
+button:not(:disabled) {
+  cursor: pointer;
 }
 
 .no-select {
@@ -135,4 +153,3 @@ body {
 .xterm-viewport {
   background: transparent !important;
 }
-

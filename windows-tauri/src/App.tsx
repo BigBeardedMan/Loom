@@ -6,23 +6,18 @@ import { WorkspaceView } from "./modules/workspace/WorkspaceView";
 import { CommandPalette } from "./modules/workspace/CommandPalette";
 import { SettingsModal } from "./modules/settings/SettingsModal";
 import { Titlebar } from "./components/Titlebar";
+import { LoomPanel } from "./components/LoomPanel";
 import { ipc, type CrashReport } from "./lib/ipc";
 import { ErrorBoundary } from "./modules/crash/ErrorBoundary";
 import { CrashModal } from "./modules/crash/CrashModal";
-import { OnboardingModal, shouldShowOnboarding } from "./modules/onboarding/OnboardingModal";
+import { cockpit, sidebar } from "./lib/theme";
 
 function App() {
   const loadWorkspaces = useApp((s) => s.loadWorkspaces);
   const setUpdatePill = useApp((s) => s.setUpdatePill);
-  const workspaces = useApp((s) => s.workspaces);
   const [crash, setCrash] = useState<CrashReport | null>(null);
-  const [onboarding, setOnboarding] = useState(false);
 
   useGlobalKeymap();
-
-  useEffect(() => {
-    setOnboarding(shouldShowOnboarding(workspaces.length));
-  }, [workspaces.length]);
 
   useEffect(() => {
     loadWorkspaces();
@@ -79,18 +74,29 @@ function App() {
 
   return (
     <ErrorBoundary>
-      <div className="flex h-full w-full flex-col" style={{ color: "var(--color-loom-text)" }}>
+      <div
+        className="flex h-full w-full flex-col overflow-hidden"
+        style={{
+          color: "var(--color-loom-text)",
+          padding: cockpit.outerPadding,
+          gap: 10,
+        }}
+      >
         <Titlebar />
-        <div className="flex flex-1 min-h-0">
-          <WorkspaceSidebar />
-          <main className="flex-1 min-w-0 min-h-0">
+        <div className="flex flex-1 min-h-0" style={{ gap: cockpit.gap }}>
+          <LoomPanel
+            noShadow
+            style={{ width: sidebar.width, flex: "none" }}
+          >
+            <WorkspaceSidebar />
+          </LoomPanel>
+          <LoomPanel noShadow className="flex-1 min-w-0 min-h-0">
             <WorkspaceView />
-          </main>
+          </LoomPanel>
         </div>
         <CommandPalette />
         <SettingsModal />
         {crash && <CrashModal report={crash} onClose={() => setCrash(null)} />}
-        {onboarding && <OnboardingModal onDone={() => setOnboarding(false)} />}
       </div>
     </ErrorBoundary>
   );

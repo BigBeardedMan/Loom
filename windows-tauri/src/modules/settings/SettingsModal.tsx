@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Icons } from "../../lib/icons";
 import { useApp } from "../../lib/store";
-import { ipc, type LocalEndpoint, type McpServer } from "../../lib/ipc";
+import { ipc, type EndpointKind, type LocalEndpoint, type McpServer } from "../../lib/ipc";
 import { modal, radius, surface, text } from "../../lib/theme";
 
 type Tab = "appearance" | "providers" | "mcp" | "shell" | "tasks" | "advanced" | "about";
@@ -26,7 +26,7 @@ export function SettingsModal() {
       onClick={close}
     >
       <div
-        className="flex overflow-hidden"
+        className="relative flex overflow-hidden"
         style={{
           width: modal.settings.width,
           height: modal.settings.height,
@@ -37,6 +37,22 @@ export function SettingsModal() {
         }}
         onClick={(e) => e.stopPropagation()}
       >
+        <button
+          onClick={close}
+          className="absolute rounded p-1 transition-colors"
+          style={{
+            top: 10,
+            right: 10,
+            zIndex: 2,
+            color: text.muted,
+            background: surface.inset,
+            border: `1px solid ${surface.hairline}`,
+          }}
+          aria-label="Close settings"
+          title="Close settings"
+        >
+          <Icons.close size={13} strokeWidth={2} />
+        </button>
         <aside
           className="flex flex-col flex-none"
           style={{
@@ -46,19 +62,8 @@ export function SettingsModal() {
             borderRight: `1px solid ${surface.hairline}`,
           }}
         >
-          <div
-            className="flex items-center justify-between"
-            style={{ padding: "4px 6px 8px" }}
-          >
+          <div className="flex items-center" style={{ padding: "4px 6px 8px" }}>
             <span className="section-header">Settings</span>
-            <button
-              onClick={close}
-              className="rounded p-0.5"
-              style={{ color: text.muted }}
-              aria-label="Close"
-            >
-              <Icons.close size={12} strokeWidth={2} />
-            </button>
           </div>
           {(
             [
@@ -91,7 +96,10 @@ export function SettingsModal() {
             </button>
           ))}
         </aside>
-        <main className="flex-1 overflow-y-auto scrollbar-thin" style={{ padding: 24 }}>
+        <main
+          className="flex-1 overflow-y-auto scrollbar-thin"
+          style={{ padding: "28px 24px 24px" }}
+        >
           {tab === "appearance" && <AppearancePanel />}
           {tab === "providers" && <ProvidersPanel />}
           {tab === "mcp" && <McpPanel />}
@@ -105,7 +113,7 @@ export function SettingsModal() {
   );
 }
 
-function H2({ children }: { children: React.ReactNode }) {
+function H2({ children }: { children: ReactNode }) {
   return (
     <h2
       style={{
@@ -120,12 +128,55 @@ function H2({ children }: { children: React.ReactNode }) {
   );
 }
 
-function Hint({ children }: { children: React.ReactNode }) {
+function Hint({ children }: { children: ReactNode }) {
   return (
     <p style={{ fontSize: 11, color: text.muted, marginBottom: 12, lineHeight: 1.5 }}>
       {children}
     </p>
   );
+}
+
+const ENDPOINT_KINDS: { value: EndpointKind; label: string }[] = [
+  { value: "ollama", label: "Ollama" },
+  { value: "lmstudio", label: "LM Studio" },
+  { value: "openai-compat", label: "OpenAI-compatible" },
+];
+
+function endpointKindLabel(kind: EndpointKind): string {
+  return ENDPOINT_KINDS.find((entry) => entry.value === kind)?.label ?? kind;
+}
+
+function defaultBaseUrl(kind: EndpointKind): string {
+  switch (kind) {
+    case "ollama":
+      return "http://localhost:11434";
+    case "lmstudio":
+      return "http://localhost:1234/v1";
+    case "openai-compat":
+      return "https://api.example.com";
+  }
+}
+
+function defaultEndpointName(kind: EndpointKind): string {
+  switch (kind) {
+    case "ollama":
+      return "Local Ollama";
+    case "lmstudio":
+      return "LM Studio";
+    case "openai-compat":
+      return "OpenAI-compatible";
+  }
+}
+
+function defaultModelPlaceholder(kind: EndpointKind): string {
+  switch (kind) {
+    case "ollama":
+      return "llama3.2";
+    case "lmstudio":
+      return "auto-discovered via /api/v0/models";
+    case "openai-compat":
+      return "gpt-4o-mini";
+  }
 }
 
 function AppearancePanel() {
@@ -273,8 +324,8 @@ function ProvidersPanel() {
           <button
             onClick={() =>
               setEditing({
-                name: "",
-                baseUrl: "",
+                name: defaultEndpointName("ollama"),
+                baseUrl: defaultBaseUrl("ollama"),
                 kind: "ollama",
                 defaultModel: "",
                 requiresAuth: false,
@@ -293,10 +344,32 @@ function ProvidersPanel() {
           >
             + Add endpoint
           </button>
+          <button
+            onClick={() =>
+              setEditing({
+                name: defaultEndpointName("lmstudio"),
+                baseUrl: defaultBaseUrl("lmstudio"),
+                kind: "lmstudio",
+                defaultModel: "",
+                requiresAuth: false,
+                authToken: "",
+              })
+            }
+            style={{
+              padding: "4px 10px",
+              fontSize: 11,
+              borderRadius: 6,
+              background: "rgba(255,255,255,0.06)",
+              color: text.primary,
+              border: `1px solid ${surface.hairline}`,
+            }}
+          >
+            Add LM Studio
+          </button>
         </div>
         <Hint>
-          Add an Ollama (<code>http://localhost:11434</code>) or any OpenAI-compatible base URL.
-          Auth tokens (if any) live in Credential Manager.
+          Add Ollama, LM Studio (<code>http://localhost:1234/v1</code>), or any
+          OpenAI-compatible base URL. Auth tokens (if any) live in Credential Manager.
         </Hint>
         {endpoints.length === 0 ? (
           <div
@@ -353,7 +426,7 @@ type EndpointDraft = {
   id?: string;
   name: string;
   baseUrl: string;
-  kind: "ollama" | "openai-compat";
+  kind: EndpointKind;
   defaultModel: string;
   requiresAuth: boolean;
   authToken: string;
@@ -410,7 +483,7 @@ function EndpointRow({
             fontWeight: 600,
           }}
         >
-          {endpoint.kind}
+          {endpointKindLabel(endpoint.kind)}
         </span>
         <button
           onClick={test}
@@ -492,7 +565,7 @@ function EndpointEditor({
 }) {
   const [name, setName] = useState(draft.name);
   const [baseUrl, setBaseUrl] = useState(draft.baseUrl);
-  const [kind, setKind] = useState<"ollama" | "openai-compat">(draft.kind);
+  const [kind, setKind] = useState<EndpointKind>(draft.kind);
   const [defaultModel, setDefaultModel] = useState(draft.defaultModel);
   const [requiresAuth, setRequiresAuth] = useState(draft.requiresAuth);
   const [authToken, setAuthToken] = useState(draft.authToken);
@@ -528,6 +601,18 @@ function EndpointEditor({
     }
   };
 
+  const changeKind = (next: EndpointKind) => {
+    const previousDefaultName = defaultEndpointName(kind);
+    const previousDefaultBaseUrl = defaultBaseUrl(kind);
+    setKind(next);
+    if (!name.trim() || name === previousDefaultName) {
+      setName(defaultEndpointName(next));
+    }
+    if (!baseUrl.trim() || baseUrl === previousDefaultBaseUrl) {
+      setBaseUrl(defaultBaseUrl(next));
+    }
+  };
+
   return (
     <div
       role="dialog"
@@ -557,16 +642,16 @@ function EndpointEditor({
               autoFocus
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Local Ollama"
+              placeholder={defaultEndpointName(kind)}
               style={fieldStyle}
             />
           </Field>
           <Field label="Kind">
             <div className="flex gap-1.5">
-              {(["ollama", "openai-compat"] as const).map((k) => (
+              {ENDPOINT_KINDS.map(({ value: k, label }) => (
                 <button
                   key={k}
-                  onClick={() => setKind(k)}
+                  onClick={() => changeKind(k)}
                   style={{
                     flex: 1,
                     padding: "5px 8px",
@@ -582,7 +667,7 @@ function EndpointEditor({
                     color: k === kind ? text.primary : text.muted,
                   }}
                 >
-                  {k === "ollama" ? "Ollama" : "OpenAI-compatible"}
+                  {label}
                 </button>
               ))}
             </div>
@@ -591,9 +676,7 @@ function EndpointEditor({
             <input
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder={
-                kind === "ollama" ? "http://localhost:11434" : "https://api.example.com"
-              }
+              placeholder={defaultBaseUrl(kind)}
               style={fieldStyle}
             />
           </Field>
@@ -601,7 +684,7 @@ function EndpointEditor({
             <input
               value={defaultModel}
               onChange={(e) => setDefaultModel(e.target.value)}
-              placeholder={kind === "ollama" ? "llama3.2" : "gpt-4o-mini"}
+              placeholder={defaultModelPlaceholder(kind)}
               style={fieldStyle}
             />
           </Field>
@@ -692,7 +775,7 @@ const fieldStyle: React.CSSProperties = {
   outline: "none",
 };
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
       <label
@@ -973,6 +1056,10 @@ function McpAddModal({
 function ShellPanel() {
   const [path, setPath] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
+  const [historyEnabled, setHistoryEnabled] = useState(true);
+  const [historyLimit, setHistoryLimit] = useState(1_073_741_824);
+  const [historyBytes, setHistoryBytes] = useState(0);
+  const [historyFolder, setHistoryFolder] = useState("");
 
   const install = async () => {
     setInstalling(true);
@@ -984,37 +1071,145 @@ function ShellPanel() {
     }
   };
 
+  const refreshHistory = async () => {
+    const config = await ipc.terminalTranscripts.config();
+    setHistoryEnabled(config.enabled);
+    setHistoryLimit(config.maxBytes);
+    setHistoryBytes(config.totalBytes);
+    setHistoryFolder(config.baseDir);
+  };
+
+  useEffect(() => {
+    refreshHistory().catch(() => {});
+  }, []);
+
+  const updateHistory = async (patch: { enabled?: boolean; maxBytes?: number }) => {
+    const config = await ipc.terminalTranscripts.setConfig(patch);
+    setHistoryEnabled(config.enabled);
+    setHistoryLimit(config.maxBytes);
+    setHistoryBytes(config.totalBytes);
+    setHistoryFolder(config.baseDir);
+  };
+
+  const pruneHistory = async () => {
+    if (!confirm("Prune saved terminal history? Active terminals keep running.")) return;
+    await ipc.terminalTranscripts.prune();
+    await refreshHistory();
+  };
+
   return (
-    <div>
-      <H2>Shell Integration</H2>
-      <Hint>
-        Installs a PowerShell profile hook recording every command to{" "}
-        <code style={{ fontFamily: "var(--font-mono)" }}>%LOCALAPPDATA%\Loom\history.jsonl</code>{" "}
-        for the Commands pane and the agent.
-      </Hint>
-      <button
-        onClick={install}
-        disabled={installing}
-        style={{
-          background: "var(--color-loom-accent)",
-          color: "white",
-          borderRadius: 8,
-          padding: "6px 14px",
-          fontSize: 12,
-          fontWeight: 500,
-          border: "none",
-          opacity: installing ? 0.5 : 1,
-        }}
-      >
-        {installing ? "Installing…" : path ? "Reinstall" : "Install"}
-      </button>
-      {path && (
-        <div style={{ marginTop: 10, fontSize: 11, color: text.tertiary }}>
-          Wrote to <code style={{ fontFamily: "var(--font-mono)" }}>{path}</code>
+    <div className="flex flex-col gap-6">
+      <section>
+        <H2>Shell Integration</H2>
+        <Hint>
+          Installs a PowerShell profile hook recording every command to{" "}
+          <code style={{ fontFamily: "var(--font-mono)" }}>%LOCALAPPDATA%\Loom\history.jsonl</code>{" "}
+          for the Commands pane and the agent.
+        </Hint>
+        <button
+          onClick={install}
+          disabled={installing}
+          style={{
+            background: "var(--color-loom-accent)",
+            color: "white",
+            borderRadius: 8,
+            padding: "6px 14px",
+            fontSize: 12,
+            fontWeight: 500,
+            border: "none",
+            opacity: installing ? 0.5 : 1,
+          }}
+        >
+          {installing ? "Installing…" : path ? "Reinstall" : "Install"}
+        </button>
+        {path && (
+          <div style={{ marginTop: 10, fontSize: 11, color: text.tertiary }}>
+            Wrote to <code style={{ fontFamily: "var(--font-mono)" }}>{path}</code>
+          </div>
+        )}
+      </section>
+
+      <section>
+        <H2>Terminal History</H2>
+        <Hint>
+          Saves full local PTY transcripts for Recently Closed restore, preview, and pruning.
+        </Hint>
+        <label className="flex items-center gap-2" style={{ fontSize: 12, color: text.primary }}>
+          <input
+            type="checkbox"
+            checked={historyEnabled}
+            onChange={(e) => updateHistory({ enabled: e.target.checked })}
+            style={{ accentColor: "var(--color-loom-accent)" }}
+          />
+          Save terminal transcripts locally
+        </label>
+        <label style={{ fontSize: 11, color: text.muted, display: "block", margin: "12px 0 6px" }}>
+          Storage limit
+        </label>
+        <select
+          value={historyLimit}
+          onChange={(e) => updateHistory({ maxBytes: Number(e.target.value) })}
+          style={{
+            background: "var(--color-loom-bg-from)",
+            border: `1px solid ${surface.hairline}`,
+            borderRadius: 8,
+            padding: "6px 10px",
+            fontSize: 12,
+            color: text.primary,
+          }}
+        >
+          <option value={250_000_000}>250 MB</option>
+          <option value={500_000_000}>500 MB</option>
+          <option value={1_073_741_824}>1 GB</option>
+          <option value={2_147_483_648}>2 GB</option>
+          <option value={5_368_709_120}>5 GB</option>
+          <option value={10_737_418_240}>10 GB</option>
+        </select>
+        <div style={{ marginTop: 12, fontSize: 11, color: text.muted }}>
+          Currently saved:{" "}
+          <code style={{ fontFamily: "var(--font-mono)", color: text.primary }}>
+            {formatBytes(historyBytes)}
+          </code>
         </div>
-      )}
+        <div className="flex gap-2" style={{ marginTop: 12 }}>
+          <button
+            onClick={pruneHistory}
+            style={{
+              padding: "6px 12px",
+              borderRadius: 8,
+              background: "rgba(242,99,46,0.13)",
+              border: "1px solid rgba(242,99,46,0.32)",
+              color: "rgb(242,99,46)",
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
+            Prune Terminal History
+          </button>
+          <button
+            onClick={() => historyFolder && ipc.shell.open(historyFolder)}
+            style={{
+              padding: "6px 12px",
+              borderRadius: 8,
+              background: "rgba(255,255,255,0.06)",
+              border: `1px solid ${surface.hairline}`,
+              color: text.primary,
+              fontSize: 12,
+            }}
+          >
+            Reveal History Folder
+          </button>
+        </div>
+      </section>
     </div>
   );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GB`;
+  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
 }
 
 const STALE_OPTIONS: { secs: number; label: string }[] = [
@@ -1276,10 +1471,10 @@ function AboutPanel() {
     <div>
       <H2>About Loom</H2>
       <div style={{ fontSize: 13, color: text.muted, marginBottom: 8 }}>
-        Version <span style={{ fontFamily: "var(--font-mono)", color: text.primary }}>{version}</span>
+        Build <span style={{ fontFamily: "var(--font-mono)", color: text.primary }}>{version}</span>
       </div>
       <Hint>
-        Workspace cockpit for Windows. Built with Tauri + Rust + React. Mirrors the macOS Loom feature surface.
+        Pre-release channel for the Windows workspace cockpit. Build codes are alphanumeric (first 10 chars of the source commit SHA) and the app installs alongside the main Loom build.
       </Hint>
     </div>
   );

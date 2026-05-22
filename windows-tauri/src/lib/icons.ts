@@ -44,6 +44,11 @@ import {
   Loader2,
   Check,
   Minus,
+  Mic,
+  Cpu,
+  Diamond,
+  Package,
+  Server,
 } from "lucide-react";
 
 export const Icons = {
@@ -89,6 +94,11 @@ export const Icons = {
   spinner: Loader2,
   check: Check,
   minimize: Minus,
+  mic: Mic,
+  cpu: Cpu,
+  diamond: Diamond,
+  package: Package,
+  server: Server,
 } as const;
 
 export type IconName = keyof typeof Icons;
