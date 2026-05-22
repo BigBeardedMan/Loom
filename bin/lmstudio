@@ -58,6 +58,7 @@ except ImportError:
 
 DEFAULT_BASE_URL = "http://localhost:1234/v1"
 DEFAULT_MAX_TURNS = 30
+CLI_VERSION = "8.2.82"
 TASK_ROOT = Path.home() / ".loom" / "tasks"
 SESSION_ROOT = Path.home() / ".loom" / "sessions"
 HISTORY_FILE = Path.home() / ".config" / "loom" / "lmstudio-history"
@@ -493,6 +494,121 @@ def close_prompt_box(user_input):
 # Boxed line editor (raw-mode replacement for input() inside the prompt box)
 # =============================================================================
 
+class TerminalKeyEvent:
+    __slots__ = ("kind", "value", "raw")
+
+    def __init__(self, kind, value="", raw=""):
+        self.kind = kind
+        self.value = value
+        self.raw = raw if raw else value
+
+
+class TerminalInputDecoder:
+    """Stateful terminal key decoder for raw-mode input.
+
+    Loom's SwiftTerm bridge can split arrow-key bytes across reads, and the
+    ESC byte may arrive far enough ahead of the trailing CSI payload that a
+    short peek treats the pieces as printable input. This decoder waits for
+    the complete control sequence before the line editor sees it.
+    """
+
+    SEQUENCE_TIMEOUT = 0.35
+    SINGLE_BYTE_CSI = "ABCDHFZ"
+    HANDLED_CSI_FINALS = set("ABCDHFZ~Mm")
+
+    def __init__(self, read_blocking, read_with_timeout,
+                 sequence_timeout=SEQUENCE_TIMEOUT):
+        self._read_blocking = read_blocking
+        self._read_with_timeout = read_with_timeout
+        self.sequence_timeout = sequence_timeout
+        self._pending = []
+
+    def read_event(self):
+        if self._pending:
+            ch = self._pending.pop(0)
+            return TerminalKeyEvent("char", ch, ch)
+        ch = self._read_blocking()
+        if not ch:
+            return None
+        if ch == "\x1b":
+            return self._decode_escape()
+        if ch == "\x9b":
+            return self._decode_csi("", "\x9b")
+        if ch == "[":
+            return self._decode_orphaned_csi()
+        return TerminalKeyEvent("char", ch, ch)
+
+    def has_pending(self):
+        return bool(self._pending)
+
+    def _wait(self):
+        return self._read_with_timeout(self.sequence_timeout)
+
+    def _pushback(self, text):
+        if text:
+            self._pending = list(text) + self._pending
+
+    def _decode_escape(self):
+        nxt = self._wait()
+        if nxt is None:
+            return TerminalKeyEvent("escape", raw="\x1b")
+        if nxt == "[":
+            return self._decode_csi("", "\x1b[")
+        if nxt == "O":
+            final = self._wait()
+            if final is None:
+                return TerminalKeyEvent("drop", raw="\x1bO")
+            if final in self.SINGLE_BYTE_CSI:
+                return TerminalKeyEvent("csi", final, "\x1bO" + final)
+            return TerminalKeyEvent("drop", raw="\x1bO" + final)
+        self._pushback(nxt)
+        return TerminalKeyEvent("escape", raw="\x1b")
+
+    def _decode_csi(self, first, raw_prefix):
+        tail = first
+        raw = raw_prefix + first
+        while not tail or not self._is_csi_final(tail[-1]):
+            ch = self._wait()
+            if ch is None:
+                return TerminalKeyEvent("drop", raw=raw)
+            tail += ch
+            raw += ch
+        return TerminalKeyEvent("csi", tail, raw)
+
+    def _decode_orphaned_csi(self):
+        nxt = self._wait()
+        if nxt is None:
+            return TerminalKeyEvent("char", "[", "[")
+        raw = "[" + nxt
+        if nxt in self.SINGLE_BYTE_CSI:
+            return TerminalKeyEvent("csi", nxt, raw)
+        if not self._is_csi_prefix_byte(nxt):
+            self._pushback(nxt)
+            return TerminalKeyEvent("char", "[", "[")
+
+        tail = nxt
+        while not self._is_csi_final(tail[-1]):
+            ch = self._wait()
+            if ch is None:
+                self._pushback(tail)
+                return TerminalKeyEvent("char", "[", "[")
+            tail += ch
+            raw += ch
+
+        if tail[-1] in self.HANDLED_CSI_FINALS:
+            return TerminalKeyEvent("csi", tail, raw)
+        self._pushback(tail)
+        return TerminalKeyEvent("char", "[", "[")
+
+    @staticmethod
+    def _is_csi_final(ch):
+        return bool(ch) and 0x40 <= ord(ch[-1]) <= 0x7e
+
+    @staticmethod
+    def _is_csi_prefix_byte(ch):
+        return bool(ch) and 0x20 <= ord(ch[-1]) <= 0x3f
+
+
 class BoxedLineEditor:
     """Reads one line of input inside a closed box that wraps to multiple
     rows as the user types. Implements enough readline-style chords to
@@ -515,7 +631,7 @@ class BoxedLineEditor:
 
     LEAD_VISIBLE = 4   # "│ ❯ " on first row
     CONT_VISIBLE = 4   # "│   " on continuation rows (aligned under text)
-    SINGLE_BYTE_CSI = "ABCDHFZ"
+    SINGLE_BYTE_CSI = TerminalInputDecoder.SINGLE_BYTE_CSI
 
     def __init__(self, history, state=None):
         self.history = list(history)
@@ -718,22 +834,6 @@ class BoxedLineEditor:
         self.col += len(text) if advance is None else advance
         self._render()
 
-    def _handle_orphaned_csi(self):
-        """Handle `[A`/`[B` when the terminal bridge drops the ESC byte.
-
-        Loom's PTY bridge can occasionally deliver the CSI payload after
-        the escape byte has already timed out in the editor. Without this,
-        arrow keys show up as literal `[A` and `[B` text.
-        """
-        seq = self._read_with_timeout(0.04)
-        if seq is None:
-            return False
-        if seq in self.SINGLE_BYTE_CSI:
-            self._handle_csi(seq)
-            return True
-        self._insert_text("[" + seq)
-        return True
-
     def _render(self):
         """Full redraw. Wipe the previously drawn box (cursor is inside it
         at self._cursor_box_row), then render top + content rows + bottom
@@ -823,10 +923,33 @@ class BoxedLineEditor:
     # --- main loop ------------------------------------------------------
 
     def _loop(self):
+        decoder = TerminalInputDecoder(
+            lambda: sys.stdin.read(1),
+            self._read_with_timeout,
+        )
         while True:
-            ch = sys.stdin.read(1)
-            if not ch:
+            event = decoder.read_event()
+            if event is None:
                 continue
+            if event.kind == "drop":
+                continue
+            if event.kind == "escape":
+                # Plain Esc after the decoder timeout: clear the current
+                # edit in place. Esc that begins an arrow/key sequence never
+                # reaches this branch.
+                if self.line:
+                    self.line = ""
+                    self.col = 0
+                    self._render()
+                continue
+            if event.kind == "csi":
+                if event.value == "200~":
+                    self._handle_paste()
+                else:
+                    self._handle_csi(event.value)
+                continue
+
+            ch = event.value
             o = ord(ch)
 
             if o in (0x0d, 0x0a):  # Enter
@@ -851,82 +974,6 @@ class BoxedLineEditor:
                 if self._complete_slash_selection(add_space=True):
                     continue
                 self._render()
-                continue
-
-            if o == 0x1b:  # Esc or start of CSI / SS3 sequence
-                # 8.0.3: bumped from 40ms -> 120ms. Slower terminals (SSH,
-                # tmux, certain GPU-accelerated emulators) can split the
-                # `\x1b` from the trailing `[A` by more than 40ms, which
-                # caused arrow keys to be misread as a plain Esc, wiping
-                # the user's in-progress line and silently swallowing the
-                # arrow. Also: handle SS3 prefix `\x1bOA` for terminals in
-                # application-cursor-key mode (some `screen`, tmux setups,
-                # and a few older xterm builds).
-                nxt = self._read_with_timeout(0.12)
-                if nxt is None:
-                    # Plain Esc: clear the current edit in place. The previous
-                    # behavior (raise to the REPL loop) drew a fresh empty
-                    # box on top of the existing one, leaving a stack.
-                    if self.line:
-                        self.line = ""
-                        self.col = 0
-                        self._render()
-                    continue
-                if nxt in ("[", "O"):
-                    seq = self._read_with_timeout(0.12)
-                    if not seq:
-                        # 8.0.4: incomplete escape sequence (Esc[ or EscO
-                        # with no trailing byte). Almost always terminal
-                        # latency splitting the arrow-key bytes; the user
-                        # did not intend to clear their input. Drop the
-                        # partial sequence and continue without touching
-                        # self.line. The prior behavior wiped the line
-                        # whenever a single CSI byte arrived just past the
-                        # 120ms window.
-                        continue
-                    # 8.0.15: single-byte CSI commands we actually handle
-                    # (arrow keys, Home/End, Shift+Tab). Anything else is
-                    # a multi-byte sequence that must be drained to its
-                    # terminator, otherwise the trailing bytes leak as
-                    # printable input.
-                    #
-                    # The canonical offender is SGR mouse: clicking in
-                    # the box emits `\x1b[<0;42;15M`, where `<` is the
-                    # CSI parameter prefix. Pre-8.0.15 the handler hit
-                    # `_handle_csi("<")` (a no-op), then read each of
-                    # `0;42;15M` as a separate character and inserted
-                    # them into self.line.
-                    if nxt == "[" and seq not in self.SINGLE_BYTE_CSI:
-                        # Multi-byte CSI. Drain until terminator: any
-                        # alpha (A-Z, a-z) or `~`. Common patterns:
-                        #   ESC[200~              bracketed paste start
-                        #   ESC[201~              bracketed paste end
-                        #   ESC[5~                Page Up
-                        #   ESC[1;5A              Ctrl-Up
-                        #   ESC[<0;42;15M         SGR mouse press
-                        #   ESC[<0;42;15m         SGR mouse release
-                        #   ESC[?2004h            bracketed paste enable
-                        tail = seq
-                        while True:
-                            ch2 = self._read_with_timeout(0.12)
-                            if ch2 is None:
-                                break
-                            tail += ch2
-                            if ch2 == "~" or ch2.isalpha():
-                                break
-                        if tail == "200~":
-                            self._handle_paste()
-                        elif tail.endswith("A"):
-                            if not self._cycle_slash_selection(-1):
-                                self._history_step(-1)
-                        elif tail.endswith("B"):
-                            if not self._cycle_slash_selection(+1):
-                                self._history_step(+1)
-                        # Mouse events (terminator M or m), DEC private
-                        # mode responses, function keys, etc. are
-                        # silently consumed without modifying the line.
-                    else:
-                        self._handle_csi(seq)
                 continue
 
             if o == 0x7f or o == 0x08:  # Backspace
@@ -968,8 +1015,6 @@ class BoxedLineEditor:
                 continue
 
             if o >= 32:  # printable
-                if ch == "[" and self._handle_orphaned_csi():
-                    continue
                 extra = 0
                 if o >= 0xf0:
                     extra = 3
@@ -1024,27 +1069,30 @@ class BoxedLineEditor:
         self._render()
 
     def _handle_csi(self, seq):
-        if seq == "A":
+        if not seq:
+            return
+        final = seq[-1]
+        if final == "A":
             if not self._cycle_slash_selection(-1):
                 self._history_step(-1)
-        elif seq == "B":
+        elif final == "B":
             if not self._cycle_slash_selection(+1):
                 self._history_step(+1)
-        elif seq == "C":
+        elif final == "C":
             if self.col < len(self.line):
                 self.col += 1
                 self._render()
-        elif seq == "D":
+        elif final == "D":
             if self.col > 0:
                 self.col -= 1
                 self._render()
-        elif seq == "H":
+        elif final == "H":
             self.col = 0
             self._render()
-        elif seq == "F":
+        elif final == "F":
             self.col = len(self.line)
             self._render()
-        elif seq == "Z":
+        elif final == "Z":
             if self._cycle_slash_selection(-1):
                 return
             # 8.0.10: Shift+Tab cycles the mode (default -> plan ->
@@ -10719,6 +10767,138 @@ def _save_history():
 
 
 # =============================================================================
+# Key decoder diagnostics
+# =============================================================================
+
+def _format_key_bytes(s):
+    if not s:
+        return ""
+    return " ".join(f"{ord(ch):02x}" for ch in s)
+
+
+def _describe_key_event(event):
+    if event.kind == "csi" and event.value:
+        final = event.value[-1]
+        return {
+            "A": "cursor-up",
+            "B": "cursor-down",
+            "C": "cursor-right",
+            "D": "cursor-left",
+            "H": "home",
+            "F": "end",
+            "Z": "shift-tab",
+            "~": "tilde-csi",
+            "M": "mouse",
+            "m": "mouse",
+        }.get(final, "csi")
+    if event.kind == "escape":
+        return "escape"
+    if event.kind == "drop":
+        return "incomplete-control-sequence"
+    if event.kind == "char" and event.value:
+        code = ord(event.value[0])
+        if code < 32:
+            return f"control-{code:02x}"
+    return event.kind
+
+
+def print_lmstudio_version():
+    source = Path(__file__).resolve()
+    installed = shutil.which("lmstudio") or "(not on PATH)"
+    print(f"lmstudio {CLI_VERSION}")
+    print(f"source: {source}")
+    print(f"path: {installed}")
+
+
+def run_key_decoder_self_test():
+    def decode(sequence):
+        stream = list(sequence)
+
+        def read_blocking():
+            return stream.pop(0) if stream else ""
+
+        def read_timeout(_):
+            return stream.pop(0) if stream else None
+
+        decoder = TerminalInputDecoder(read_blocking, read_timeout)
+        events = []
+        while stream or decoder.has_pending():
+            event = decoder.read_event()
+            if event is None:
+                continue
+            events.append((event.kind, event.value))
+        return events
+
+    cases = [
+        ("esc-csi-up", "\x1b[A", [("csi", "A")]),
+        ("esc-csi-down", "\x1b[B", [("csi", "B")]),
+        ("ss3-up", "\x1bOA", [("csi", "A")]),
+        ("parameterized-up", "\x1b[1;2A", [("csi", "1;2A")]),
+        ("eight-bit-csi-down", "\x9bB", [("csi", "B")]),
+        ("orphan-up", "[A", [("csi", "A")]),
+        ("orphan-parameterized-down", "[1;2B", [("csi", "1;2B")]),
+        ("plain-bracket", "[x", [("char", "["), ("char", "x")]),
+        ("plain-bracket-number", "[1x", [("char", "["), ("char", "1"), ("char", "x")]),
+        ("plain-escape", "\x1b", [("escape", "")]),
+        ("mouse-drain", "\x1b[<0;42;15M", [("csi", "<0;42;15M")]),
+        ("paste-start", "\x1b[200~", [("csi", "200~")]),
+    ]
+    failures = []
+    for name, sequence, expected in cases:
+        actual = decode(sequence)
+        if actual != expected:
+            failures.append((name, expected, actual))
+    if failures:
+        for name, expected, actual in failures:
+            print(f"FAIL {name}: expected {expected!r}, got {actual!r}")
+        return 1
+    print(f"key decoder self-test passed ({len(cases)} cases)")
+    return 0
+
+
+def run_key_debug(duration=10.0):
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        print("--debug-keys requires an interactive terminal.", file=sys.stderr)
+        return 2
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        new = list(old)
+        new[3] = new[3] & ~(termios.ICANON | termios.ECHO | termios.ISIG)
+        new[6][termios.VMIN] = 1
+        new[6][termios.VTIME] = 0
+        termios.tcsetattr(fd, termios.TCSANOW, new)
+        print(f"lmstudio {CLI_VERSION} key decoder debug")
+        print(f"source: {Path(__file__).resolve()}")
+        print(f"listening for {duration:.0f}s; press Ctrl-C to stop")
+        decoder = TerminalInputDecoder(
+            lambda: sys.stdin.read(1),
+            BoxedLineEditor._read_with_timeout,
+        )
+        deadline = time.monotonic() + duration
+        while time.monotonic() < deadline:
+            timeout = max(0.0, min(0.1, deadline - time.monotonic()))
+            ready, _, _ = select.select([sys.stdin], [], [], timeout)
+            if not ready and not decoder.has_pending():
+                continue
+            event = decoder.read_event()
+            if event is None:
+                continue
+            label = _describe_key_event(event)
+            print(
+                f"raw={_format_key_bytes(event.raw):<24} "
+                f"kind={event.kind:<6} value={event.value!r:<12} "
+                f"decoded={label}"
+            )
+            if event.kind == "char" and event.value == "\x03":
+                break
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    return 0
+
+
+# =============================================================================
 # Entrypoint
 # =============================================================================
 
@@ -10726,6 +10906,12 @@ def main():
     parser = argparse.ArgumentParser(prog="lmstudio",
         description="Interactive agent CLI backed by LM Studio.")
     parser.add_argument("prompt", nargs="*", help="One-shot prompt. Omit for REPL.")
+    parser.add_argument("--version", action="store_true",
+        help="Show the bundled lmstudio helper version and source path.")
+    parser.add_argument("--debug-keys", action="store_true",
+        help="Print raw terminal key bytes and decoded events for 10 seconds.")
+    parser.add_argument("--self-test-keys", action="store_true",
+        help=argparse.SUPPRESS)
     parser.add_argument("--base-url", default=os.environ.get("LMSTUDIO_BASE_URL", DEFAULT_BASE_URL))
     parser.add_argument("--model", default=os.environ.get("LMSTUDIO_MODEL", ""))
     parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS)
@@ -10885,6 +11071,14 @@ def main():
     parser.add_argument("--no-settings", action="store_true",
         help="Skip loading <workspace>/.loom/settings.json.")
     args = parser.parse_args()
+
+    if args.version:
+        print_lmstudio_version()
+        return
+    if args.self_test_keys:
+        sys.exit(run_key_decoder_self_test())
+    if args.debug_keys:
+        sys.exit(run_key_debug())
 
     # 8.0.0 — top-level helper modes that exit before normal session start.
     if args.check_wakeups:
