@@ -39,7 +39,7 @@ The CLI runs in the current working directory. Tool paths are resolved relative 
 
 Type these at the `❯` prompt (they don't go to the model):
 
-Typing `/` opens a Claude/Codex-style slash-command palette in the shell. Keep typing to filter the list; Tab still completes the command name, and `/commands` prints the full grouped list including custom `.loom/commands/*.md` entries.
+Typing `/` opens a Claude/Codex-style slash-command palette in the shell with command descriptions. Keep typing to filter the list, use Up/Down to cycle the selected command, Tab to insert it for arguments, or Enter to run it. `/commands` prints the full grouped list including custom `.loom/commands/*.md` entries.
 
 | Command | Effect |
 | --- | --- |
@@ -169,7 +169,7 @@ Type `@path/to/file` in your message to inline that file's contents:
 ❯ refactor @src/parser.py to use pathlib
 ```
 
-The CLI rewrites the prompt to include a tagged `<file path="...">…</file>` block before sending. Tab completes paths from the workspace; for slash commands it opens the command palette and completes the command name.
+The CLI rewrites the prompt to include a tagged `<file path="...">…</file>` block before sending. Tab completes paths from the workspace; for slash commands it opens the command palette and inserts the selected command.
 
 ### Media types
 

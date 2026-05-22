@@ -99,7 +99,7 @@ _BASE_NO_COLOR = {
     "thinking": "", "tool": "", "ok": "", "err": "",
     "task_pending": "", "task_progress": "", "task_done": "",
     "task_cancel": "", "tip": "", "prompt": "", "footer": "",
-    "diff_add": "", "diff_del": "", "warning": "",
+    "diff_add": "", "diff_del": "", "warning": "", "selection": "",
 }
 
 _THEMES = {
@@ -123,6 +123,7 @@ _THEMES = {
         "diff_add":      "32",
         "diff_del":      "31",
         "warning":       "1;33",
+        "selection":      "7",
     },
     "mono": _BASE_NO_COLOR,
     "cyberpunk": {
@@ -145,6 +146,7 @@ _THEMES = {
         "diff_add":      "92",
         "diff_del":      "91",
         "warning":       "1;93",
+        "selection":      "7",
     },
     "solarized": {
         "border":        "33",                 # solarized base yellow
@@ -166,6 +168,7 @@ _THEMES = {
         "diff_add":      "32",
         "diff_del":      "31",
         "warning":       "1;33",
+        "selection":      "7",
     },
 }
 
@@ -267,7 +270,7 @@ TIPS = [
     "Shift+Tab cycles modes: default → PLAN → ACCEPT EDITS → BYPASS PERMISSIONS",
     "Esc during a running turn stops it · Ctrl-D or /quit to exit",
     "type @path/to/file to inline a file's contents (Tab completes)",
-    "type / to open the slash-command palette · /commands prints details",
+    "type / for slash commands · ↑/↓ cycle · Tab inserts · Enter runs",
     "word wrap on by default · /wrap off (or --no-wrap) for terminal hard wrap",
     "--allow-bash enables run_bash and auto-approves it · --yolo skips every prompt",
     "orchestrator auto-continues until tasks are done (max 12) · /auto off to disable",
@@ -531,6 +534,8 @@ class BoxedLineEditor:
         # cycle. Optional - editor still works for tools that build a
         # bare editor outside the agent loop.
         self.state = state
+        self._slash_selection_idx = 0
+        self._slash_palette_prefix = None
 
     @property
     def _inner_width(self):
@@ -646,19 +651,66 @@ class BoxedLineEditor:
 
     # --- drawing --------------------------------------------------------
 
-    def _slash_palette_rows(self):
-        """Return live slash-command palette rows for the current edit.
+    def _slash_palette_context(self):
+        """Return (prefix, matches) while the slash palette is active.
 
         The palette is only shown while the cursor is still in the first
         slash token. Once the user adds a space for command arguments, the
         prompt gets the full box back.
         """
         if self.state is None or "\n" in self.line or not self.line.startswith("/"):
-            return []
+            self._slash_palette_prefix = None
+            return None
         token = self.line[:self.col]
         if not token.startswith("/") or any(ch.isspace() for ch in token):
+            self._slash_palette_prefix = None
+            return None
+        matches = slash_command_palette_matches(self.state, token)
+        if token != self._slash_palette_prefix:
+            self._slash_selection_idx = 0
+            self._slash_palette_prefix = token
+        if matches:
+            self._slash_selection_idx %= len(matches)
+        else:
+            self._slash_selection_idx = 0
+        return token, matches
+
+    def _slash_palette_rows(self):
+        context = self._slash_palette_context()
+        if context is None:
             return []
-        return slash_command_palette_rows(self.state, token, self._inner_width)
+        token, matches = context
+        return slash_command_palette_rows(
+            self.state, token, self._inner_width, self._slash_selection_idx, matches
+        )
+
+    def _cycle_slash_selection(self, delta):
+        context = self._slash_palette_context()
+        if context is None:
+            return False
+        _, matches = context
+        if not matches:
+            return False
+        self._slash_selection_idx = (self._slash_selection_idx + delta) % len(matches)
+        self._render()
+        return True
+
+    def _complete_slash_selection(self, add_space=False):
+        context = self._slash_palette_context()
+        if context is None:
+            return False
+        _, matches = context
+        if not matches:
+            return False
+        _, command, _ = matches[self._slash_selection_idx]
+        suffix = self.line[self.col:]
+        inserted = command + (" " if add_space else "")
+        self.line = inserted + suffix
+        self.col = len(inserted)
+        self._slash_palette_prefix = None
+        self._slash_selection_idx = 0
+        self._render()
+        return True
 
     def _render(self):
         """Full redraw. Wipe the previously drawn box (cursor is inside it
@@ -756,6 +808,7 @@ class BoxedLineEditor:
             o = ord(ch)
 
             if o in (0x0d, 0x0a):  # Enter
+                self._complete_slash_selection(add_space=False)
                 self._leave_box()
                 return self.line
 
@@ -770,6 +823,12 @@ class BoxedLineEditor:
                 if self.col < len(self.line):
                     self.line = self.line[:self.col] + self.line[self.col + 1:]
                     self._render()
+                continue
+
+            if o == 0x09:  # Tab
+                if self._complete_slash_selection(add_space=True):
+                    continue
+                self._render()
                 continue
 
             if o == 0x1b:  # Esc or start of CSI / SS3 sequence
@@ -837,9 +896,11 @@ class BoxedLineEditor:
                         if tail == "200~":
                             self._handle_paste()
                         elif tail.endswith("A"):
-                            self._history_step(-1)
+                            if not self._cycle_slash_selection(-1):
+                                self._history_step(-1)
                         elif tail.endswith("B"):
-                            self._history_step(+1)
+                            if not self._cycle_slash_selection(+1):
+                                self._history_step(+1)
                         # Mouse events (terminator M or m), DEC private
                         # mode responses, function keys, etc. are
                         # silently consumed without modifying the line.
@@ -943,9 +1004,11 @@ class BoxedLineEditor:
 
     def _handle_csi(self, seq):
         if seq == "A":
-            self._history_step(-1)
+            if not self._cycle_slash_selection(-1):
+                self._history_step(-1)
         elif seq == "B":
-            self._history_step(+1)
+            if not self._cycle_slash_selection(+1):
+                self._history_step(+1)
         elif seq == "C":
             if self.col < len(self.line):
                 self.col += 1
@@ -961,6 +1024,8 @@ class BoxedLineEditor:
             self.col = len(self.line)
             self._render()
         elif seq == "Z":
+            if self._cycle_slash_selection(-1):
+                return
             # 8.0.10: Shift+Tab cycles the mode (default -> plan ->
             # auto-accept -> default). Redraw picks up the new pill.
             if self.state is not None:
@@ -9349,45 +9414,69 @@ def _slash_command_columns(names, inner_width):
     return rows
 
 
-def slash_command_palette_rows(state, prefix, inner_width):
-    width = max(8, inner_width)
+def slash_command_palette_matches(state, prefix):
     prefix = prefix or "/"
-    grouped = slash_command_catalog(state)
-    hint = "slash commands · type to filter · Tab completes · /commands details"
-    rows = [style(_clip_plain(hint, width), "tip")]
-
-    if prefix == "/":
-        for group, items in grouped:
-            rows.append(style(_clip_plain(group, width), "key"))
-            names = [name for name, _ in items]
-            for row in _slash_command_columns(names, width):
-                rows.append(style(row, "value"))
-        return rows
-
     needle = prefix.lower()
     matches = []
-    for group, items in grouped:
+    for group, items in slash_command_catalog(state):
         for name, desc in items:
-            if name.lower().startswith(needle):
+            if prefix == "/" or name.lower().startswith(needle):
                 matches.append((group, name, desc))
+    return matches
+
+
+def _slash_palette_window(matches, selected_idx, visible_count):
+    if len(matches) <= visible_count:
+        return 0, matches
+    half = visible_count // 2
+    start = max(0, selected_idx - half)
+    start = min(start, len(matches) - visible_count)
+    return start, matches[start:start + visible_count]
+
+
+def slash_command_palette_rows(state, prefix, inner_width,
+                               selected_idx=0, matches=None):
+    width = max(8, inner_width)
+    prefix = prefix or "/"
+    if matches is None:
+        matches = slash_command_palette_matches(state, prefix)
+    if matches:
+        selected_idx %= len(matches)
+    hint = "slash commands · ↑/↓ cycle · Tab inserts · Enter runs"
+    rows = [style(_clip_plain(hint, width), "tip")]
 
     if not matches:
         rows.append(style(_clip_plain(f"no slash commands match {prefix}", width), "warning"))
         return rows
 
-    shown = matches[:12]
-    name_width = min(18, max(10, max(len(name) for _, name, _ in shown) + 1))
-    for _, name, desc in shown:
-        label = _clip_plain(name, name_width - 1).ljust(name_width)
-        desc_width = width - name_width - 1
-        if desc_width > 0:
-            rows.append(style(label, "value") + " " + style(_clip_plain(desc, desc_width), "dim"))
-        else:
-            rows.append(style(_clip_plain(name, width), "value"))
+    visible_count = 10
+    start, visible = _slash_palette_window(matches, selected_idx, visible_count)
+    group_width = min(14, max(7, max(len(group) for group, _, _ in visible)))
+    name_width = min(18, max(10, max(len(name) for _, name, _ in visible) + 1))
+    desc_width = max(0, width - group_width - name_width - 4)
 
-    remaining = len(matches) - len(shown)
-    if remaining > 0:
-        rows.append(style(_clip_plain(f"{remaining} more matches · keep typing or use /commands", width), "dim"))
+    for offset, (group, name, desc) in enumerate(visible):
+        absolute_idx = start + offset
+        marker = "›" if absolute_idx == selected_idx else " "
+        group_part = _clip_plain(group, group_width).ljust(group_width)
+        name_part = _clip_plain(name, name_width).ljust(name_width)
+        desc_part = _clip_plain(desc, desc_width)
+        plain = _clip_plain(
+            f"{marker} {group_part} {name_part} {desc_part}".rstrip(), width
+        )
+        if absolute_idx == selected_idx:
+            rows.append(style(plain.ljust(width), "selection"))
+        else:
+            rows.append(
+                f"{style(marker, 'dim')} "
+                f"{style(group_part, 'dim')} "
+                f"{style(name_part, 'value')} "
+                f"{style(desc_part, 'dim')}"
+            )
+
+    if len(matches) > len(visible):
+        footer = f"showing {start + 1}-{start + len(visible)} of {len(matches)} · keep typing to filter"
+        rows.append(style(_clip_plain(footer, width), "dim"))
     return rows
 
 
