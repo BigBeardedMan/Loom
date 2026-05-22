@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Icons } from "../../lib/icons";
 import { useApp } from "../../lib/store";
 import {
   ipc,
   on,
+  type LmStudioDownloadStatus,
   type LmStudioModel,
   type LmStudioRuntimeStatus,
   type LocalEndpoint,
@@ -71,6 +72,21 @@ export function AgentPane({ workspace, blockId }: Props) {
     const saved = Number(localStorage.getItem(`loom.lmstudio.context.${workspace.id}`));
     return Number.isFinite(saved) && saved >= 4096 ? saved : 65536;
   });
+  const [lmRoutingEnabled, setLmRoutingEnabled] = useState(
+    () => localStorage.getItem(`loom.lmstudio.routing.${workspace.id}`) === "true"
+  );
+  const [lmPlannerModel, setLmPlannerModel] = useState(
+    () => localStorage.getItem(`loom.lmstudio.planner.${workspace.id}`) || ""
+  );
+  const [lmCoderModel, setLmCoderModel] = useState(
+    () => localStorage.getItem(`loom.lmstudio.coder.${workspace.id}`) || ""
+  );
+  const [lmReviewerModel, setLmReviewerModel] = useState(
+    () => localStorage.getItem(`loom.lmstudio.reviewer.${workspace.id}`) || ""
+  );
+  const [lmDownloadModel, setLmDownloadModel] = useState("");
+  const [lmDownloadQuantization, setLmDownloadQuantization] = useState("");
+  const [lmDownloadStatus, setLmDownloadStatus] = useState<LmStudioDownloadStatus | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -101,6 +117,22 @@ export function AgentPane({ workspace, blockId }: Props) {
   }, [lmContextTarget, workspace.id]);
 
   useEffect(() => {
+    localStorage.setItem(`loom.lmstudio.routing.${workspace.id}`, lmRoutingEnabled ? "true" : "false");
+  }, [lmRoutingEnabled, workspace.id]);
+
+  useEffect(() => {
+    localStorage.setItem(`loom.lmstudio.planner.${workspace.id}`, lmPlannerModel);
+  }, [lmPlannerModel, workspace.id]);
+
+  useEffect(() => {
+    localStorage.setItem(`loom.lmstudio.coder.${workspace.id}`, lmCoderModel);
+  }, [lmCoderModel, workspace.id]);
+
+  useEffect(() => {
+    localStorage.setItem(`loom.lmstudio.reviewer.${workspace.id}`, lmReviewerModel);
+  }, [lmReviewerModel, workspace.id]);
+
+  useEffect(() => {
     ipc.endpoints.list().then(setEndpoints).catch(() => {});
   }, []);
 
@@ -113,6 +145,10 @@ export function AgentPane({ workspace, blockId }: Props) {
   const activeEndpoint =
     matchingEndpoints.find((e) => e.id === endpointId) ?? matchingEndpoints[0];
   const usesEndpoint = LOCAL_HTTP_VENDORS.has(vendor);
+  const lmEffectiveModel =
+    vendor === "lmstudio" && lmRoutingEnabled && lmCoderModel.trim()
+      ? lmCoderModel.trim()
+      : model;
 
   useEffect(() => {
     if (!usesEndpoint || matchingEndpoints.length === 0) return;
@@ -171,14 +207,7 @@ export function AgentPane({ workspace, blockId }: Props) {
       })
       .catch((e) => {
         if (cancelled) return;
-        setLmRuntime({
-          cliInstalled: false,
-          serverReachable: false,
-          state: "stopped",
-          models: [],
-          recommendedModelId: null,
-          lastError: String(e),
-        });
+        setLmRuntime(emptyLmRuntime(String(e)));
       })
       .finally(() => {
         if (!cancelled) setLmModelsLoading(false);
@@ -205,14 +234,7 @@ export function AgentPane({ workspace, blockId }: Props) {
         setModel(recommended);
       }
     } catch (e) {
-      setLmRuntime((current) => ({
-        cliInstalled: current?.cliInstalled ?? false,
-        serverReachable: current?.serverReachable ?? false,
-        state: current?.state ?? "stopped",
-        models: current?.models ?? [],
-        recommendedModelId: current?.recommendedModelId ?? null,
-        lastError: String(e),
-      }));
+      setLmRuntime((current) => ({ ...emptyLmRuntime(String(e)), ...(current ?? {}), lastError: String(e) }));
     } finally {
       setLmModelsLoading(false);
     }
@@ -224,7 +246,7 @@ export function AgentPane({ workspace, blockId }: Props) {
     try {
       const runtime = await ipc.lmStudio.prepare({
         endpointId: activeEndpoint.id,
-        preferredModel: model || activeEndpoint.defaultModel || undefined,
+        preferredModel: lmEffectiveModel || activeEndpoint.defaultModel || undefined,
         contextTarget: lmContextTarget,
         autoScale: lmAutoScale,
       });
@@ -232,14 +254,64 @@ export function AgentPane({ workspace, blockId }: Props) {
       setLmModels(runtime.models);
       if (runtime.recommendedModelId) setModel(runtime.recommendedModelId);
     } catch (e) {
-      setLmRuntime((current) => ({
-        cliInstalled: current?.cliInstalled ?? false,
-        serverReachable: current?.serverReachable ?? false,
-        state: current?.state ?? "stopped",
-        models: current?.models ?? [],
-        recommendedModelId: current?.recommendedModelId ?? null,
-        lastError: String(e),
-      }));
+      setLmRuntime((current) => ({ ...emptyLmRuntime(String(e)), ...(current ?? {}), lastError: String(e) }));
+    } finally {
+      setLmBusy(false);
+    }
+  };
+
+  const loadLmStudioModel = async (modelId: string) => {
+    if (!activeEndpoint) return;
+    setLmBusy(true);
+    try {
+      const runtime = await ipc.lmStudio.load({
+        endpointId: activeEndpoint.id,
+        model: modelId,
+        contextTarget: lmContextTarget,
+      });
+      setLmRuntime(runtime);
+      setLmModels(runtime.models);
+      setModel(modelId);
+    } catch (e) {
+      setLmRuntime((current) => ({ ...emptyLmRuntime(String(e)), ...(current ?? {}), lastError: String(e) }));
+    } finally {
+      setLmBusy(false);
+    }
+  };
+
+  const unloadLmStudioModel = async (entry: LmStudioModel) => {
+    if (!activeEndpoint) return;
+    setLmBusy(true);
+    try {
+      const runtime = await ipc.lmStudio.unload({
+        endpointId: activeEndpoint.id,
+        model: entry.id,
+        instanceId: entry.loadedInstanceIds[0] || entry.id,
+      });
+      setLmRuntime(runtime);
+      setLmModels(runtime.models);
+    } catch (e) {
+      setLmRuntime((current) => ({ ...emptyLmRuntime(String(e)), ...(current ?? {}), lastError: String(e) }));
+    } finally {
+      setLmBusy(false);
+    }
+  };
+
+  const downloadLmStudioModel = async () => {
+    if (!activeEndpoint) return;
+    const target = lmDownloadModel.trim();
+    if (!target) return;
+    setLmBusy(true);
+    try {
+      const status = await ipc.lmStudio.download({
+        endpointId: activeEndpoint.id,
+        model: target,
+        quantization: lmDownloadQuantization.trim() || undefined,
+      });
+      setLmDownloadStatus(status);
+      await refreshLmStudio();
+    } catch (e) {
+      setLmRuntime((current) => ({ ...emptyLmRuntime(String(e)), ...(current ?? {}), lastError: String(e) }));
     } finally {
       setLmBusy(false);
     }
@@ -318,7 +390,7 @@ export function AgentPane({ workspace, blockId }: Props) {
     const messages = [{ role: "user", content: prompt }];
     const selectedModel =
       vendor === "lmstudio"
-        ? model || lmRuntime?.recommendedModelId || activeEndpoint.defaultModel || ""
+        ? lmEffectiveModel || lmRuntime?.recommendedModelId || activeEndpoint.defaultModel || ""
         : model || activeEndpoint.defaultModel || "";
     const streamId = await ipc.agents.openaiSend({
       endpointId: activeEndpoint.id,
@@ -412,6 +484,29 @@ export function AgentPane({ workspace, blockId }: Props) {
     setTurns((prev) => prev.map((t) => (t.streaming ? { ...t, streaming: false } : t)));
     setBusy(false);
   };
+
+  const lmReadiness = [
+    {
+      label: "Workspace",
+      ok: Boolean(workspace.folderPath),
+      detail: workspace.folderPath || "Set a workspace folder.",
+    },
+    {
+      label: "Server",
+      ok: lmRuntime?.serverReachable === true,
+      detail: lmRuntimeLabel(lmRuntime, activeEndpoint),
+    },
+    {
+      label: "Model",
+      ok: lmModels.some((entry) => entry.id === lmEffectiveModel && entry.loaded),
+      detail: lmEffectiveModel || lmRuntime?.recommendedModelId || "No selected model.",
+    },
+    {
+      label: "API",
+      ok: lmRuntime?.supportsV1 === true,
+      detail: lmRuntime?.apiMode ? lmRuntime.apiMode.toUpperCase() : "checking",
+    },
+  ];
 
   return (
     <div className="flex h-full flex-col" style={{ background: "#04050A" }}>
@@ -657,6 +752,159 @@ export function AgentPane({ workspace, blockId }: Props) {
         </div>
       )}
 
+      {vendor === "lmstudio" && (
+        <div
+          className="grid flex-none gap-2"
+          style={{
+            gridTemplateColumns: "minmax(220px, 0.9fr) minmax(260px, 1.2fr) minmax(220px, 0.9fr)",
+            padding: "8px 12px",
+            background: "rgba(255, 255, 255, 0.025)",
+            borderBottom: "1px solid rgba(255, 255, 255, 0.08)",
+          }}
+        >
+          <div style={lmPanelStyle}>
+            <PanelTitle icon={<Icons.check size={12} strokeWidth={2} />} label="Readiness" />
+            <div className="flex flex-col gap-1">
+              {lmReadiness.map((row) => (
+                <div key={row.label} className="flex items-start gap-1.5">
+                  <span
+                    style={{
+                      width: 7,
+                      height: 7,
+                      borderRadius: 999,
+                      marginTop: 5,
+                      background: row.ok ? "var(--color-ws-green)" : "rgb(242, 163, 60)",
+                      flex: "0 0 auto",
+                    }}
+                  />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 10, fontWeight: 650, color: "rgba(255,255,255,0.86)" }}>
+                      {row.label}
+                    </div>
+                    <div
+                      title={row.detail}
+                      style={{
+                        fontSize: 10,
+                        color: "rgba(255,255,255,0.48)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {row.detail}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={lmPanelStyle}>
+            <PanelTitle icon={<Icons.cpu size={12} strokeWidth={2} />} label="Model Library" />
+            <div className="flex flex-col gap-1" style={{ maxHeight: 128, overflow: "auto" }}>
+              {lmModels.length === 0 ? (
+                <span style={{ fontSize: 10, color: "rgba(255,255,255,0.45)" }}>
+                  No LM Studio models reported yet.
+                </span>
+              ) : (
+                lmModels.slice(0, 6).map((entry) => (
+                  <div
+                    key={entry.id}
+                    className="flex items-center gap-1.5"
+                    style={{ minWidth: 0, fontSize: 10 }}
+                  >
+                    <span
+                      style={{
+                        width: 7,
+                        height: 7,
+                        borderRadius: 999,
+                        background: entry.loaded ? "var(--color-ws-green)" : "rgba(255,255,255,0.28)",
+                        flex: "0 0 auto",
+                      }}
+                    />
+                    <button
+                      onClick={() => setModel(entry.id)}
+                      title={`${entry.displayName ? `${entry.displayName} · ` : ""}${entry.id}${entry.detail ? ` · ${entry.detail}` : ""}`}
+                      style={{
+                        minWidth: 0,
+                        flex: 1,
+                        textAlign: "left",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        color: entry.id === model ? "var(--color-loom-accent)" : "rgba(255,255,255,0.82)",
+                        fontFamily: "var(--font-mono)",
+                      }}
+                    >
+                      {entry.displayName ? `${entry.displayName} · ` : ""}
+                      {entry.id}
+                    </button>
+                    <button
+                      onClick={() => loadLmStudioModel(entry.id)}
+                      disabled={lmBusy}
+                      style={miniButtonStyle}
+                    >
+                      {entry.loaded ? "Reload" : "Load"}
+                    </button>
+                    {entry.loaded && (
+                      <button
+                        onClick={() => unloadLmStudioModel(entry)}
+                        disabled={lmBusy}
+                        style={miniButtonStyle}
+                      >
+                        Unload
+                      </button>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="mt-2 flex gap-1.5">
+              <input
+                value={lmDownloadModel}
+                onChange={(e) => setLmDownloadModel(e.target.value)}
+                placeholder="model id or Hugging Face URL"
+                style={compactInputStyle}
+              />
+              <input
+                value={lmDownloadQuantization}
+                onChange={(e) => setLmDownloadQuantization(e.target.value)}
+                placeholder="Q4_K_M"
+                style={{ ...compactInputStyle, width: 72, flex: "0 0 auto" }}
+              />
+              <button
+                onClick={downloadLmStudioModel}
+                disabled={!lmRuntime?.supportsDownloads || lmBusy || !lmDownloadModel.trim()}
+                style={miniButtonStyle}
+              >
+                Download
+              </button>
+            </div>
+            {lmDownloadStatus && (
+              <div style={{ marginTop: 4, fontSize: 10, color: "rgba(255,255,255,0.48)" }}>
+                {downloadStatusText(lmDownloadStatus)}
+              </div>
+            )}
+          </div>
+
+          <div style={lmPanelStyle}>
+            <PanelTitle icon={<Icons.package size={12} strokeWidth={2} />} label="Run Profiles" />
+            <label className="flex items-center gap-1.5" style={{ fontSize: 10, color: "rgba(255,255,255,0.72)" }}>
+              <input
+                type="checkbox"
+                checked={lmRoutingEnabled}
+                onChange={(e) => setLmRoutingEnabled(e.target.checked)}
+                style={{ accentColor: "var(--color-loom-accent)" }}
+              />
+              Route planner / coder / reviewer
+            </label>
+            <ProfileInput label="Planner" value={lmPlannerModel} onChange={setLmPlannerModel} />
+            <ProfileInput label="Coder" value={lmCoderModel} onChange={setLmCoderModel} />
+            <ProfileInput label="Reviewer" value={lmReviewerModel} onChange={setLmReviewerModel} />
+          </div>
+        </div>
+      )}
+
       <div
         ref={scrollRef}
         className="scrollbar-thin flex-1 overflow-y-auto"
@@ -806,4 +1054,90 @@ function lmRuntimeLabel(
   if (runtime.state === "stopped") return "LM Studio stopped";
   if (runtime.state === "no-endpoint") return "No LM Studio endpoint";
   return runtime.state;
+}
+
+function emptyLmRuntime(error: string): LmStudioRuntimeStatus {
+  return {
+    cliInstalled: false,
+    serverReachable: false,
+    state: "stopped",
+    apiMode: "unknown",
+    supportsV1: false,
+    supportsModelManagement: false,
+    supportsDownloads: false,
+    supportsAuthToken: false,
+    lastCapabilityError: null,
+    models: [],
+    recommendedModelId: null,
+    lastError: error,
+  };
+}
+
+const lmPanelStyle: CSSProperties = {
+  minWidth: 0,
+  padding: 8,
+  borderRadius: 6,
+  background: "rgba(255, 255, 255, 0.04)",
+  border: "1px solid rgba(255, 255, 255, 0.08)",
+};
+
+const miniButtonStyle: CSSProperties = {
+  padding: "3px 6px",
+  borderRadius: 4,
+  background: "rgba(255,255,255,0.07)",
+  border: "1px solid rgba(255,255,255,0.10)",
+  color: "rgba(255,255,255,0.82)",
+  fontSize: 10,
+  whiteSpace: "nowrap",
+};
+
+const compactInputStyle: CSSProperties = {
+  minWidth: 0,
+  flex: 1,
+  background: "rgba(255, 255, 255, 0.06)",
+  border: "1px solid rgba(255, 255, 255, 0.10)",
+  borderRadius: 4,
+  padding: "3px 6px",
+  color: "rgba(255,255,255,0.88)",
+  fontSize: 10,
+  fontFamily: "var(--font-mono)",
+};
+
+function PanelTitle({ icon, label }: { icon: ReactNode; label: string }) {
+  return (
+    <div className="mb-1.5 flex items-center gap-1.5" style={{ color: "rgba(255,255,255,0.88)" }}>
+      {icon}
+      <span style={{ fontSize: 10, fontWeight: 750 }}>{label}</span>
+    </div>
+  );
+}
+
+function ProfileInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="mt-1 flex items-center gap-1.5" style={{ fontSize: 10, color: "rgba(255,255,255,0.58)" }}>
+      <span style={{ width: 46 }}>{label}</span>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={`${label.toLowerCase()} model`}
+        style={compactInputStyle}
+      />
+    </label>
+  );
+}
+
+function downloadStatusText(status: LmStudioDownloadStatus): string {
+  if (status.totalSizeBytes && status.downloadedBytes) {
+    const pct = Math.round((status.downloadedBytes / status.totalSizeBytes) * 100);
+    return `${status.jobId ?? "download"} · ${status.status} · ${pct}%`;
+  }
+  return `${status.jobId ?? "download"} · ${status.status}`;
 }

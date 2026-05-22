@@ -52,6 +52,8 @@ struct AgentPaneView: View {
     @State private var changedFiles: [String] = []
     @State private var verificationResults: [AgentVerificationResult] = []
     @State private var isRunningVerification: Bool = false
+    @State private var downloadModelID: String = ""
+    @State private var downloadQuantization: String = ""
 
     /// Persisted across panes: when on, local-HTTP providers run through
     /// `AgentOrchestrator` (multi-turn loop, tool calls, task list) instead
@@ -130,6 +132,47 @@ struct AgentPaneView: View {
 
     private var showsLMStudioWorkbench: Bool {
         selectedAgent.vendor == .lmstudio && effectiveAgentMode && lmStudioWorkbenchEnabled
+    }
+
+    private var selectedLMStudioRunModel: String? {
+        guard selectedAgent.vendor == .lmstudio else { return selectedAgent.model }
+        if lmStudioRoutingEnabled {
+            let coder = lmStudioCoderModel.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !coder.isEmpty { return coder }
+        }
+        return selectedAgent.model
+    }
+
+    private var lmStudioReadinessRows: [(title: String, ready: Bool, detail: String)] {
+        [
+            (
+                "Workspace folder",
+                sessionWorkspacePath?.isEmpty == false,
+                sessionWorkspacePath ?? "Set a folder so tools and verification run in the right project."
+            ),
+            (
+                "LM Studio server",
+                lmStudioRuntime.serverState == .running,
+                lmStudioRuntime.serverState.label
+            ),
+            (
+                "Selected model loaded",
+                selectedLMStudioRunModel.map { selected in
+                    lmStudioRuntime.models.contains { $0.id == selected && $0.loaded }
+                } ?? false,
+                selectedLMStudioRunModel ?? "No model selected."
+            ),
+            (
+                "Tool agent mode",
+                effectiveAgentMode,
+                effectiveAgentMode ? permissionMode.label : "Enable Agent Mode for tool calls."
+            ),
+            (
+                "Verification",
+                !changedFiles.isEmpty || !autoVerifyAgentRuns,
+                autoVerifyAgentRuns ? "Auto-verify edits after a run." : "Auto-verify is disabled."
+            )
+        ]
     }
 
     var body: some View {
@@ -811,6 +854,8 @@ struct AgentPaneView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 runtimeCard
+                readinessCard
+                modelLibraryCard
                 if !workbenchTasks.isEmpty {
                     workbenchSection("Plan", systemImage: "checklist") {
                         VStack(alignment: .leading, spacing: 6) {
@@ -912,7 +957,7 @@ struct AgentPaneView: View {
             }
 
             if let model = lmStudioRuntime.recommendedModel {
-                Text(model.id)
+                Text(model.title)
                     .font(.system(size: 10, design: .monospaced))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -933,6 +978,20 @@ struct AgentPaneView: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.orange)
                     .lineLimit(3)
+            }
+
+            HStack(spacing: 6) {
+                LoomStatusPill(
+                    title: lmStudioRuntime.apiMode.uppercased(),
+                    systemImage: lmStudioRuntime.supportsV1 ? "checkmark.seal" : "arrow.triangle.2.circlepath",
+                    tint: lmStudioRuntime.supportsV1 ? .green : .orange
+                )
+                if lmStudioRuntime.supportsModelManagement {
+                    LoomStatusPill(title: "Manage", systemImage: "shippingbox", tint: LoomTheme.purple)
+                }
+                if lmStudioRuntime.supportsDownloads {
+                    LoomStatusPill(title: "Download", systemImage: "arrow.down.circle", tint: LoomTheme.blue)
+                }
             }
 
             HStack(spacing: 8) {
@@ -961,6 +1020,105 @@ struct AgentPaneView: View {
                 .stroke(Color.white.opacity(0.08), lineWidth: 1)
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var readinessCard: some View {
+        workbenchSection("Readiness", systemImage: "checkmark.seal") {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(Array(lmStudioReadinessRows.enumerated()), id: \.element.title) { _, row in
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: row.ready ? "checkmark.circle.fill" : "exclamationmark.circle")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(row.ready ? .green : .orange)
+                            .frame(width: 14)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(row.title)
+                                .font(.system(size: 10, weight: .semibold))
+                            Text(row.detail)
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var modelLibraryCard: some View {
+        workbenchSection("Model Library", systemImage: "shippingbox") {
+            VStack(alignment: .leading, spacing: 8) {
+                if lmStudioRuntime.models.isEmpty {
+                    Text("No models reported by LM Studio yet.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(lmStudioRuntime.models.prefix(8)) { model in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 6) {
+                                Image(systemName: model.loaded ? "circle.fill" : "circle")
+                                    .font(.system(size: 7))
+                                    .foregroundStyle(model.loaded ? .green : .secondary)
+                                Text(model.title)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Spacer()
+                            }
+                            if !model.detail.isEmpty {
+                                Text(model.detail)
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            HStack(spacing: 6) {
+                                Button(model.loaded ? "Reload" : "Load") {
+                                    Task { await loadLMStudioModel(model.id) }
+                                }
+                                .controlSize(.small)
+                                .disabled(lmStudioRuntime.isManagingModel)
+                                if model.loaded {
+                                    Button("Unload") {
+                                        Task { await unloadLMStudioModel(model) }
+                                    }
+                                    .controlSize(.small)
+                                    .disabled(lmStudioRuntime.isManagingModel)
+                                }
+                                if model.id == selectedAgent.model {
+                                    Text("selected")
+                                        .font(.system(size: 9, weight: .semibold))
+                                        .foregroundStyle(LoomTheme.orange)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+
+                Divider().overlay(Color.white.opacity(0.08))
+                TextField("model catalog id or Hugging Face URL", text: $downloadModelID)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 10, design: .monospaced))
+                HStack(spacing: 6) {
+                    TextField("quantization", text: $downloadQuantization, prompt: Text("Q4_K_M"))
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 10, design: .monospaced))
+                    Button {
+                        Task { await downloadLMStudioModel() }
+                    } label: {
+                        Label("Download", systemImage: "arrow.down.circle")
+                    }
+                    .controlSize(.small)
+                    .disabled(downloadModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || lmStudioRuntime.isManagingModel || !lmStudioRuntime.supportsDownloads)
+                }
+                if let download = lmStudioRuntime.lastDownload {
+                    Text(download.jobID.map { "\($0) · \(download.progressText)" } ?? download.progressText)
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
     }
 
     private func workbenchSection<Content: View>(
@@ -1160,6 +1318,14 @@ struct AgentPaneView: View {
         return endpoint.resolvedBaseURL
     }
 
+    private func selectedLMStudioEndpointToken() -> String? {
+        guard let id = selectedAgent.endpointID,
+              let endpoint = endpoints.endpoints.first(where: { $0.id == id }) else {
+            return nil
+        }
+        return endpoints.authToken(for: endpoint)
+    }
+
     private func shellQuote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
@@ -1264,7 +1430,8 @@ struct AgentPaneView: View {
         guard selectedAgent.vendor == .lmstudio else { return }
         await lmStudioRuntime.refresh(
             baseURL: selectedLMStudioEndpointURL(),
-            selectedModel: selectedAgent.model
+            selectedModel: selectedAgent.model,
+            apiKey: selectedLMStudioEndpointToken()
         )
     }
 
@@ -1272,9 +1439,10 @@ struct AgentPaneView: View {
         guard selectedAgent.vendor == .lmstudio else { return }
         let model = await lmStudioRuntime.prepareForAgentWork(
             baseURL: selectedLMStudioEndpointURL(),
-            preferredModel: selectedAgent.model,
+            preferredModel: selectedLMStudioRunModel,
             contextTarget: lmStudioMaxContext,
-            autoScale: lmStudioAutoScale
+            autoScale: lmStudioAutoScale,
+            apiKey: selectedLMStudioEndpointToken()
         )
         appendWorkbenchEvent(
             title: model == nil ? "Prepare failed" : "Prepared LM Studio",
@@ -1290,6 +1458,55 @@ struct AgentPaneView: View {
                 registry.selectedAgentID = targetID
             }
         }
+    }
+
+    private func loadLMStudioModel(_ modelID: String) async {
+        await lmStudioRuntime.loadModel(
+            baseURL: selectedLMStudioEndpointURL(),
+            modelID: modelID,
+            contextTarget: lmStudioMaxContext,
+            apiKey: selectedLMStudioEndpointToken()
+        )
+        appendWorkbenchEvent(
+            title: lmStudioRuntime.lastError == nil ? "Loaded model" : "Load failed",
+            detail: lmStudioRuntime.lastError ?? modelID,
+            status: lmStudioRuntime.lastError == nil ? .succeeded : .failed,
+            systemImage: lmStudioRuntime.lastError == nil ? "shippingbox.fill" : "exclamationmark.triangle"
+        )
+        await registry.refresh(localEndpoints: endpoints.endpoints)
+    }
+
+    private func unloadLMStudioModel(_ model: LMStudioRuntimeService.ModelSnapshot) async {
+        await lmStudioRuntime.unloadModel(
+            baseURL: selectedLMStudioEndpointURL(),
+            modelID: model.id,
+            instanceID: model.loadedInstanceIDs.first,
+            apiKey: selectedLMStudioEndpointToken()
+        )
+        appendWorkbenchEvent(
+            title: lmStudioRuntime.lastError == nil ? "Unloaded model" : "Unload failed",
+            detail: lmStudioRuntime.lastError ?? model.id,
+            status: lmStudioRuntime.lastError == nil ? .succeeded : .failed,
+            systemImage: lmStudioRuntime.lastError == nil ? "eject" : "exclamationmark.triangle"
+        )
+        await registry.refresh(localEndpoints: endpoints.endpoints)
+    }
+
+    private func downloadLMStudioModel() async {
+        let model = downloadModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !model.isEmpty else { return }
+        await lmStudioRuntime.downloadModel(
+            baseURL: selectedLMStudioEndpointURL(),
+            model: model,
+            quantization: downloadQuantization,
+            apiKey: selectedLMStudioEndpointToken()
+        )
+        appendWorkbenchEvent(
+            title: lmStudioRuntime.lastError == nil ? "Download queued" : "Download failed",
+            detail: lmStudioRuntime.lastDownload?.progressText ?? lmStudioRuntime.lastError ?? model,
+            status: lmStudioRuntime.lastError == nil ? .succeeded : .failed,
+            systemImage: lmStudioRuntime.lastError == nil ? "arrow.down.circle" : "exclamationmark.triangle"
+        )
     }
 
     private func resetWorkbenchForRun() {
@@ -1440,7 +1657,7 @@ struct AgentPaneView: View {
         guard let endpointID = selectedAgent.endpointID,
               let endpoint = endpoints.endpoints.first(where: { $0.id == endpointID }),
               let url = endpoint.resolvedBaseURL,
-              let model = selectedAgent.model else {
+              let model = selectedLMStudioRunModel else {
             error = "Local endpoint is no longer configured. Open Settings → Providers."
             streaming.cancel()
             isWaiting = false
@@ -1451,7 +1668,7 @@ struct AgentPaneView: View {
         let agentSource: AgentSource
         switch endpoint.kind {
         case .lmstudio:
-            provider = LMStudioProvider(baseURL: url, model: model)
+            provider = LMStudioProvider(baseURL: url, model: model, apiKey: endpoints.authToken(for: endpoint))
             agentSource = .lmstudio
         case .openAICompatible:
             // OpenAI-compat providers don't emit tool-use events today, so
@@ -1654,7 +1871,7 @@ struct AgentPaneView: View {
         guard let endpointID = selectedAgent.endpointID,
               let endpoint = endpoints.endpoints.first(where: { $0.id == endpointID }),
               let url = endpoint.resolvedBaseURL,
-              let model = selectedAgent.model else {
+              let model = selectedLMStudioRunModel else {
             error = "Local endpoint is no longer configured. Open Settings → Providers."
             streaming.cancel()
             isWaiting = false
@@ -1673,7 +1890,7 @@ struct AgentPaneView: View {
             let provider = OpenAICompatibleProvider(baseURL: url, model: model, apiKey: token)
             stream = provider.stream(messages: history, system: workspaceSystemPrompt)
         case .lmstudio:
-            let provider = LMStudioProvider(baseURL: url, model: model)
+            let provider = LMStudioProvider(baseURL: url, model: model, apiKey: token)
             stream = provider.stream(messages: history, system: workspaceSystemPrompt)
         }
 

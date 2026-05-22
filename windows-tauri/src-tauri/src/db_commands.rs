@@ -28,10 +28,7 @@ pub async fn workspace_update(
 }
 
 #[tauri::command]
-pub async fn workspace_delete(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), String> {
+pub async fn workspace_delete(state: State<'_, AppState>, id: String) -> Result<(), String> {
     workspace::delete(&state.db, &id).map_err(|e| e.to_string())
 }
 
@@ -95,10 +92,7 @@ pub async fn kanban_move_card(
 }
 
 #[tauri::command]
-pub async fn kanban_delete_card(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), String> {
+pub async fn kanban_delete_card(state: State<'_, AppState>, id: String) -> Result<(), String> {
     kanban::delete_card(&state.db, &id).map_err(|e| e.to_string())
 }
 
@@ -119,10 +113,7 @@ pub async fn note_upsert(
 }
 
 #[tauri::command]
-pub async fn note_delete(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), String> {
+pub async fn note_delete(state: State<'_, AppState>, id: String) -> Result<(), String> {
     notes::delete(&state.db, &id).map_err(|e| e.to_string())
 }
 
@@ -142,10 +133,7 @@ pub async fn endpoint_upsert(
 }
 
 #[tauri::command]
-pub async fn endpoint_delete(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<(), String> {
+pub async fn endpoint_delete(state: State<'_, AppState>, id: String) -> Result<(), String> {
     endpoints::delete(&state.db, &id).map_err(|e| e.to_string())
 }
 
@@ -159,7 +147,7 @@ pub async fn endpoint_test(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("endpoint {id} not found"))?;
     if endpoint.kind == "lmstudio" {
-        match lmstudio::fetch_models(&endpoint.base_url).await {
+        match lmstudio::fetch_models_with_auth(&endpoint.base_url, auth_token.as_deref()).await {
             Ok(models) => {
                 let loaded = models.iter().filter(|model| model.loaded).count();
                 return Ok(EndpointTestResult {
@@ -168,7 +156,10 @@ pub async fn endpoint_test(
                     message: format!("{} models, {} loaded", models.len(), loaded),
                 });
             }
-            Err(error) if lmstudio::server_is_up(&endpoint.base_url).await => {
+            Err(error)
+                if lmstudio::server_is_up_with_auth(&endpoint.base_url, auth_token.as_deref())
+                    .await =>
+            {
                 return Ok(EndpointTestResult {
                     ok: true,
                     status: 200,

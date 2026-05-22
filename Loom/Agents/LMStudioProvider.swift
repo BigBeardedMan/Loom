@@ -1,16 +1,20 @@
 import Foundation
 
-/// LM Studio provider. Speaks the OpenAI v1 wire format on the chat path
-/// (`{baseURL}/chat/completions`) and the LM Studio native v0 API on the
-/// model-discovery path (`{root}/api/v0/models`) so the picker can show
-/// per-model `loaded` status, context length, and quantization. Tool calls
-/// are emitted as `LLMEvent.toolUse` so the agent orchestrator can drive
-/// multi-turn loops against local code models like Qwen3-Coder, gpt-oss, and
-/// DeepSeek-Coder.
+/// LM Studio provider. Speaks the OpenAI v1 wire format on the tool-agent chat
+/// path (`{baseURL}/chat/completions`) and LM Studio's native v1 API for model
+/// discovery/load/unload/download. Native v0 remains as a compatibility
+/// fallback for older LM Studio builds.
 struct LMStudioProvider: LLMProvider {
     let baseURL: URL
     let model: String
+    let apiKey: String?
     var displayName: String { "LM Studio · \(model)" }
+
+    init(baseURL: URL, model: String, apiKey: String? = nil) {
+        self.baseURL = baseURL
+        self.model = model
+        self.apiKey = apiKey
+    }
 
     func stream(
         messages: [LLMMessage],
@@ -31,8 +35,8 @@ struct LMStudioProvider: LLMProvider {
 
     /// Cheap GET against `/v1/models`. Used by the Settings server-status pill
     /// so the UI can flip green/red without waiting on the lms CLI.
-    static func serverIsUp(baseURL: URL, timeout: TimeInterval = 1.5) async -> Bool {
-        var request = URLRequest(url: baseURL.appendingPathComponent("models"))
+    static func serverIsUp(baseURL: URL, apiKey: String? = nil, timeout: TimeInterval = 1.5) async -> Bool {
+        var request = authorizedRequest(url: baseURL.appendingPathComponent("models"), apiKey: apiKey)
         request.timeoutInterval = timeout
         request.httpMethod = "GET"
         do {
@@ -48,12 +52,12 @@ struct LMStudioProvider: LLMProvider {
     /// `response_format: { type: "json_schema" }`. The result is cached per
     /// endpoint + model because older LM Studio builds reject the field, while
     /// newer ones use it to reliably repair malformed tool arguments.
-    static func supportsJSONSchemaResponseFormat(baseURL: URL, model: String) async -> Bool {
+    static func supportsJSONSchemaResponseFormat(baseURL: URL, model: String, apiKey: String? = nil) async -> Bool {
         let key = jsonSchemaProbeCacheKey(baseURL: baseURL, model: model)
         if let cached = UserDefaults.standard.object(forKey: key) as? Bool {
             return cached
         }
-        let supported = await probeJSONSchemaResponseFormat(baseURL: baseURL, model: model)
+        let supported = await probeJSONSchemaResponseFormat(baseURL: baseURL, model: model, apiKey: apiKey)
         UserDefaults.standard.set(supported, forKey: key)
         return supported
     }
@@ -92,7 +96,7 @@ struct LMStudioProvider: LLMProvider {
         \(recent)
         """
 
-        let supportsSchema = await Self.supportsJSONSchemaResponseFormat(baseURL: baseURL, model: model)
+        let supportsSchema = await Self.supportsJSONSchemaResponseFormat(baseURL: baseURL, model: model, apiKey: apiKey)
         if supportsSchema,
            let repaired = await runArgumentRepair(
                 prompt: repairPrompt,
@@ -109,7 +113,7 @@ struct LMStudioProvider: LLMProvider {
         )
     }
 
-    private static func probeJSONSchemaResponseFormat(baseURL: URL, model: String) async -> Bool {
+    private static func probeJSONSchemaResponseFormat(baseURL: URL, model: String, apiKey: String?) async -> Bool {
         let schema: [String: Any] = [
             "type": "object",
             "properties": [
@@ -129,11 +133,10 @@ struct LMStudioProvider: LLMProvider {
         let messages = [
             Msg(role: "user", content: "Return {\"ok\": true}.")
         ]
-        var request = URLRequest(url: baseURL.appendingPathComponent("chat/completions"))
+        var request = authorizedRequest(url: baseURL.appendingPathComponent("chat/completions"), apiKey: apiKey)
         request.httpMethod = "POST"
         request.timeoutInterval = 8
         request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.setValue("Bearer lm-studio", forHTTPHeaderField: "authorization")
 
         do {
             let payload = RequestBody(
@@ -168,11 +171,10 @@ struct LMStudioProvider: LLMProvider {
         schemaName: String?,
         schemaObject: Any?
     ) async -> Data? {
-        var request = URLRequest(url: baseURL.appendingPathComponent("chat/completions"))
+        var request = Self.authorizedRequest(url: baseURL.appendingPathComponent("chat/completions"), apiKey: apiKey)
         request.httpMethod = "POST"
         request.timeoutInterval = 45
         request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.setValue("Bearer lm-studio", forHTTPHeaderField: "authorization")
 
         let responseFormat: ResponseFormat?
         if let schemaName, let schemaObject {
@@ -222,16 +224,24 @@ struct LMStudioProvider: LLMProvider {
 
     struct LMStudioModel: Hashable, Sendable {
         let id: String
+        let displayName: String?
         let loaded: Bool
         let contextLength: Int?
+        let maxContextLength: Int?
         let quantization: String?
         let architecture: String?
         let trainedForToolUse: Bool?
+        let sizeBytes: Int64?
+        let format: String?
+        let publisher: String?
+        let loadedInstanceIDs: [String]
+        let apiMode: String
 
         var displayLabel: String {
             let details = metadataSummary
-            if details.isEmpty { return id }
-            return "\(id) (\(details))"
+            let title = displayName?.isEmpty == false ? "\(displayName!) · \(id)" : id
+            if details.isEmpty { return title }
+            return "\(title) (\(details))"
         }
 
         var metadataSummary: String {
@@ -251,6 +261,12 @@ struct LMStudioProvider: LLMProvider {
             } else if trainedForToolUse == false {
                 bits.append("no tools")
             }
+            if let format, !format.isEmpty {
+                bits.append(format)
+            }
+            if let sizeBytes, sizeBytes > 0 {
+                bits.append(Self.formatBytes(sizeBytes))
+            }
             return bits.joined(separator: " · ")
         }
 
@@ -260,16 +276,176 @@ struct LMStudioProvider: LLMProvider {
             }
             return "\(length) ctx"
         }
+
+        private static func formatBytes(_ bytes: Int64) -> String {
+            let gb = Double(bytes) / 1_073_741_824
+            if gb >= 1 {
+                return String(format: "%.1f GB", gb)
+            }
+            let mb = Double(bytes) / 1_048_576
+            return String(format: "%.0f MB", mb)
+        }
     }
 
-    /// Hits `/api/v0/models` (native API) for rich metadata. Falls back to the
-    /// OpenAI-compat `/v1/models` shape when the native endpoint is missing.
-    static func fetchModels(baseURL: URL) async -> [LMStudioModel] {
-        let nativeRoot = nativeAPIRoot(from: baseURL)
-        if let models = await tryNativeModels(nativeRoot: nativeRoot), !models.isEmpty {
+    struct CapabilitySnapshot: Hashable, Sendable {
+        let apiMode: String
+        let supportsV1: Bool
+        let supportsModelManagement: Bool
+        let supportsDownloads: Bool
+        let supportsAuthToken: Bool
+        let lastCapabilityError: String?
+    }
+
+    /// Hits `/api/v1/models` first for model-management metadata, then v0 for
+    /// older builds, then OpenAI-compatible `/v1/models` as the last fallback.
+    static func fetchModels(baseURL: URL, apiKey: String? = nil) async -> [LMStudioModel] {
+        let nativeV1Root = nativeAPIRoot(from: baseURL, version: "v1")
+        if let models = await tryNativeV1Models(nativeRoot: nativeV1Root, apiKey: apiKey), !models.isEmpty {
             return sortedModels(models)
         }
-        return sortedModels(await tryOpenAIModels(baseURL: baseURL))
+        let nativeV0Root = nativeAPIRoot(from: baseURL, version: "v0")
+        if let models = await tryNativeV0Models(nativeRoot: nativeV0Root, apiKey: apiKey), !models.isEmpty {
+            return sortedModels(models)
+        }
+        return sortedModels(await tryOpenAIModels(baseURL: baseURL, apiKey: apiKey))
+    }
+
+    static func fetchCapabilities(baseURL: URL, apiKey: String? = nil) async -> CapabilitySnapshot {
+        let nativeV1Root = nativeAPIRoot(from: baseURL, version: "v1")
+        var request = authorizedRequest(url: nativeV1Root.appendingPathComponent("models"), apiKey: apiKey)
+        request.timeoutInterval = 2
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
+                return CapabilitySnapshot(
+                    apiMode: "v1",
+                    supportsV1: true,
+                    supportsModelManagement: true,
+                    supportsDownloads: true,
+                    supportsAuthToken: apiKey?.isEmpty == false,
+                    lastCapabilityError: nil
+                )
+            }
+        } catch {
+            let nativeV0Root = nativeAPIRoot(from: baseURL, version: "v0")
+            var fallback = authorizedRequest(url: nativeV0Root.appendingPathComponent("models"), apiKey: apiKey)
+            fallback.timeoutInterval = 2
+            if let (_, response) = try? await URLSession.shared.data(for: fallback),
+               let http = response as? HTTPURLResponse,
+               (200..<300).contains(http.statusCode) {
+                return CapabilitySnapshot(
+                    apiMode: "v0",
+                    supportsV1: false,
+                    supportsModelManagement: false,
+                    supportsDownloads: false,
+                    supportsAuthToken: apiKey?.isEmpty == false,
+                    lastCapabilityError: error.localizedDescription
+                )
+            }
+            return CapabilitySnapshot(
+                apiMode: "openai",
+                supportsV1: false,
+                supportsModelManagement: false,
+                supportsDownloads: false,
+                supportsAuthToken: apiKey?.isEmpty == false,
+                lastCapabilityError: error.localizedDescription
+            )
+        }
+        return CapabilitySnapshot(
+            apiMode: "openai",
+            supportsV1: false,
+            supportsModelManagement: false,
+            supportsDownloads: false,
+            supportsAuthToken: apiKey?.isEmpty == false,
+            lastCapabilityError: "Native v1 metadata endpoint was not available."
+        )
+    }
+
+    @discardableResult
+    static func loadModel(
+        baseURL: URL,
+        model: String,
+        contextLength: Int?,
+        apiKey: String? = nil
+    ) async throws -> String {
+        var request = authorizedRequest(url: nativeAPIRoot(from: baseURL, version: "v1").appendingPathComponent("models/load"), apiKey: apiKey)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 180
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        var body: [String: Any] = [
+            "model": model,
+            "echo_load_config": true,
+            "flash_attention": true,
+            "offload_kv_cache_to_gpu": true
+        ]
+        if let contextLength {
+            body["context_length"] = max(4_096, contextLength)
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw LLMError.httpStatus((response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+        let decoded = try JSONDecoder().decode(NativeLoadResponse.self, from: data)
+        return decoded.instance_id
+    }
+
+    @discardableResult
+    static func unloadModel(
+        baseURL: URL,
+        instanceID: String,
+        apiKey: String? = nil
+    ) async throws -> String {
+        var request = authorizedRequest(url: nativeAPIRoot(from: baseURL, version: "v1").appendingPathComponent("models/unload"), apiKey: apiKey)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 45
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["instance_id": instanceID])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw LLMError.httpStatus((response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+        let decoded = try JSONDecoder().decode(NativeUnloadResponse.self, from: data)
+        return decoded.instance_id
+    }
+
+    static func downloadModel(
+        baseURL: URL,
+        model: String,
+        quantization: String?,
+        apiKey: String? = nil
+    ) async throws -> DownloadStatus {
+        var request = authorizedRequest(url: nativeAPIRoot(from: baseURL, version: "v1").appendingPathComponent("models/download"), apiKey: apiKey)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 45
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        var body: [String: Any] = ["model": model]
+        let trimmedQuantization = quantization?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmedQuantization, !trimmedQuantization.isEmpty {
+            body["quantization"] = trimmedQuantization
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw LLMError.httpStatus((response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+        return try JSONDecoder().decode(DownloadStatus.self, from: data)
+    }
+
+    static func downloadStatus(
+        baseURL: URL,
+        jobID: String,
+        apiKey: String? = nil
+    ) async throws -> DownloadStatus {
+        let encodedJobID = jobID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? jobID
+        var request = authorizedRequest(url: nativeAPIRoot(from: baseURL, version: "v1").appendingPathComponent("models/download/status/\(encodedJobID)"), apiKey: apiKey)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 20
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw LLMError.httpStatus((response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+        return try JSONDecoder().decode(DownloadStatus.self, from: data)
     }
 
     private static func sortedModels(_ models: [LMStudioModel]) -> [LMStudioModel] {
@@ -281,8 +457,41 @@ struct LMStudioProvider: LLMProvider {
         }
     }
 
-    private static func tryNativeModels(nativeRoot: URL) async -> [LMStudioModel]? {
-        var request = URLRequest(url: nativeRoot.appendingPathComponent("models"))
+    private static func tryNativeV1Models(nativeRoot: URL, apiKey: String?) async -> [LMStudioModel]? {
+        var request = authorizedRequest(url: nativeRoot.appendingPathComponent("models"), apiKey: apiKey)
+        request.timeoutInterval = 3
+        request.httpMethod = "GET"
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                return nil
+            }
+            let decoded = try JSONDecoder().decode(NativeV1ModelsResponse.self, from: data)
+            return decoded.models.map { entry in
+                let firstLoaded = entry.loaded_instances.first
+                return LMStudioModel(
+                    id: entry.key,
+                    displayName: entry.display_name,
+                    loaded: !entry.loaded_instances.isEmpty,
+                    contextLength: firstLoaded?.config.context_length ?? entry.max_context_length,
+                    maxContextLength: entry.max_context_length,
+                    quantization: entry.quantization?.name,
+                    architecture: entry.architecture,
+                    trainedForToolUse: entry.capabilities?.trained_for_tool_use,
+                    sizeBytes: entry.size_bytes,
+                    format: entry.format,
+                    publisher: entry.publisher,
+                    loadedInstanceIDs: entry.loaded_instances.map(\.id),
+                    apiMode: "v1"
+                )
+            }
+        } catch {
+            return nil
+        }
+    }
+
+    private static func tryNativeV0Models(nativeRoot: URL, apiKey: String?) async -> [LMStudioModel]? {
+        var request = authorizedRequest(url: nativeRoot.appendingPathComponent("models"), apiKey: apiKey)
         request.timeoutInterval = 3
         request.httpMethod = "GET"
         do {
@@ -294,11 +503,18 @@ struct LMStudioProvider: LLMProvider {
             return decoded.data.map { entry in
                 LMStudioModel(
                     id: entry.id,
+                    displayName: nil,
                     loaded: (entry.state ?? "").lowercased() == "loaded",
                     contextLength: entry.max_context_length ?? entry.loaded_context_length,
+                    maxContextLength: entry.max_context_length,
                     quantization: entry.quantization,
                     architecture: entry.arch,
-                    trainedForToolUse: entry.trained_for_tool_use ?? entry.trainedForToolUse
+                    trainedForToolUse: entry.trained_for_tool_use ?? entry.trainedForToolUse,
+                    sizeBytes: nil,
+                    format: nil,
+                    publisher: nil,
+                    loadedInstanceIDs: (entry.state ?? "").lowercased() == "loaded" ? [entry.id] : [],
+                    apiMode: "v0"
                 )
             }
         } catch {
@@ -306,8 +522,8 @@ struct LMStudioProvider: LLMProvider {
         }
     }
 
-    private static func tryOpenAIModels(baseURL: URL) async -> [LMStudioModel] {
-        var request = URLRequest(url: baseURL.appendingPathComponent("models"))
+    private static func tryOpenAIModels(baseURL: URL, apiKey: String?) async -> [LMStudioModel] {
+        var request = authorizedRequest(url: baseURL.appendingPathComponent("models"), apiKey: apiKey)
         request.timeoutInterval = 3
         request.httpMethod = "GET"
         do {
@@ -319,11 +535,18 @@ struct LMStudioProvider: LLMProvider {
             return decoded.data.map { entry in
                 LMStudioModel(
                     id: entry.id,
+                    displayName: nil,
                     loaded: false,
                     contextLength: nil,
+                    maxContextLength: nil,
                     quantization: nil,
                     architecture: nil,
-                    trainedForToolUse: nil
+                    trainedForToolUse: nil,
+                    sizeBytes: nil,
+                    format: nil,
+                    publisher: nil,
+                    loadedInstanceIDs: [],
+                    apiMode: "openai"
                 )
             }
         } catch {
@@ -331,20 +554,30 @@ struct LMStudioProvider: LLMProvider {
         }
     }
 
-    /// Strip a trailing `/v1` from the user-supplied base URL so the native
-    /// API root sits at the same host. LM Studio exposes `/api/v0/...` and
-    /// `/v1/...` as siblings of the host root.
-    private static func nativeAPIRoot(from baseURL: URL) -> URL {
+    /// Strip a trailing `/v1` from the user-supplied base URL so native API
+    /// roots sit at the same host. LM Studio exposes `/api/v1/...`,
+    /// `/api/v0/...`, and `/v1/...` as siblings of the host root.
+    private static func nativeAPIRoot(from baseURL: URL, version: String) -> URL {
         let path = baseURL.path
         if path.hasSuffix("/v1") {
             let trimmed = String(path.dropLast("/v1".count))
             var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
             components?.path = trimmed
             if let root = components?.url {
-                return root.appendingPathComponent("api/v0")
+                return root.appendingPathComponent("api/\(version)")
             }
         }
-        return baseURL.appendingPathComponent("api/v0")
+        return baseURL.appendingPathComponent("api/\(version)")
+    }
+
+    private static func authorizedRequest(url: URL, apiKey: String?) -> URLRequest {
+        var request = URLRequest(url: url)
+        if let apiKey, !apiKey.isEmpty {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "authorization")
+        } else {
+            request.setValue("Bearer lm-studio", forHTTPHeaderField: "authorization")
+        }
+        return request
     }
 
     // MARK: - Streaming
@@ -355,13 +588,10 @@ struct LMStudioProvider: LLMProvider {
         tools: [LLMTool],
         continuation: AsyncThrowingStream<LLMEvent, Error>.Continuation
     ) async throws {
-        var request = URLRequest(url: baseURL.appendingPathComponent("chat/completions"))
+        var request = Self.authorizedRequest(url: baseURL.appendingPathComponent("chat/completions"), apiKey: apiKey)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.setValue("text/event-stream", forHTTPHeaderField: "accept")
-        // LM Studio accepts the literal "lm-studio" Bearer or no auth at all.
-        // Sending it makes proxies that strip empty headers happy.
-        request.setValue("Bearer lm-studio", forHTTPHeaderField: "authorization")
 
         var msgs: [Msg] = []
         if let system, !system.isEmpty {
@@ -604,3 +834,59 @@ struct LMStudioProvider: LLMProvider {
         }
     }
 }
+    struct DownloadStatus: Decodable, Hashable, Sendable {
+        let job_id: String?
+        let status: String
+        let total_size_bytes: Int64?
+        let downloaded_bytes: Int64?
+        let bytes_per_second: Int64?
+        let started_at: String?
+        let completed_at: String?
+        let estimated_completion: String?
+    }
+
+    private struct NativeLoadResponse: Decodable {
+        let instance_id: String
+    }
+
+    private struct NativeUnloadResponse: Decodable {
+        let instance_id: String
+    }
+
+    private struct NativeV1ModelsResponse: Decodable {
+        let models: [NativeV1ModelEntry]
+    }
+
+    private struct NativeV1ModelEntry: Decodable {
+        let type: String?
+        let publisher: String?
+        let key: String
+        let display_name: String?
+        let architecture: String?
+        let quantization: Quantization?
+        let size_bytes: Int64?
+        let params_string: String?
+        let loaded_instances: [LoadedInstance]
+        let max_context_length: Int?
+        let format: String?
+        let capabilities: Capabilities?
+
+        struct Quantization: Decodable {
+            let name: String?
+            let bits_per_weight: Double?
+        }
+
+        struct LoadedInstance: Decodable {
+            let id: String
+            let config: LoadedConfig
+        }
+
+        struct LoadedConfig: Decodable {
+            let context_length: Int?
+        }
+
+        struct Capabilities: Decodable {
+            let vision: Bool?
+            let trained_for_tool_use: Bool?
+        }
+    }

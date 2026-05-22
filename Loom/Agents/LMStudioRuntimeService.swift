@@ -22,11 +22,18 @@ final class LMStudioRuntimeService {
 
     struct ModelSnapshot: Identifiable, Hashable, Sendable {
         let id: String
+        let displayName: String?
         let loaded: Bool
         let contextLength: Int?
+        let maxContextLength: Int?
         let quantization: String?
         let architecture: String?
         let trainedForToolUse: Bool?
+        let sizeBytes: Int64?
+        let format: String?
+        let publisher: String?
+        let loadedInstanceIDs: [String]
+        let apiMode: String
         var schemaSupported: Bool?
 
         var detail: String {
@@ -37,7 +44,41 @@ final class LMStudioRuntimeService {
             if let architecture, !architecture.isEmpty { bits.append(architecture) }
             if trainedForToolUse == true { bits.append("tools") }
             if let schemaSupported { bits.append(schemaSupported ? "schema" : "no schema") }
+            if let format, !format.isEmpty { bits.append(format) }
+            if let sizeBytes, sizeBytes > 0 { bits.append(Self.formatBytes(sizeBytes)) }
             return bits.joined(separator: " · ")
+        }
+
+        var title: String {
+            displayName?.isEmpty == false ? "\(displayName!) · \(id)" : id
+        }
+
+        var unloadTarget: String {
+            loadedInstanceIDs.first ?? id
+        }
+
+        private static func formatBytes(_ bytes: Int64) -> String {
+            let gb = Double(bytes) / 1_073_741_824
+            if gb >= 1 {
+                return String(format: "%.1f GB", gb)
+            }
+            let mb = Double(bytes) / 1_048_576
+            return String(format: "%.0f MB", mb)
+        }
+    }
+
+    struct DownloadSnapshot: Hashable, Sendable {
+        let jobID: String?
+        let status: String
+        let totalSizeBytes: Int64?
+        let downloadedBytes: Int64?
+
+        var progressText: String {
+            if let totalSizeBytes, let downloadedBytes, totalSizeBytes > 0 {
+                let pct = (Double(downloadedBytes) / Double(totalSizeBytes)) * 100
+                return "\(status) · \(Int(pct.rounded()))%"
+            }
+            return status
         }
     }
 
@@ -45,9 +86,17 @@ final class LMStudioRuntimeService {
     private(set) var models: [ModelSnapshot] = []
     private(set) var selectedModelID: String?
     private(set) var preparedModelID: String?
+    private(set) var apiMode: String = "unknown"
+    private(set) var supportsV1: Bool = false
+    private(set) var supportsModelManagement: Bool = false
+    private(set) var supportsDownloads: Bool = false
+    private(set) var supportsAuthToken: Bool = false
+    private(set) var lastCapabilityError: String?
+    private(set) var lastDownload: DownloadSnapshot?
     private(set) var lastError: String?
     private(set) var isRefreshing: Bool = false
     private(set) var isPreparing: Bool = false
+    private(set) var isManagingModel: Bool = false
 
     var loadedModels: [ModelSnapshot] {
         models.filter(\.loaded)
@@ -57,11 +106,16 @@ final class LMStudioRuntimeService {
         chooseModel(preferredModel: selectedModelID)
     }
 
-    func refresh(baseURL: URL?, selectedModel: String?) async {
+    func refresh(baseURL: URL?, selectedModel: String?, apiKey: String? = nil) async {
         selectedModelID = selectedModel
         guard let baseURL else {
             serverState = .unknown
             models = []
+            apiMode = "unknown"
+            supportsV1 = false
+            supportsModelManagement = false
+            supportsDownloads = false
+            lastCapabilityError = nil
             return
         }
 
@@ -70,33 +124,52 @@ final class LMStudioRuntimeService {
         lastError = nil
 
         async let cliInstalled = isLMSInstalled()
-        async let serverUp = LMStudioProvider.serverIsUp(baseURL: baseURL)
+        async let serverUp = LMStudioProvider.serverIsUp(baseURL: baseURL, apiKey: apiKey)
         let installed = await cliInstalled
         let reachable = await serverUp
 
         if reachable {
             serverState = .running
-            let fetched = await LMStudioProvider.fetchModels(baseURL: baseURL)
+            let capabilities = await LMStudioProvider.fetchCapabilities(baseURL: baseURL, apiKey: apiKey)
+            apiMode = capabilities.apiMode
+            supportsV1 = capabilities.supportsV1
+            supportsModelManagement = capabilities.supportsModelManagement
+            supportsDownloads = capabilities.supportsDownloads
+            supportsAuthToken = capabilities.supportsAuthToken
+            lastCapabilityError = capabilities.lastCapabilityError
+            let fetched = await LMStudioProvider.fetchModels(baseURL: baseURL, apiKey: apiKey)
             var snapshots = fetched.map { model in
                 ModelSnapshot(
                     id: model.id,
+                    displayName: model.displayName,
                     loaded: model.loaded,
                     contextLength: model.contextLength,
+                    maxContextLength: model.maxContextLength,
                     quantization: model.quantization,
                     architecture: model.architecture,
                     trainedForToolUse: model.trainedForToolUse,
+                    sizeBytes: model.sizeBytes,
+                    format: model.format,
+                    publisher: model.publisher,
+                    loadedInstanceIDs: model.loadedInstanceIDs,
+                    apiMode: model.apiMode,
                     schemaSupported: nil
                 )
             }
             if let probeID = selectedModel ?? snapshots.first(where: \.loaded)?.id ?? snapshots.first?.id,
                let index = snapshots.firstIndex(where: { $0.id == probeID }) {
-                let supported = await LMStudioProvider.supportsJSONSchemaResponseFormat(baseURL: baseURL, model: probeID)
+                let supported = await LMStudioProvider.supportsJSONSchemaResponseFormat(baseURL: baseURL, model: probeID, apiKey: apiKey)
                 snapshots[index].schemaSupported = supported
             }
             models = snapshots
         } else {
             serverState = installed ? .stopped : .missingCLI
             models = []
+            apiMode = installed ? "offline" : "missing-cli"
+            supportsV1 = false
+            supportsModelManagement = false
+            supportsDownloads = false
+            supportsAuthToken = apiKey?.isEmpty == false
         }
     }
 
@@ -105,7 +178,8 @@ final class LMStudioRuntimeService {
         baseURL: URL?,
         preferredModel: String?,
         contextTarget: Int,
-        autoScale: Bool
+        autoScale: Bool,
+        apiKey: String? = nil
     ) async -> String? {
         guard let baseURL else {
             lastError = "No LM Studio endpoint is configured."
@@ -121,46 +195,122 @@ final class LMStudioRuntimeService {
         defer { isPreparing = false }
         lastError = nil
 
-        if !(await LMStudioProvider.serverIsUp(baseURL: baseURL)) {
+        if !(await LMStudioProvider.serverIsUp(baseURL: baseURL, apiKey: apiKey)) {
             do {
                 _ = try await runShell("lms daemon up")
-                if !(await waitForServer(baseURL: baseURL, timeout: 10)) {
+                if !(await waitForServer(baseURL: baseURL, apiKey: apiKey, timeout: 10)) {
                     lastError = "LM Studio daemon started, but the local server did not become reachable."
-                    await refresh(baseURL: baseURL, selectedModel: preferredModel)
+                    await refresh(baseURL: baseURL, selectedModel: preferredModel, apiKey: apiKey)
                     return nil
                 }
             } catch {
                 lastError = "Could not start LM Studio daemon: \(error.localizedDescription)"
-                await refresh(baseURL: baseURL, selectedModel: preferredModel)
+                await refresh(baseURL: baseURL, selectedModel: preferredModel, apiKey: apiKey)
                 return nil
             }
         }
 
-        await refresh(baseURL: baseURL, selectedModel: preferredModel)
+        await refresh(baseURL: baseURL, selectedModel: preferredModel, apiKey: apiKey)
         let target = chooseModel(preferredModel: preferredModel)
         guard let target else {
             lastError = "No local LM Studio models were found."
             return nil
         }
 
-        let escaped = shellEscape(target.id)
         let context = max(4_096, contextTarget)
-        let command: String
-        if autoScale {
-            command = "lms unload \(escaped) >/dev/null 2>&1 || true; lms load \(escaped) -y -c \(context) --parallel 1 --gpu max"
-        } else {
-            command = "lms load \(escaped) -y"
-        }
 
         do {
-            _ = try await runShell(command)
+            if supportsModelManagement {
+                if autoScale, target.loaded {
+                    _ = try? await LMStudioProvider.unloadModel(baseURL: baseURL, instanceID: target.unloadTarget, apiKey: apiKey)
+                }
+                _ = try await LMStudioProvider.loadModel(
+                    baseURL: baseURL,
+                    model: target.id,
+                    contextLength: autoScale ? context : nil,
+                    apiKey: apiKey
+                )
+            } else {
+                let escaped = shellEscape(target.id)
+                let command = autoScale
+                    ? "lms unload \(escaped) >/dev/null 2>&1 || true; lms load \(escaped) -y -c \(context) --parallel 1 --gpu max"
+                    : "lms load \(escaped) -y"
+                _ = try await runShell(command)
+            }
             preparedModelID = target.id
-            await refresh(baseURL: baseURL, selectedModel: target.id)
+            await refresh(baseURL: baseURL, selectedModel: target.id, apiKey: apiKey)
             return target.id
         } catch {
             lastError = "Could not load \(target.id): \(error.localizedDescription)"
-            await refresh(baseURL: baseURL, selectedModel: preferredModel)
+            await refresh(baseURL: baseURL, selectedModel: preferredModel, apiKey: apiKey)
             return nil
+        }
+    }
+
+    func loadModel(baseURL: URL?, modelID: String, contextTarget: Int, apiKey: String? = nil) async {
+        guard let baseURL else { return }
+        isManagingModel = true
+        defer { isManagingModel = false }
+        lastError = nil
+        do {
+            if supportsModelManagement {
+                _ = try await LMStudioProvider.loadModel(
+                    baseURL: baseURL,
+                    model: modelID,
+                    contextLength: contextTarget,
+                    apiKey: apiKey
+                )
+            } else {
+                await loadWithCLI(modelID, contextLength: contextTarget)
+            }
+            await refresh(baseURL: baseURL, selectedModel: modelID, apiKey: apiKey)
+        } catch {
+            lastError = "Could not load \(modelID): \(error.localizedDescription)"
+        }
+    }
+
+    func unloadModel(baseURL: URL?, modelID: String, instanceID: String?, apiKey: String? = nil) async {
+        guard let baseURL else { return }
+        isManagingModel = true
+        defer { isManagingModel = false }
+        lastError = nil
+        do {
+            if supportsModelManagement {
+                _ = try await LMStudioProvider.unloadModel(
+                    baseURL: baseURL,
+                    instanceID: instanceID ?? modelID,
+                    apiKey: apiKey
+                )
+            } else {
+                _ = try await runShell("lms unload \(shellEscape(modelID))")
+            }
+            await refresh(baseURL: baseURL, selectedModel: selectedModelID, apiKey: apiKey)
+        } catch {
+            lastError = "Could not unload \(modelID): \(error.localizedDescription)"
+        }
+    }
+
+    func downloadModel(baseURL: URL?, model: String, quantization: String?, apiKey: String? = nil) async {
+        guard let baseURL else { return }
+        isManagingModel = true
+        defer { isManagingModel = false }
+        lastError = nil
+        do {
+            let status = try await LMStudioProvider.downloadModel(
+                baseURL: baseURL,
+                model: model,
+                quantization: quantization,
+                apiKey: apiKey
+            )
+            lastDownload = DownloadSnapshot(
+                jobID: status.job_id,
+                status: status.status,
+                totalSizeBytes: status.total_size_bytes,
+                downloadedBytes: status.downloaded_bytes
+            )
+            await refresh(baseURL: baseURL, selectedModel: selectedModelID, apiKey: apiKey)
+        } catch {
+            lastError = "Could not start download: \(error.localizedDescription)"
         }
     }
 
@@ -193,15 +343,20 @@ final class LMStudioRuntimeService {
         return out.trimmingCharacters(in: .whitespacesAndNewlines) == "yes"
     }
 
-    private func waitForServer(baseURL: URL, timeout: TimeInterval) async -> Bool {
+    private func waitForServer(baseURL: URL, apiKey: String?, timeout: TimeInterval) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if await LMStudioProvider.serverIsUp(baseURL: baseURL) {
+            if await LMStudioProvider.serverIsUp(baseURL: baseURL, apiKey: apiKey) {
                 return true
             }
             try? await Task.sleep(nanoseconds: 350_000_000)
         }
-        return await LMStudioProvider.serverIsUp(baseURL: baseURL)
+        return await LMStudioProvider.serverIsUp(baseURL: baseURL, apiKey: apiKey)
+    }
+
+    private func loadWithCLI(_ identifier: String, contextLength: Int) async {
+        let escaped = shellEscape(identifier)
+        _ = try? await runShell("lms load \(escaped) -y -c \(max(4096, contextLength))")
     }
 
     private func runShell(_ command: String) async throws -> String {

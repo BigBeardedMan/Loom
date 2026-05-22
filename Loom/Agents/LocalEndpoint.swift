@@ -34,7 +34,7 @@ struct LocalEndpoint: Codable, Identifiable, Hashable, Sendable {
             switch self {
             case .ollama:           return "auto-discovered via /api/tags"
             case .openAICompatible: return "set the model id used in chat requests"
-            case .lmstudio:         return "auto-discovered via /api/v0/models"
+            case .lmstudio:         return "auto-discovered via /api/v1/models"
             }
         }
     }

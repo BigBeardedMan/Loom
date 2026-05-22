@@ -336,6 +336,14 @@ export const ipc = {
       contextTarget?: number;
       autoScale?: boolean;
     }) => invoke<LmStudioRuntimeStatus>("lmstudio_prepare", { args }),
+    load: (args: { endpointId: string; model: string; contextTarget?: number }) =>
+      invoke<LmStudioRuntimeStatus>("lmstudio_load", { args }),
+    unload: (args: { endpointId: string; model: string; instanceId?: string }) =>
+      invoke<LmStudioRuntimeStatus>("lmstudio_unload", { args }),
+    download: (args: { endpointId: string; model: string; quantization?: string }) =>
+      invoke<LmStudioDownloadStatus>("lmstudio_download", { args }),
+    downloadStatus: (endpointId: string, jobId: string) =>
+      invoke<LmStudioDownloadStatus>("lmstudio_download_status", { endpointId, jobId }),
   },
 
   usage: {
@@ -458,11 +466,18 @@ export type EndpointTestResult = {
 
 export type LmStudioModel = {
   id: string;
+  displayName: string | null;
   loaded: boolean;
   contextLength: number | null;
+  maxContextLength: number | null;
   quantization: string | null;
   architecture: string | null;
   trainedForToolUse: boolean | null;
+  sizeBytes: number | null;
+  format: string | null;
+  publisher: string | null;
+  loadedInstanceIds: string[];
+  apiMode: string;
   schemaSupported: boolean | null;
   detail: string;
 };
@@ -471,9 +486,26 @@ export type LmStudioRuntimeStatus = {
   cliInstalled: boolean;
   serverReachable: boolean;
   state: "no-endpoint" | "missing-cli" | "stopped" | "running" | string;
+  apiMode: string;
+  supportsV1: boolean;
+  supportsModelManagement: boolean;
+  supportsDownloads: boolean;
+  supportsAuthToken: boolean;
+  lastCapabilityError: string | null;
   models: LmStudioModel[];
   recommendedModelId: string | null;
   lastError: string | null;
+};
+
+export type LmStudioDownloadStatus = {
+  jobId: string | null;
+  status: string;
+  totalSizeBytes: number | null;
+  downloadedBytes: number | null;
+  bytesPerSecond: number | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  estimatedCompletion: string | null;
 };
 
 export type UsageBucket = {
