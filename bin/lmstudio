@@ -58,7 +58,7 @@ except ImportError:
 
 DEFAULT_BASE_URL = "http://localhost:1234/v1"
 DEFAULT_MAX_TURNS = 30
-CLI_VERSION = "8.2.82"
+CLI_VERSION = "8.2.83"
 TASK_ROOT = Path.home() / ".loom" / "tasks"
 SESSION_ROOT = Path.home() / ".loom" / "sessions"
 HISTORY_FILE = Path.home() / ".config" / "loom" / "lmstudio-history"
@@ -609,6 +609,64 @@ class TerminalInputDecoder:
         return bool(ch) and 0x20 <= ord(ch[-1]) <= 0x3f
 
 
+class RawTerminalReader:
+    """Unbuffered character reader for raw PTY input.
+
+    `sys.stdin.read(1)` can prefetch the rest of an escape sequence into
+    Python's text buffer. `select()` then sees no OS-level bytes, so the editor
+    can misclassify the buffered `[A` or `[B` payload as printable text. Reading
+    directly from the file descriptor keeps readiness checks and reads aligned.
+    """
+
+    def __init__(self, fd):
+        self.fd = fd
+
+    def read(self):
+        first = self._read_byte()
+        if not first:
+            return ""
+        byte = first[0]
+        if byte < 0x80:
+            return chr(byte)
+        if byte == 0x9b:
+            return "\x9b"
+        expected = self._utf8_expected_length(byte)
+        if expected <= 1:
+            return chr(byte)
+        data = bytearray(first)
+        for _ in range(expected - 1):
+            nxt = self._read_byte()
+            if not nxt:
+                break
+            data.extend(nxt)
+        try:
+            return bytes(data).decode("utf-8")
+        except UnicodeDecodeError:
+            return bytes(data).decode("utf-8", errors="replace")
+
+    def read_timeout(self, timeout):
+        ready, _, _ = select.select([self.fd], [], [], timeout)
+        if not ready:
+            return None
+        return self.read()
+
+    def _read_byte(self):
+        try:
+            return os.read(self.fd, 1)
+        except (OSError, ValueError):
+            return b""
+
+    @staticmethod
+    def _utf8_expected_length(byte):
+        if 0xc2 <= byte <= 0xdf:
+            return 2
+        if 0xe0 <= byte <= 0xef:
+            return 3
+        if 0xf0 <= byte <= 0xf4:
+            return 4
+        return 1
+
+
 class BoxedLineEditor:
     """Reads one line of input inside a closed box that wraps to multiple
     rows as the user types. Implements enough readline-style chords to
@@ -696,7 +754,7 @@ class BoxedLineEditor:
             sys.stdout.flush()
             try:
                 self._render()
-                return self._loop()
+                return self._loop(RawTerminalReader(fd))
             finally:
                 sys.stdout.write("\033[?2004l")
                 sys.stdout.flush()
@@ -922,10 +980,10 @@ class BoxedLineEditor:
 
     # --- main loop ------------------------------------------------------
 
-    def _loop(self):
+    def _loop(self, reader):
         decoder = TerminalInputDecoder(
-            lambda: sys.stdin.read(1),
-            self._read_with_timeout,
+            reader.read,
+            reader.read_timeout,
         )
         while True:
             event = decoder.read_event()
@@ -944,7 +1002,7 @@ class BoxedLineEditor:
                 continue
             if event.kind == "csi":
                 if event.value == "200~":
-                    self._handle_paste()
+                    self._handle_paste(reader)
                 else:
                     self._handle_csi(event.value)
                 continue
@@ -1015,19 +1073,10 @@ class BoxedLineEditor:
                 continue
 
             if o >= 32:  # printable
-                extra = 0
-                if o >= 0xf0:
-                    extra = 3
-                elif o >= 0xe0:
-                    extra = 2
-                elif o >= 0xc0:
-                    extra = 1
-                if extra:
-                    ch += sys.stdin.read(extra)
                 self._insert_text(ch, advance=1)
                 continue
 
-    def _handle_paste(self):
+    def _handle_paste(self, reader):
         """Consume stdin up to the bracketed-paste end marker (ESC[201~)
         and insert the pasted text at the cursor. Newlines are preserved
         as literal `\\n` in self.line; the wrap function treats them as
@@ -1035,17 +1084,17 @@ class BoxedLineEditor:
         \\r line endings don't double-space."""
         chunks = []
         while True:
-            ch = sys.stdin.read(1)
+            ch = reader.read()
             if not ch:
                 break
             if ch == "\x1b":
                 # Peek for the paste-end marker. If it isn't one, write
                 # the bytes through literally.
-                n1 = sys.stdin.read(1)
+                n1 = reader.read()
                 if n1 == "[":
                     tail = ""
                     while True:
-                        nb = sys.stdin.read(1)
+                        nb = reader.read()
                         if not nb:
                             break
                         tail += nb
@@ -10872,9 +10921,10 @@ def run_key_debug(duration=10.0):
         print(f"lmstudio {CLI_VERSION} key decoder debug")
         print(f"source: {Path(__file__).resolve()}")
         print(f"listening for {duration:.0f}s; press Ctrl-C to stop")
+        reader = RawTerminalReader(fd)
         decoder = TerminalInputDecoder(
-            lambda: sys.stdin.read(1),
-            BoxedLineEditor._read_with_timeout,
+            reader.read,
+            reader.read_timeout,
         )
         deadline = time.monotonic() + duration
         while time.monotonic() < deadline:
