@@ -267,7 +267,7 @@ TIPS = [
     "Shift+Tab cycles modes: default → PLAN → ACCEPT EDITS → BYPASS PERMISSIONS",
     "Esc during a running turn stops it · Ctrl-D or /quit to exit",
     "type @path/to/file to inline a file's contents (Tab completes)",
-    "slash commands: /help, /clear, /model, /bash, /cwd, /save, /resume, /cost",
+    "type / to open the slash-command palette · /commands prints details",
     "word wrap on by default · /wrap off (or --no-wrap) for terminal hard wrap",
     "--allow-bash enables run_bash and auto-approves it · --yolo skips every prompt",
     "orchestrator auto-continues until tasks are done (max 12) · /auto off to disable",
@@ -646,6 +646,20 @@ class BoxedLineEditor:
 
     # --- drawing --------------------------------------------------------
 
+    def _slash_palette_rows(self):
+        """Return live slash-command palette rows for the current edit.
+
+        The palette is only shown while the cursor is still in the first
+        slash token. Once the user adds a space for command arguments, the
+        prompt gets the full box back.
+        """
+        if self.state is None or "\n" in self.line or not self.line.startswith("/"):
+            return []
+        token = self.line[:self.col]
+        if not token.startswith("/") or any(ch.isspace() for ch in token):
+            return []
+        return slash_command_palette_rows(self.state, token, self._inner_width)
+
     def _render(self):
         """Full redraw. Wipe the previously drawn box (cursor is inside it
         at self._cursor_box_row), then render top + content rows + bottom
@@ -689,7 +703,8 @@ class BoxedLineEditor:
             sys.stdout.write("\r")
 
         rows, offsets = self._wrap()
-        height = len(rows) + 2  # top + N input rows + bottom
+        palette_rows = self._slash_palette_rows()
+        height = len(rows) + len(palette_rows) + 2  # top + input + palette + bottom
 
         sys.stdout.write(top + "\n")
         for i, row_text in enumerate(rows):
@@ -699,6 +714,10 @@ class BoxedLineEditor:
             else:
                 lead = style("│   ", "border")
             pad = max(0, inner - len(row_text))
+            sys.stdout.write(lead + row_text + " " * pad + right + "\n")
+        for row_text in palette_rows:
+            lead = style("│   ", "border")
+            pad = max(0, inner - _visible_len(row_text))
             sys.stdout.write(lead + row_text + " " * pad + right + "\n")
         sys.stdout.write(bot + "\n")
 
@@ -9265,6 +9284,113 @@ SLASH_COMMAND_GROUPS = [
 ]
 
 
+def _clip_plain(text, width):
+    text = str(text)
+    if width <= 0:
+        return ""
+    if len(text) <= width:
+        return text
+    if width == 1:
+        return "…"
+    return text[:width - 1] + "…"
+
+
+def slash_command_catalog(state=None):
+    """Grouped slash commands for help output and the live prompt palette."""
+    grouped = []
+    seen = set()
+    for group, names in SLASH_COMMAND_GROUPS:
+        items = []
+        for name in names:
+            desc = SLASH_COMMAND_HELP.get(name)
+            if desc:
+                items.append((name, desc))
+                seen.add(name)
+        if items:
+            grouped.append((group, items))
+
+    other = []
+    for name in sorted(SLASH_COMMAND_HELP):
+        if name not in seen:
+            other.append((name, SLASH_COMMAND_HELP[name]))
+    if other:
+        grouped.append(("Other", other))
+
+    custom = []
+    files = getattr(state, "slash_command_files", {}) or {}
+    for name, meta in sorted(files.items()):
+        command = f"/{name}"
+        if command in SLASH_COMMAND_HELP:
+            continue
+        desc = meta.get("description") or "workspace command"
+        if meta.get("model"):
+            desc = f"{desc} · model {meta['model']}"
+        custom.append((command, desc))
+    if custom:
+        grouped.append(("Custom", custom))
+    return grouped
+
+
+def _slash_command_columns(names, inner_width):
+    if not names:
+        return []
+    width = max(8, inner_width)
+    max_name = max(len(name) for name in names)
+    col_width = min(18, max(10, max_name + 2))
+    cols = max(1, min(4, width // col_width))
+    rows = []
+    for i in range(0, len(names), cols):
+        chunk = names[i:i + cols]
+        cells = [
+            _clip_plain(name, col_width - 1).ljust(col_width)
+            for name in chunk
+        ]
+        rows.append("".join(cells).rstrip())
+    return rows
+
+
+def slash_command_palette_rows(state, prefix, inner_width):
+    width = max(8, inner_width)
+    prefix = prefix or "/"
+    grouped = slash_command_catalog(state)
+    hint = "slash commands · type to filter · Tab completes · /commands details"
+    rows = [style(_clip_plain(hint, width), "tip")]
+
+    if prefix == "/":
+        for group, items in grouped:
+            rows.append(style(_clip_plain(group, width), "key"))
+            names = [name for name, _ in items]
+            for row in _slash_command_columns(names, width):
+                rows.append(style(row, "value"))
+        return rows
+
+    needle = prefix.lower()
+    matches = []
+    for group, items in grouped:
+        for name, desc in items:
+            if name.lower().startswith(needle):
+                matches.append((group, name, desc))
+
+    if not matches:
+        rows.append(style(_clip_plain(f"no slash commands match {prefix}", width), "warning"))
+        return rows
+
+    shown = matches[:12]
+    name_width = min(18, max(10, max(len(name) for _, name, _ in shown) + 1))
+    for _, name, desc in shown:
+        label = _clip_plain(name, name_width - 1).ljust(name_width)
+        desc_width = width - name_width - 1
+        if desc_width > 0:
+            rows.append(style(label, "value") + " " + style(_clip_plain(desc, desc_width), "dim"))
+        else:
+            rows.append(style(_clip_plain(name, width), "value"))
+
+    remaining = len(matches) - len(shown)
+    if remaining > 0:
+        rows.append(style(_clip_plain(f"{remaining} more matches · keep typing or use /commands", width), "dim"))
+    return rows
+
+
 class SlashRouter:
     def __init__(self, state):
         self.state = state
@@ -9389,20 +9515,10 @@ class SlashRouter:
 
     def cmd_commands(self, _):
         print(style(" Slash commands", "tip"))
-        for group, names in SLASH_COMMAND_GROUPS:
-            available = [name for name in names if name in self.commands]
-            if not available:
-                continue
+        for group, items in slash_command_catalog(self.state):
             print(style(f"  {group}", "key"))
-            for name in available:
-                desc = SLASH_COMMAND_HELP.get(name, "")
+            for name, desc in items:
                 print(f"   {style(name.ljust(14), 'value')} {style(desc, 'dim')}")
-        if self.state.slash_command_files:
-            print(style("  Custom", "key"))
-            for name, meta in sorted(self.state.slash_command_files.items()):
-                desc = meta.get("description") or "workspace command"
-                model = f" · model {meta['model']}" if meta.get("model") else ""
-                print(f"   {style('/' + name, 'value')} {style(desc + model, 'dim')}")
         print()
         return "continue"
 

@@ -39,6 +39,8 @@ The CLI runs in the current working directory. Tool paths are resolved relative 
 
 Type these at the `❯` prompt (they don't go to the model):
 
+Typing `/` opens a Claude/Codex-style slash-command palette in the shell. Keep typing to filter the list; Tab still completes the command name, and `/commands` prints the full grouped list including custom `.loom/commands/*.md` entries.
+
 | Command | Effect |
 | --- | --- |
 | `/doctor` | Check LM Studio install, `lms` CLI, server, loaded models, context, grammar, and tool support |
@@ -167,7 +169,7 @@ Type `@path/to/file` in your message to inline that file's contents:
 ❯ refactor @src/parser.py to use pathlib
 ```
 
-The CLI rewrites the prompt to include a tagged `<file path="...">…</file>` block before sending. Tab completes paths from the workspace; for slash commands it completes the command name.
+The CLI rewrites the prompt to include a tagged `<file path="...">…</file>` block before sending. Tab completes paths from the workspace; for slash commands it opens the command palette and completes the command name.
 
 ### Media types
 
