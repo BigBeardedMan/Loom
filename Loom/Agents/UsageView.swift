@@ -634,36 +634,46 @@ struct UsageView: View {
         }
     }
 
-    /// Three small donut charts laid out vertically so they fit even in
-    /// the side-by-side Claude/Codex layout. Each is hidden when its source
-    /// data is empty (e.g. Codex has no per-line model data yet).
+    /// Compact usage composition views. The Limits dashboard is intentionally
+    /// separate so limit meters keep their existing behavior and layout.
     @ViewBuilder
     private func analyticsRow(_ tool: CLIToolUsage) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             if tool.totalTokens > 0 {
-                PieChartView(
+                UsageTokenMixView(
                     title: "Token mix",
                     slices: tokenMixSlices(tool),
-                    centerLabel: formatTokens(tool.totalTokens),
-                    centerSubLabel: "TOTAL"
+                    totalLabel: formatTokens(tool.totalTokens),
+                    valueFormatter: formatTokens
                 )
             }
-            if !tool.tokensByModel.isEmpty {
-                PieChartView(
+
+            if !tool.tokensByModel.isEmpty || !tool.tokensByProject.isEmpty {
+                let models = UsageRankedBreakdownView(
                     title: "Models",
-                    slices: modelSlices(tool),
-                    centerLabel: "\(tool.tokensByModel.count)",
-                    centerSubLabel: "MODELS"
+                    rows: modelBreakdownRows(tool),
+                    emptyText: "No model totals in this window.",
+                    valueFormatter: formatTokens
                 )
-            }
-            if !tool.tokensByProject.isEmpty {
-                PieChartView(
+                let projects = UsageRankedBreakdownView(
                     title: "Project mix",
-                    slices: projectSlices(tool),
-                    centerLabel: "\(tool.tokensByProject.count)",
-                    centerSubLabel: "REPOS"
+                    rows: projectBreakdownRows(tool),
+                    emptyText: "No project totals in this window.",
+                    valueFormatter: formatTokens
                 )
+
+                if !tool.tokensByModel.isEmpty && !tool.tokensByProject.isEmpty {
+                    HStack(alignment: .top, spacing: 10) {
+                        models
+                        projects
+                    }
+                } else if !tool.tokensByModel.isEmpty {
+                    models
+                } else {
+                    projects
+                }
             }
+
             if tool.promptCount > 0 {
                 HStack(spacing: 4) {
                     Image(systemName: "text.bubble")
@@ -677,60 +687,50 @@ struct UsageView: View {
         }
     }
 
-    private func tokenMixSlices(_ tool: CLIToolUsage) -> [PieSlice] {
+    private func tokenMixSlices(_ tool: CLIToolUsage) -> [UsageBreakdownSlice] {
         [
-            PieSlice(label: "Input",  value: tool.inputTokens,  color: tool.tool.brandColor),
-            PieSlice(label: "Output", value: tool.outputTokens, color: tool.tool.brandColor.opacity(0.55)),
-            PieSlice(label: "Cached", value: tool.cachedTokens, color: LoomTheme.blue.opacity(0.7))
+            UsageBreakdownSlice(label: "Input", value: tool.inputTokens, color: tool.tool.brandColor),
+            UsageBreakdownSlice(label: "Output", value: tool.outputTokens, color: tool.tool.brandColor.opacity(0.55)),
+            UsageBreakdownSlice(label: "Cached", value: tool.cachedTokens, color: LoomTheme.blue.opacity(0.72))
         ]
     }
 
-    /// Build up to 5 brand-tinted slices for the model donut. Anything
-    /// past the top 5 gets folded into "Other" so the legend stays
-    /// readable.
-    private func modelSlices(_ tool: CLIToolUsage) -> [PieSlice] {
-        sliceMix(
+    private func modelBreakdownRows(_ tool: CLIToolUsage) -> [UsageBreakdownRow] {
+        rankedBreakdownRows(
             entries: tool.tokensByModel.map { (label: $0.displayName, value: $0.tokens) },
-            base: tool.tool.brandColor
+            tint: tool.tool.brandColor
         )
     }
 
-    private func projectSlices(_ tool: CLIToolUsage) -> [PieSlice] {
-        sliceMix(
+    private func projectBreakdownRows(_ tool: CLIToolUsage) -> [UsageBreakdownRow] {
+        rankedBreakdownRows(
             entries: tool.tokensByProject.map { (label: $0.displayName, value: $0.tokens) },
-            base: LoomTheme.blue
+            tint: LoomTheme.blue
         )
     }
 
-    private func sliceMix(
+    private func rankedBreakdownRows(
         entries: [(label: String, value: Int)],
-        base: Color
-    ) -> [PieSlice] {
-        let palette: [Color] = [
-            base,
-            base.opacity(0.7),
-            base.opacity(0.5),
-            base.opacity(0.35),
-            base.opacity(0.22)
-        ]
+        tint: Color
+    ) -> [UsageBreakdownRow] {
         let cap = 5
         let head = entries.prefix(cap)
         let tail = entries.dropFirst(cap)
-        var slices: [PieSlice] = []
+        var rows: [UsageBreakdownRow] = []
         for (idx, entry) in head.enumerated() {
-            slices.append(
-                PieSlice(
+            rows.append(
+                UsageBreakdownRow(
                     label: entry.label,
                     value: entry.value,
-                    color: palette[min(idx, palette.count - 1)]
+                    color: tint.opacity(max(0.42, 0.9 - Double(idx) * 0.11))
                 )
             )
         }
         let rest = tail.reduce(0) { $0 + $1.value }
         if rest > 0 {
-            slices.append(PieSlice(label: "Other", value: rest, color: LoomTheme.hairline))
+            rows.append(UsageBreakdownRow(label: "Other", value: rest, color: LoomTheme.hairline))
         }
-        return slices
+        return rows
     }
 
     private func statCell(_ label: String, _ value: String) -> some View {
