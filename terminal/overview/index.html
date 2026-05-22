@@ -694,6 +694,8 @@
       
         
       
+        
+      
     
     
     
@@ -840,6 +842,34 @@
     
   
     Local LLMs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/lmstudio-cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    lmstudio CLI
   
 
     
@@ -1058,6 +1088,8 @@
       
         
       
+        
+      
     
     
     
@@ -1214,6 +1246,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#session-transcripts-and-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Session transcripts and recovery
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#working-directory" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1281,6 +1324,34 @@
     
   
     CLI agent detection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../command-history/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command history
   
 
     
@@ -1439,6 +1510,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -1557,6 +1632,62 @@
     
   
     Settings → Providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../settings/mcp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../settings/shell/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings -&gt; Shell
   
 
     
@@ -1832,7 +1963,7 @@
   <span class="md-ellipsis">
     
   
-    Cutting a release
+    Cutting a Loom release
   
 
     
@@ -2228,6 +2359,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#session-transcripts-and-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Session transcripts and recovery
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#working-directory" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2304,10 +2446,16 @@
 <li>TTY allocation (so things like <code>top</code> and <code>bat</code> get a width).</li>
 <li>Working directory seeded from the workspace folder.</li>
 <li>Standard ANSI color and 256-color support; truecolor via SwiftTerm.</li>
+<li>Claude click-to-edit: clicking inside an active Claude prompt moves the
+  cursor to that spot.</li>
+<li>Local transcript persistence with Recently Closed and Recently Deleted
+  recovery in Loom.</li>
 </ul>
 <h2 id="what-it-doesnt-have-yet">What it doesn't have (yet)<a class="headerlink" href="#what-it-doesnt-have-yet" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Inline cards rendered alongside scrollback</strong>: today the per-pane card view <em>replaces</em> the live PTY (toggle in pane header). Cards interleaved with raw output is a future expansion.</li>
+<li><strong>Process resurrection</strong>: recovered sessions open a saved transcript and can
+  start a fresh shell in the same folder, but the old process is not resumed.</li>
 <li><strong>Built-in SSH session manager</strong>: out of scope. Use <code>ssh</code> like normal.</li>
 </ul>
 <h2 id="card-view">Card view<a class="headerlink" href="#card-view" title="Permanent link">&para;</a></h2>
@@ -2324,6 +2472,25 @@
 </ul>
 <p>Splits use SwiftUI's native <code>HSplitView</code> / <code>VSplitView</code>, so the divider between panes is draggable.</p>
 <p>Layouts persist: the next time you open the workspace, the panes return with the same axis, count, and per-pane cwd. PTYs themselves don't survive relaunch — each restored pane spawns a fresh shell in its saved directory.</p>
+<h2 id="session-transcripts-and-recovery">Session transcripts and recovery<a class="headerlink" href="#session-transcripts-and-recovery" title="Permanent link">&para;</a></h2>
+<p>Loom saves terminal output locally as raw ANSI transcripts under
+<code>~/Library/Application Support/Loom/Terminal History/</code>.
+Closing a Terminal block moves its saved transcript into <strong>Recently Closed</strong> in
+the Prompt workspace sidebar. Click a row to read the transcript, or use
+<strong>Start Fresh Shell Here</strong> to open a new terminal at the saved folder.</p>
+<p>The bottom of the Terminal Sessions section has <strong>Recently Deleted</strong>. From
+there you can recover a transcript back to Recently Closed or delete it
+permanently.</p>
+<p>Settings -&gt; Shell -&gt; Terminal History controls this feature:</p>
+<ul>
+<li><strong>Save terminal transcripts locally</strong> turns transcript writes on or off.</li>
+<li><strong>Storage limit</strong> defaults to 1 GB and can be set from 250 MB to 10 GB.</li>
+<li><strong>Prune Terminal History</strong> clears saved transcripts. Active terminals keep
+  running, but their saved transcript files start over.</li>
+<li><strong>Reveal History Folder</strong> opens the transcript folder in Finder.</li>
+</ul>
+<p>When saved history exceeds the limit, Loom prunes old closed/deleted
+transcripts first and does not kill active terminal panes.</p>
 <h2 id="working-directory">Working directory<a class="headerlink" href="#working-directory" title="Permanent link">&para;</a></h2>
 <p>The terminal launches in the workspace's folder URL. Subsequent <code>cd</code>s persist within the session. Restart the pane (× then re-add) to reset to the workspace folder.</p>
 <h2 id="copy-paste-image-drop">Copy / paste / image drop<a class="headerlink" href="#copy-paste-image-drop" title="Permanent link">&para;</a></h2>
@@ -2331,11 +2498,13 @@
 <p>When the focused Terminal pane receives an image-only pasteboard, Loom inserts an editable Codex image argument instead of sending image bytes to the PTY:</p>
 <div class="language-sh highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>--image<span class="w"> </span><span class="s1">&#39;&lt;path&gt;&#39;</span>
 </span></code></pre></div>
-<p>Loom also inserts a trailing space after the argument. Copied image files from Finder reuse the original file path. Direct clipboard images, such as screenshots, are encoded as PNG files under <code>~/Library/Application Support/Loom/Clipboard Images/</code>. Loom never presses Return for this path; the command stays editable so you can review it before running it.</p>
+<p>Loom also inserts a trailing space after the argument. Copied image files from Finder reuse the original file path. Direct clipboard images, such as screenshots, are encoded as PNG files under <code>~/Library/Application Support/Loom/Clipboard Images/</code> in the Loom build. Loom never presses Return for this path; the command stays editable so you can review it before running it.</p>
 <p>If the clipboard contains both text and image data, text paste wins. That keeps rich copies from browsers and documents from unexpectedly turning into image arguments. ⇧⌘V keeps its existing plain-text behavior for text paste, and uses the same image argument behavior only when no text is available.</p>
 <p>Dragging an image file or raw image data onto a Terminal pane uses the same command shape. Loom inserts <code>--image '&lt;path&gt;'</code> at the cursor, keeps Finder-dragged image file paths intact, saves raw image drags as PNG files in the same Clipboard Images folder, and never presses Return.</p>
 <h2 id="scrollback">Scrollback<a class="headerlink" href="#scrollback" title="Permanent link">&para;</a></h2>
-<p>SwiftTerm keeps the default 1000-line scrollback. Scroll with two-finger drag or the keyboard's Page Up / Page Down (depending on terminal app's <code>terminfo</code>).</p>
+<p>SwiftTerm keeps the default 1000-line live scrollback. Scroll with two-finger
+drag or the keyboard's Page Up / Page Down (depending on terminal app's
+<code>terminfo</code>). Live scrollback is separate from the saved transcript files.</p>
 <h2 id="the-terminal-as-the-differentiator">The terminal as the differentiator<a class="headerlink" href="#the-terminal-as-the-differentiator" title="Permanent link">&para;</a></h2>
 <p>Loom's product principle: <strong>terminal work should be reviewable</strong>. Today that means giving the terminal first-class real-estate alongside the editor and agent. As Loom evolves the terminal will accumulate structure — command boundaries, exit codes, agent-issued vs human-issued commands — that other tools throw away as scrollback.</p>
 

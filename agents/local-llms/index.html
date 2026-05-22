@@ -16,7 +16,7 @@
         <link rel="prev" href="../anthropic-api/">
       
       
-        <link rel="next" href="../custom-providers/">
+        <link rel="next" href="../lmstudio-cli/">
       
       
         
@@ -696,6 +696,8 @@
       
         
       
+        
+      
     
     
     
@@ -920,27 +922,27 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#openai-compatible-setup-lm-studio-llamacpp-jan-vllm" class="md-nav__link">
+  <a href="#lm-studio-setup" class="md-nav__link">
     <span class="md-ellipsis">
       
-        OpenAI-compatible setup (LM Studio, llama.cpp, Jan, vLLM)
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="OpenAI-compatible setup (LM Studio, llama.cpp, Jan, vLLM)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#lm-studio" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        LM Studio
+        LM Studio setup
       
     </span>
   </a>
   
 </li>
+      
+        <li class="md-nav__item">
+  <a href="#openai-compatible-setup-llamacpp-jan-vllm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OpenAI-compatible setup (llama.cpp, Jan, vLLM)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="OpenAI-compatible setup (llama.cpp, Jan, vLLM)">
+      <ul class="md-nav__list">
         
           <li class="md-nav__item">
   <a href="#llamacpp" class="md-nav__link">
@@ -1017,6 +1019,34 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../lmstudio-cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    lmstudio CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -1225,6 +1255,8 @@
       
         
       
+        
+      
     
     
     
@@ -1315,6 +1347,34 @@
     
   
     CLI agent detection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../terminal/command-history/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command history
   
 
     
@@ -1473,6 +1533,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -1591,6 +1655,62 @@
     
   
     Settings → Providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../settings/mcp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../settings/shell/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings -&gt; Shell
   
 
     
@@ -1866,7 +1986,7 @@
   <span class="md-ellipsis">
     
   
-    Cutting a release
+    Cutting a Loom release
   
 
     
@@ -2246,27 +2366,27 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#openai-compatible-setup-lm-studio-llamacpp-jan-vllm" class="md-nav__link">
+  <a href="#lm-studio-setup" class="md-nav__link">
     <span class="md-ellipsis">
       
-        OpenAI-compatible setup (LM Studio, llama.cpp, Jan, vLLM)
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="OpenAI-compatible setup (LM Studio, llama.cpp, Jan, vLLM)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#lm-studio" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        LM Studio
+        LM Studio setup
       
     </span>
   </a>
   
 </li>
+      
+        <li class="md-nav__item">
+  <a href="#openai-compatible-setup-llamacpp-jan-vllm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OpenAI-compatible setup (llama.cpp, Jan, vLLM)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="OpenAI-compatible setup (llama.cpp, Jan, vLLM)">
+      <ul class="md-nav__list">
         
           <li class="md-nav__item">
   <a href="#llamacpp" class="md-nav__link">
@@ -2365,7 +2485,7 @@
 
 
 <h1 id="local-llms">Local LLMs<a class="headerlink" href="#local-llms" title="Permanent link">&para;</a></h1>
-<p>Loom can stream chat from any LLM you run on <code>localhost</code> or your LAN. Two integrations are built in:</p>
+<p>Loom can stream chat from any LLM you run on <code>localhost</code> or your LAN. Three integrations are built in:</p>
 <table>
 <thead>
 <tr>
@@ -2381,13 +2501,18 @@
 <td><code>POST /api/chat</code> (NDJSON stream), <code>GET /api/tags</code> for models</td>
 </tr>
 <tr>
+<td><strong>LM Studio</strong></td>
+<td>LM Studio's local server, with richer model discovery through <code>/api/v0/models</code></td>
+<td>OpenAI SSE stream plus LM Studio model metadata</td>
+</tr>
+<tr>
 <td><strong>OpenAI-compatible</strong></td>
-<td>LM Studio, llama.cpp's <code>llama-server</code>, Jan, vLLM, LocalAI, anything that speaks <code>/v1/chat/completions</code></td>
+<td>llama.cpp's <code>llama-server</code>, Jan, vLLM, LocalAI, anything that speaks <code>/v1/chat/completions</code></td>
 <td>OpenAI SSE stream</td>
 </tr>
 </tbody>
 </table>
-<p>Both are added in <a href="../../settings/providers/">Settings → Providers</a>.</p>
+<p>All three are added in <a href="../../settings/providers/">Settings → Providers</a>.</p>
 <h2 id="ollama-setup">Ollama setup<a class="headerlink" href="#ollama-setup" title="Permanent link">&para;</a></h2>
 <ol>
 <li>Install Ollama: <code>brew install ollama</code> (or <a href="https://ollama.com/download">download</a>).</li>
@@ -2405,20 +2530,35 @@
 <p>The Agent pane picker now has a <code>Local · Ollama</code> group with one entry per pulled model. Pick one, send a prompt, watch tokens stream in.</p>
 <h3 id="network-ollama">Network Ollama<a class="headerlink" href="#network-ollama" title="Permanent link">&para;</a></h3>
 <p>Run <code>ollama serve</code> on another machine with <code>OLLAMA_HOST=0.0.0.0:11434 ollama serve</code>, then in Loom set <strong>Base URL</strong> to <code>http://&lt;host&gt;:11434</code>. /api/tags discovery and /api/chat streaming work the same over LAN.</p>
-<h2 id="openai-compatible-setup-lm-studio-llamacpp-jan-vllm">OpenAI-compatible setup (LM Studio, llama.cpp, Jan, vLLM)<a class="headerlink" href="#openai-compatible-setup-lm-studio-llamacpp-jan-vllm" title="Permanent link">&para;</a></h2>
-<p>These tools all expose an OpenAI-shaped HTTP API. Pick one, start its server, then add an endpoint in Loom.</p>
-<h3 id="lm-studio">LM Studio<a class="headerlink" href="#lm-studio" title="Permanent link">&para;</a></h3>
+<h2 id="lm-studio-setup">LM Studio setup<a class="headerlink" href="#lm-studio-setup" title="Permanent link">&para;</a></h2>
+<p>LM Studio exposes an OpenAI-shaped chat API plus a native model-discovery API that tells Loom which models are installed and loaded.</p>
 <ol>
 <li>In LM Studio: <strong>Developer</strong> → <strong>Local Server</strong> → start the server (default port <code>1234</code>).</li>
-<li>Note the <strong>model identifier</strong> in the active session — e.g. <code>lmstudio-community/Llama-3.1-8B-Instruct</code>.</li>
+<li>Load a model in LM Studio, or use the <code>lms</code> CLI to load one.</li>
 <li>Loom → <strong>Settings → Providers → Add</strong>.</li>
 <li><strong>Display name:</strong> <code>LM Studio</code></li>
-<li><strong>Kind:</strong> OpenAI-compatible</li>
+<li><strong>Kind:</strong> LM Studio</li>
 <li><strong>Base URL:</strong> <code>http://localhost:1234/v1</code></li>
-<li><strong>Model:</strong> the identifier from step 2.</li>
+<li><strong>Default model:</strong> optional fallback only; Loom auto-discovers installed models through <code>/api/v0/models</code>.</li>
 <li><strong>Requires auth:</strong> off.</li>
+<li><strong>Test connection</strong> → should report installed and loaded model counts.</li>
 <li><strong>Save</strong>.</li>
 </ol>
+<p>If the LM Studio server is already running when you open <strong>Settings → Providers</strong>,
+Loom offers an <strong>Add LM Studio</strong> shortcut that creates this endpoint for you.
+Loaded models appear first in the Agent picker with their context and
+quantization details.</p>
+<p>On Windows, the Agent pane also exposes a compact LM Studio runtime strip. Use
+<strong>Refresh</strong> to re-read <code>/api/v0/models</code>, <strong>Prepare</strong> to start the <code>lms</code> server
+and load the selected or recommended model, and <strong>Auto-scale</strong> to request the
+target context size with <code>--parallel 1 --gpu max</code>. The terminal launch menu can
+insert <code>lmstudio</code>, <code>lmstudio --allow-bash</code>, <code>lmstudio --bypass-permissions</code>, or
+<code>lms server status</code> into the active shell.</p>
+<blockquote>
+<p>Prefer a terminal? The <a href="../lmstudio-cli/"><code>lmstudio</code> CLI</a> ships with Loom and gives you a <code>claude</code>-style agent loop in any terminal, backed by the same LM Studio server. Tasks flow into Loom's Tasks pane automatically.</p>
+</blockquote>
+<h2 id="openai-compatible-setup-llamacpp-jan-vllm">OpenAI-compatible setup (llama.cpp, Jan, vLLM)<a class="headerlink" href="#openai-compatible-setup-llamacpp-jan-vllm" title="Permanent link">&para;</a></h2>
+<p>These tools expose an OpenAI-shaped HTTP API. Pick one, start its server, then add an endpoint in Loom.</p>
 <h3 id="llamacpp">llama.cpp<a class="headerlink" href="#llamacpp" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>./llama-server<span class="w"> </span>-m<span class="w"> </span>/path/to/model.gguf<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">8080</span>
 </span></code></pre></div>
@@ -2428,9 +2568,21 @@
 <h3 id="vllm-localai">vLLM / LocalAI<a class="headerlink" href="#vllm-localai" title="Permanent link">&para;</a></h3>
 <p>Same shape: configure <strong>Base URL</strong> to wherever the server listens (commonly <code>http://localhost:8000/v1</code>), set the <strong>Model</strong> id to whatever the server expects, save.</p>
 <h2 id="auth-tokens">Auth tokens<a class="headerlink" href="#auth-tokens" title="Permanent link">&para;</a></h2>
-<p>Some local servers (or the LAN proxies in front of them) want a bearer token. Toggle <strong>Requires auth</strong> in the editor and paste the token. It's stored in macOS Keychain under account <code>local_endpoint_&lt;UUID&gt;</code> and sent as <code>Authorization: Bearer &lt;token&gt;</code> on every request.</p>
+<p>Some local servers (or the LAN proxies in front of them) want a bearer token.
+Toggle <strong>Requires auth</strong> in the editor and paste the token. It's stored in
+macOS Keychain or Windows Credential Manager and sent as
+<code>Authorization: Bearer &lt;token&gt;</code> on every request.</p>
 <h2 id="streaming-and-cancel">Streaming and cancel<a class="headerlink" href="#streaming-and-cancel" title="Permanent link">&para;</a></h2>
 <p>All HTTP providers stream tokens live into the assistant bubble. Hit the <strong>Stop</strong> button (top right of the agent pane during a turn) to cancel — the URLSession task is canceled and the bubble shows whatever was already emitted.</p>
+<p>LM Studio defaults to <strong>Agent Mode</strong> in the Agent pane. Use the wand button to
+switch back to plain chat. In Agent Mode, the permission menu supports:</p>
+<ul>
+<li><strong>Ask:</strong> prompt before file edits and shell commands.</li>
+<li><strong>Plan:</strong> allow read/list/task updates only.</li>
+<li><strong>Accept Edits:</strong> auto-approve file edits, still ask for shell commands.</li>
+<li><strong>Bypass Permissions:</strong> auto-approve file edits and shell commands for the
+  current run.</li>
+</ul>
 <h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>"HTTP 404"</strong> when sending — check the Base URL. OpenAI-compatible servers expect the <code>/v1</code> path; Ollama does not.</li>

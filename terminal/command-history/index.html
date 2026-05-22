@@ -13,6 +13,10 @@
         <link rel="canonical" href="https://bigbeardedman.github.io/Loom/terminal/command-history/">
       
       
+        <link rel="prev" href="../cli-detection/">
+      
+      
+        <link rel="next" href="../command-injection/">
       
       
         
@@ -690,6 +694,8 @@
       
         
       
+        
+      
     
     
     
@@ -836,6 +842,34 @@
     
   
     Local LLMs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/lmstudio-cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    lmstudio CLI
   
 
     
@@ -1041,8 +1075,10 @@
       
   
   
+    
   
   
+  
     
     
       
@@ -1052,6 +1088,8 @@
       
         
       
+        
+      
     
     
     
@@ -1061,13 +1099,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" checked>
         
           
           <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
@@ -1088,7 +1124,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_7">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1150,6 +1186,169 @@
   
 
       </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command history
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command history
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#how-it-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it works
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workspace-filtering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workspace filtering
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#per-row-actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-row actions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#output-capture-v220" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output capture (v2.2.0+)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#whats-not-captured-yet" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What's not captured (yet)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#command-history-vs-terminal-transcripts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Command history vs. terminal transcripts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#privacy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Privacy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#removing-the-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Removing the integration
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1300,6 +1499,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -1418,6 +1621,62 @@
     
   
     Settings → Providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../settings/mcp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../settings/shell/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings -&gt; Shell
   
 
     
@@ -1693,7 +1952,7 @@
   <span class="md-ellipsis">
     
   
-    Cutting a release
+    Cutting a Loom release
   
 
     
@@ -2100,6 +2359,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#command-history-vs-terminal-transcripts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Command history vs. terminal transcripts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#privacy" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2150,7 +2420,7 @@
 <p>Loom's Commands panel lists every shell command you've run inside a Loom terminal pane: the command itself, its working directory, when it ran, how long it took, and whether it succeeded.</p>
 <p>It's available as a panel kind in any <strong>Prompt</strong> workspace. Add it the same way you'd add a Terminal or Editor block.</p>
 <h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
-<p>Loom installs a small zsh shim at <code>~/Library/Application Support/Loom/shell/.zshrc</code>. When a Loom terminal pane spawns its login shell, the env it passes through includes:</p>
+<p>Loom installs a small zsh shim at <code>~/Library/Application Support/Loom/shell/.zshrc</code> in the Loom build. When a Loom terminal pane spawns its login shell, the env it passes through includes:</p>
 <ul>
 <li><code>ZDOTDIR=~/Library/Application Support/Loom/shell</code> — points zsh at the shim directory.</li>
 <li><code>LOOM_SESSION_ID=&lt;uuid&gt;</code> — identifies which Loom terminal session ran the command.</li>
@@ -2177,10 +2447,20 @@
 <li><strong>Non-zsh shells</strong> are not supported. The shim is zsh-specific. If your <code>$SHELL</code> is <code>bash</code> or <code>fish</code>, the shell still runs normally; nothing breaks, but no commands appear in the panel.</li>
 <li><strong>Commands run before Loom started writing the shim</strong> (i.e. older zsh sessions or terminals from outside Loom) are not in the log.</li>
 </ul>
+<h2 id="command-history-vs-terminal-transcripts">Command history vs. terminal transcripts<a class="headerlink" href="#command-history-vs-terminal-transcripts" title="Permanent link">&para;</a></h2>
+<p>Command history is structured metadata: command text, cwd, timing, exit code,
+session id, and optional output capture for commands sent through Loom UI.
+Terminal transcripts are separate full PTY logs saved under <code>Terminal History/</code>
+so closed terminal sessions can be reviewed or recovered later.</p>
 <h2 id="privacy">Privacy<a class="headerlink" href="#privacy" title="Permanent link">&para;</a></h2>
 <p>The history file lives entirely on disk inside Application Support. Nothing leaves your Mac. Loom reads the file with standard <code>FileManager</code> calls and does not watch via FSEvents (which would require a separate sandbox entitlement).</p>
 <h2 id="removing-the-integration">Removing the integration<a class="headerlink" href="#removing-the-integration" title="Permanent link">&para;</a></h2>
-<p>Delete <code>~/Library/Application Support/Loom/shell/.zshrc</code>. Loom will re-create it on next launch unless you also turn off the integration (planned for a future Settings tab). To stop new entries from being logged in the meantime, delete the history file: <code>~/Library/Application Support/Loom/shell/history.jsonl</code>. The file is recreated on the next command if the shim is still in place.</p>
+<p>Use Settings -&gt; Shell and turn off <strong>Capture commands from Loom terminals</strong>.
+The change applies to new terminal panes. To remove the existing files, delete
+<code>~/Library/Application Support/Loom/shell/.zshrc</code> and
+<code>~/Library/Application Support/Loom/shell/history.jsonl</code>.
+Loom recreates the shim on launch, but it is not sourced when the setting is
+off.</p>
 
 
 

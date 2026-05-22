@@ -694,6 +694,8 @@
       
         
       
+        
+      
     
     
     
@@ -840,6 +842,34 @@
     
   
     Local LLMs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/lmstudio-cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    lmstudio CLI
   
 
     
@@ -1056,6 +1086,8 @@
       
         
       
+        
+      
     
     
     
@@ -1146,6 +1178,34 @@
     
   
     CLI agent detection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../terminal/command-history/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command history
   
 
     
@@ -1304,6 +1364,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -1422,6 +1486,62 @@
     
   
     Settings → Providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../settings/mcp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../settings/shell/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings -&gt; Shell
   
 
     
@@ -1697,7 +1817,7 @@
   <span class="md-ellipsis">
     
   
-    Cutting a release
+    Cutting a Loom release
   
 
     
@@ -2291,6 +2411,46 @@
 <td>Data (JSON <code>[LocalEndpoint]</code>)</td>
 <td>User-configured local LLM endpoints.</td>
 </tr>
+<tr>
+<td><code>loom.agent.maxTurns</code></td>
+<td>Int</td>
+<td>Max tool-call rounds for one local-agent run.</td>
+</tr>
+<tr>
+<td><code>loom.agent.allowBash</code></td>
+<td>Bool</td>
+<td>Enables the local-agent <code>run_bash</code> tool.</td>
+</tr>
+<tr>
+<td><code>loom.agent.lmstudioMode</code></td>
+<td>Bool</td>
+<td>Keeps LM Studio Agent Mode on by default in the Agent pane.</td>
+</tr>
+<tr>
+<td><code>loom.agent.permissionMode</code></td>
+<td>String</td>
+<td>In-app local-agent permission mode: <code>confirm</code>, <code>plan</code>, <code>acceptEdits</code>, or <code>bypassPermissions</code>.</td>
+</tr>
+<tr>
+<td><code>loom.shellIntegration</code></td>
+<td>Bool</td>
+<td>Enables the zsh command-history shim.</td>
+</tr>
+<tr>
+<td><code>loom.terminal.pasteAsPlainText</code></td>
+<td>Bool</td>
+<td>Sends terminal text paste directly to the PTY.</td>
+</tr>
+<tr>
+<td><code>loom.terminalHistory.enabled</code></td>
+<td>Bool</td>
+<td>Enables local terminal transcript persistence.</td>
+</tr>
+<tr>
+<td><code>loom.terminalHistory.maxBytes</code></td>
+<td>Double</td>
+<td>Terminal transcript storage cap in bytes. Defaults to 1 GB.</td>
+</tr>
 </tbody>
 </table>
 <p><code>@AppStorage</code> reads these in views; the <code>LocalEndpointStore</code> reads/writes the JSON blob directly.</p>
@@ -2318,7 +2478,9 @@
 <h2 id="what-we-dont-persist">What we don't persist<a class="headerlink" href="#what-we-dont-persist" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Agent message history</strong> — in-memory only. Closing a workspace and reopening it within the same session preserves messages; quitting the app loses them.</li>
-<li><strong>Terminal scrollback</strong> — SwiftTerm holds it; not persisted across app launches.</li>
+<li><strong>Live terminal scrollback</strong> — SwiftTerm holds it in memory. Loom
+  saves separate transcript files under Application Support when terminal
+  history is enabled.</li>
 <li><strong>In-flight HTTP requests / subprocesses</strong> — all canceled on quit.</li>
 </ul>
 <h2 id="what-about-icloud">What about iCloud?<a class="headerlink" href="#what-about-icloud" title="Permanent link">&para;</a></h2>

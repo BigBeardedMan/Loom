@@ -692,6 +692,8 @@
       
         
       
+        
+      
     
     
     
@@ -838,6 +840,34 @@
     
   
     Local LLMs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/lmstudio-cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    lmstudio CLI
   
 
     
@@ -1054,6 +1084,8 @@
       
         
       
+        
+      
     
     
     
@@ -1144,6 +1176,34 @@
     
   
     CLI agent detection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../terminal/command-history/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command history
   
 
     
@@ -1302,6 +1362,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -1420,6 +1484,62 @@
     
   
     Settings → Providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../settings/mcp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../settings/shell/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings -&gt; Shell
   
 
     
@@ -1695,7 +1815,7 @@
   <span class="md-ellipsis">
     
   
-    Cutting a release
+    Cutting a Loom release
   
 
     
@@ -2241,11 +2361,39 @@
 <tbody>
 <tr>
 <td><code>~/Library/Application Support/Loom/staging/Loom.app</code></td>
-<td>Newly downloaded build, waiting for the Update pill click.</td>
+<td>Newly downloaded Loom build, waiting for the Update pill click.</td>
 </tr>
 <tr>
 <td><code>~/Library/Application Support/Loom/staging/manifest.json</code></td>
 <td><code>{ version, build, stagedAt }</code> for the staged build.</td>
+</tr>
+<tr>
+<td><code>~/Library/Application Support/Loom/layout.json</code></td>
+<td>Workspace pane layout, custom titles, terminal cwd, and split state.</td>
+</tr>
+<tr>
+<td><code>~/Library/Application Support/Loom/shell/.zshrc</code></td>
+<td>zsh command-history shim sourced via <code>ZDOTDIR</code>.</td>
+</tr>
+<tr>
+<td><code>~/Library/Application Support/Loom/shell/history.jsonl</code></td>
+<td>Append-only structured command log.</td>
+</tr>
+<tr>
+<td><code>~/Library/Application Support/Loom/shell/output/cap-*.out</code></td>
+<td>Captured stdout/stderr for Loom-submitted commands.</td>
+</tr>
+<tr>
+<td><code>~/Library/Application Support/Loom/Terminal History/sessions.json</code></td>
+<td>Terminal transcript metadata and active/closed/deleted state.</td>
+</tr>
+<tr>
+<td><code>~/Library/Application Support/Loom/Terminal History/transcripts/&lt;uuid&gt;.ansi</code></td>
+<td>Raw ANSI PTY transcript for one terminal session.</td>
+</tr>
+<tr>
+<td><code>~/Library/Application Support/Loom/Clipboard Images/clipboard-*.png</code></td>
+<td>Raw clipboard or drag image data saved before inserting a Codex <code>--image</code> argument.</td>
 </tr>
 <tr>
 <td><code>~/Library/Application Support/com.chasesims.Loom/default.store</code></td>
@@ -2253,7 +2401,7 @@
 </tr>
 <tr>
 <td><code>~/Library/Preferences/com.chasesims.Loom.plist</code></td>
-<td>UserDefaults (theme, stale window, local endpoints).</td>
+<td>UserDefaults (theme, stale window, local endpoints, shell settings).</td>
 </tr>
 </tbody>
 </table>
@@ -2295,11 +2443,11 @@
 </tr>
 <tr>
 <td><code>~/Library/Developer/Xcode/DerivedData/Loom-*/Build/Products/Release/Loom.app</code></td>
-<td>Build output. <code>release.sh</code> searches here for the <code>.app</code> to package.</td>
+<td>Loom build output.</td>
 </tr>
 <tr>
 <td><code>&lt;repo&gt;/build/release/Loom-&lt;version&gt;.dmg</code></td>
-<td>Packaged DMG ready for <code>gh release upload</code>.</td>
+<td>Packaged Loom DMG ready for release upload.</td>
 </tr>
 </tbody>
 </table>

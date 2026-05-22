@@ -1,0 +1,5241 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Native macOS workspace for terminals, editor, AI agents, and task state in one window.">
+      
+      
+      
+        <link rel="canonical" href="https://bigbeardedman.github.io/Loom/agents/lmstudio-cli/">
+      
+      
+        <link rel="prev" href="../local-llms/">
+      
+      
+        <link rel="next" href="../custom-providers/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>lmstudio CLI - Loom</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#lmstudio-cli" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Loom" class="md-header__button md-logo" aria-label="Loom" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Loom
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              lmstudio CLI
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="deep-orange"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="deep-orange"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/BigBeardedMan/Loom" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    BigBeardedMan/Loom
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Loom" class="md-nav__button md-logo" aria-label="Loom" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Loom
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/BigBeardedMan/Loom" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    BigBeardedMan/Loom
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Complete Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/first-run/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    First run
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/keyboard-shortcuts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Keyboard shortcuts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workspaces
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Workspaces
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../workspaces/overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Workspaces
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../workspaces/prompt/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prompt workspace
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../workspaces/ideas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ideas workspace
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../workspaces/review/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Review workspace
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../workspaces/layouts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Layouts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Agents
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agents
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../claude-code/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Claude Code
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../anthropic-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Anthropic API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../local-llms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local LLMs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    lmstudio CLI
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    lmstudio CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#install" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Install
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#one-time-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        One-time setup
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Usage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#slash-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Slash commands
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#built-in-tools-700-57-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Built-in tools (7.0.0 — 57 tools)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#built-in-tools-legacy-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Built-in tools (legacy table)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#file-mentions-tab-completion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        @file mentions + tab completion
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="@file mentions + tab completion">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#media-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Media types
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#permission-prompts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Permission prompts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#auto-loaded-project-context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-loaded project context
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pre-flight-workspace-scan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pre-flight workspace scan
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#grammar-constrained-tool-calls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Grammar-constrained tool calls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inline-diffs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inline diffs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#save-resume" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Save / resume
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#themes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Themes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#status-footer-boxed-input" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Status footer + boxed input
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#history-key-bindings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        History + key bindings
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#subagent-dispatch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Subagent dispatch
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mcp-servers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MCP servers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#json-output-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JSON output mode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-tracking-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task tracking + verification
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#auto-compaction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-compaction
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#speculative-tool-prefetch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Speculative tool prefetch
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#parallel-tool-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parallel tool execution
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#self-healing-syntax-checks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Self-healing syntax checks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#undo-journal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Undo journal
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#auto-test-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-test integration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tool-result-memory-recall" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool result memory + recall
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-knowledge-layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project knowledge layer
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#live-preview-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Live preview server
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conversation-branching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conversation branching
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#multi-model-routing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-model routing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#git-intelligence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Git intelligence
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Git intelligence">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#auto-commit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-commit
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#browser-automation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Browser automation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Browser automation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#auto-screenshot-on-ui-edits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-screenshot on UI edits
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#streaming-run_bash" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streaming run_bash
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#aggressive-step-batching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Aggressive step batching
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#personas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Personas
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cross-session-permission-learning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-session permission learning
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lsp-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LSP integration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#find_todos" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        find_todos
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#800-claude-code-parity-batch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.0 — Claude Code parity batch
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8.0.0 — Claude Code parity batch">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hooks-system" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hooks system
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ask_user-tool-interactive-picker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ask_user tool (interactive picker)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#schedule_wakeup-loop_complete-loop-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        schedule_wakeup + loop_complete + --loop mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#loomsettingsjson" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        .loom/settings.json
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#background-bash-trio" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Background bash trio
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jupyter-notebook-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Jupyter notebook tools
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#worktree-isolation-for-spawn_agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Worktree isolation for spawn_agent
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#slash-command-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Slash command files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#skills-loomskillsname" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Skills (~/.loom/skills/&lt;name&gt;/)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auto-memory-cross-workspace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-memory (cross-workspace)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stability-fixes-710-batch-shipped-with-800" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stability fixes (7.1.0 batch, shipped with 8.0.0)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#internet-access-700" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Internet access (7.0.0)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#github-workflow-700" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GitHub workflow (7.0.0)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#databases-700" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Databases (7.0.0)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#macos-native-700" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        macOS-native (7.0.0)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#symbol-intelligence-700" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Symbol intelligence (7.0.0)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sandboxed-code-execution-700" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sandboxed code execution (7.0.0)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#continuous-file-watcher" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Continuous file watcher
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cost-meter-per-tool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cost meter (per-tool)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#plugin-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Plugin architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#self-reflection-drift" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Self-reflection + drift
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mermaid-rendering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mermaid rendering
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#constitution-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Constitution mode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ship_it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ship_it
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#slash-commands-added-in-700" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Slash commands added in 7.0.0
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#model-recommendations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model recommendations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#803-fixes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.3 fixes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8019-dual-load-per-turn-routing-claude-style" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.19 — dual-load + per-turn routing (Claude-style)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8018-fix-the-actual-reason-the-update-pill-never-showed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.18 — fix the actual reason the update pill never showed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8017-session-start-auto-route-force-the-upgrade" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.17 — session-start auto-route (force the upgrade)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8016-coder-aware-default-faster-update-pill" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.16 — coder-aware default + faster update pill
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8015-fix-mouse-click-random-char-injection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.15 — fix mouse-click random-char injection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8014-friendly-install-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.14 — friendly install detection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8013-zero-config-model-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.13 — zero-config model selection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8012-multi-task-transcript-economy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.12 — multi-task transcript economy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8011-shifttab-mode-cycle-4-modes-claude-code-parity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.11 — Shift+Tab mode cycle (4 modes, Claude Code parity)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#809-multi-task-performance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.9 — multi-task performance
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#808-auto-scale-that-actually-scales" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.8 — auto-scale that actually scales
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#807-auto-scale-model-context-at-session-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.7 — auto-scale model context at session start
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#806-text-mode-tool-calling-actually-works-on-gemma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.6 — text-mode tool calling actually works on Gemma
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#805-model-family-adapters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.5 — model family adapters
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#804-fixes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.4 fixes
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../custom-providers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tasks
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Tasks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tasks/overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tasks/handoff/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Task → Agent / Terminal handoff
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tasks/live-agent-tasks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Live agent tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Terminal
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Terminal
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../terminal/overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Terminal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../terminal/cli-detection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI agent detection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../terminal/command-history/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command history
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../terminal/command-injection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command injection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Editor
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Editor
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../editor/overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Editor
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Settings
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../settings/appearance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings → Appearance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../settings/tasks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings → Tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../settings/providers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings → Providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../settings/mcp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../settings/shell/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings -&gt; Shell
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../settings/advanced/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings → Advanced
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Updates
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Updates
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../updates/auto-update/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Auto-update
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../updates/manual-check/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Manual update check
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Releasing
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Releasing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../releasing/current-release-notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Current release notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../releasing/cutting-a-release/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cutting a Loom release
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../releasing/project-yml/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    project.yml
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_12" id="__nav_12_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_12">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/source-layout/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Source layout
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/swift-concurrency/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Swift concurrency
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/storage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/keychain-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Keychain keys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/file-paths/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    File paths
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#install" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Install
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#one-time-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        One-time setup
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Usage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#slash-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Slash commands
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#built-in-tools-700-57-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Built-in tools (7.0.0 — 57 tools)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#built-in-tools-legacy-table" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Built-in tools (legacy table)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#file-mentions-tab-completion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        @file mentions + tab completion
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="@file mentions + tab completion">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#media-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Media types
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#permission-prompts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Permission prompts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#auto-loaded-project-context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-loaded project context
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pre-flight-workspace-scan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pre-flight workspace scan
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#grammar-constrained-tool-calls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Grammar-constrained tool calls
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inline-diffs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inline diffs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#save-resume" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Save / resume
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#themes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Themes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#status-footer-boxed-input" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Status footer + boxed input
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#history-key-bindings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        History + key bindings
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#subagent-dispatch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Subagent dispatch
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mcp-servers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MCP servers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#json-output-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JSON output mode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#task-tracking-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task tracking + verification
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#auto-compaction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-compaction
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#speculative-tool-prefetch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Speculative tool prefetch
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#parallel-tool-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parallel tool execution
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#self-healing-syntax-checks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Self-healing syntax checks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#undo-journal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Undo journal
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#auto-test-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-test integration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tool-result-memory-recall" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool result memory + recall
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project-knowledge-layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project knowledge layer
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#live-preview-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Live preview server
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#conversation-branching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conversation branching
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#multi-model-routing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-model routing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#git-intelligence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Git intelligence
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Git intelligence">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#auto-commit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-commit
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#browser-automation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Browser automation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Browser automation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#auto-screenshot-on-ui-edits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-screenshot on UI edits
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#streaming-run_bash" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streaming run_bash
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#aggressive-step-batching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Aggressive step batching
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#personas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Personas
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cross-session-permission-learning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-session permission learning
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lsp-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LSP integration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#find_todos" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        find_todos
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#800-claude-code-parity-batch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.0 — Claude Code parity batch
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8.0.0 — Claude Code parity batch">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hooks-system" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hooks system
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ask_user-tool-interactive-picker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ask_user tool (interactive picker)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#schedule_wakeup-loop_complete-loop-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        schedule_wakeup + loop_complete + --loop mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#loomsettingsjson" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        .loom/settings.json
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#background-bash-trio" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Background bash trio
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jupyter-notebook-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Jupyter notebook tools
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#worktree-isolation-for-spawn_agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Worktree isolation for spawn_agent
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#slash-command-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Slash command files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#skills-loomskillsname" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Skills (~/.loom/skills/&lt;name&gt;/)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auto-memory-cross-workspace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-memory (cross-workspace)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stability-fixes-710-batch-shipped-with-800" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stability fixes (7.1.0 batch, shipped with 8.0.0)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#internet-access-700" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Internet access (7.0.0)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#github-workflow-700" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GitHub workflow (7.0.0)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#databases-700" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Databases (7.0.0)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#macos-native-700" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        macOS-native (7.0.0)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#symbol-intelligence-700" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Symbol intelligence (7.0.0)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sandboxed-code-execution-700" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sandboxed code execution (7.0.0)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#continuous-file-watcher" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Continuous file watcher
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cost-meter-per-tool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cost meter (per-tool)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#plugin-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Plugin architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#self-reflection-drift" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Self-reflection + drift
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mermaid-rendering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mermaid rendering
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#constitution-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Constitution mode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ship_it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ship_it
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#slash-commands-added-in-700" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Slash commands added in 7.0.0
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#model-recommendations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Model recommendations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#803-fixes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.3 fixes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8019-dual-load-per-turn-routing-claude-style" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.19 — dual-load + per-turn routing (Claude-style)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8018-fix-the-actual-reason-the-update-pill-never-showed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.18 — fix the actual reason the update pill never showed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8017-session-start-auto-route-force-the-upgrade" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.17 — session-start auto-route (force the upgrade)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8016-coder-aware-default-faster-update-pill" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.16 — coder-aware default + faster update pill
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8015-fix-mouse-click-random-char-injection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.15 — fix mouse-click random-char injection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8014-friendly-install-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.14 — friendly install detection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8013-zero-config-model-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.13 — zero-config model selection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8012-multi-task-transcript-economy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.12 — multi-task transcript economy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8011-shifttab-mode-cycle-4-modes-claude-code-parity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.11 — Shift+Tab mode cycle (4 modes, Claude Code parity)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#809-multi-task-performance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.9 — multi-task performance
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#808-auto-scale-that-actually-scales" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.8 — auto-scale that actually scales
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#807-auto-scale-model-context-at-session-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.7 — auto-scale model context at session start
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#806-text-mode-tool-calling-actually-works-on-gemma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.6 — text-mode tool calling actually works on Gemma
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#805-model-family-adapters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.5 — model family adapters
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#804-fixes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.0.4 fixes
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/BigBeardedMan/Loom/edit/main/docs/agents/lmstudio-cli.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="lmstudio-cli"><code>lmstudio</code> CLI<a class="headerlink" href="#lmstudio-cli" title="Permanent link">&para;</a></h1>
+<p>A terminal agent that talks to your local LM Studio server. Same shape as
+<code>claude</code> or <code>codex</code>: type the command, get an interactive agent with a
+boxed input, streaming responses, inline thinking, a live task list, and
+session save/resume. Tasks land in Loom's Tasks pane automatically.</p>
+<h2 id="install">Install<a class="headerlink" href="#install" title="Permanent link">&para;</a></h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>bin/install-lmstudio.sh
+</span></code></pre></div>
+<p>Symlinks <code>bin/lmstudio</code> to <code>~/.local/bin/lmstudio</code>. The script prints a
+<code>PATH</code> hint if needed. No sudo, no <code>pip install</code> — stdlib Python only.</p>
+<h2 id="one-time-setup">One-time setup<a class="headerlink" href="#one-time-setup" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Start LM Studio's local server: <strong>LM Studio → Developer → Local Server → Start</strong> (default port <code>1234</code>).</li>
+<li>Load a model in Chat (or <code>lms load &lt;id&gt;</code> if you have the LM Studio CLI installed).</li>
+<li>Run <code>lmstudio</code> — it auto-discovers the loaded model via <code>/api/v0/models</code>. No need to look up an identifier.</li>
+</ol>
+<p>If you have multiple models loaded, the CLI lists them and asks you to pin one with <code>--model</code> or <code>LMSTUDIO_MODEL</code>.</p>
+<h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>lmstudio<span class="w">                              </span><span class="c1"># interactive REPL</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>lmstudio<span class="w"> </span><span class="s2">&quot;refactor the parser&quot;</span><span class="w">        </span><span class="c1"># one-shot</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>lmstudio<span class="w"> </span>--allow-bash<span class="w"> </span><span class="s2">&quot;fix this test&quot;</span><span class="w"> </span><span class="c1"># enable run_bash for this session</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>lmstudio<span class="w"> </span>--resume<span class="w">                     </span><span class="c1"># resume the most recent session</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>lmstudio<span class="w"> </span>--theme<span class="w"> </span>cyberpunk<span class="w">            </span><span class="c1"># alt palette</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>lmstudio<span class="w"> </span>--json<span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="w">                 </span><span class="c1"># structured event stream (scripting)</span>
+</span></code></pre></div>
+<p>The CLI runs in the current working directory. Tool paths are resolved relative to it; the runner refuses to read or write outside.</p>
+<h2 id="slash-commands">Slash commands<a class="headerlink" href="#slash-commands" title="Permanent link">&para;</a></h2>
+<p>Type these at the <code>❯</code> prompt (they don't go to the model):</p>
+<p>Typing <code>/</code> opens a Claude/Codex-style slash-command palette in the shell with command descriptions. Keep typing to filter the list, use Up/Down to cycle the selected command, Tab to insert it for arguments, or Enter to run it. <code>/commands</code> prints the full grouped list including custom <code>.loom/commands/*.md</code> entries.</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/doctor</code></td>
+<td>Check LM Studio install, <code>lms</code> CLI, server, loaded models, context, grammar, and tool support</td>
+</tr>
+<tr>
+<td><code>/server status\|start\|stop\|daemon</code></td>
+<td>Manage the LM Studio local server from the shell</td>
+</tr>
+<tr>
+<td><code>/status</code></td>
+<td>Show the current session, model, mode, permissions, routing, context, and background shells</td>
+</tr>
+<tr>
+<td><code>/commands</code></td>
+<td>Show slash commands grouped by workflow, including custom <code>.loom/commands/*.md</code> files</td>
+</tr>
+<tr>
+<td><code>/help [command]</code></td>
+<td>Show tips and command help</td>
+</tr>
+<tr>
+<td><code>/clear</code></td>
+<td>Reset the transcript (history file kept)</td>
+</tr>
+<tr>
+<td><code>/model</code></td>
+<td>List loaded models. <code>/model &lt;id&gt;</code> swaps mid-session</td>
+</tr>
+<tr>
+<td><code>/models</code></td>
+<td>List local LM Studio models on disk with loaded/tool-use markers</td>
+</tr>
+<tr>
+<td><code>/model-info</code></td>
+<td>Show model adapter, tool, grammar, and context details</td>
+</tr>
+<tr>
+<td><code>/load &lt;id&gt; [context]</code></td>
+<td>Load a model through <code>lms load</code></td>
+</tr>
+<tr>
+<td><code>/unload [id]</code></td>
+<td>Unload a model through <code>lms unload</code></td>
+</tr>
+<tr>
+<td><code>/autoscale &lt;target\|max&gt;</code></td>
+<td>Reload the active model with a larger context target</td>
+</tr>
+<tr>
+<td><code>/bash [on\|off]</code></td>
+<td>Toggle the <code>run_bash</code> tool</td>
+</tr>
+<tr>
+<td><code>/cwd [path]</code></td>
+<td>Show or change the workspace root (reloads project context + knowledge)</td>
+</tr>
+<tr>
+<td><code>/cost</code></td>
+<td>Approximate token count, elapsed wall-clock, tok/s</td>
+</tr>
+<tr>
+<td><code>/tasks</code></td>
+<td>Re-render the current task list</td>
+</tr>
+<tr>
+<td><code>/save [name]</code></td>
+<td>Save the session to <code>~/.loom/sessions/&lt;name&gt;.json</code></td>
+</tr>
+<tr>
+<td><code>/resume [name]</code></td>
+<td>Load a saved session (most recent if no name)</td>
+</tr>
+<tr>
+<td><code>/sessions</code></td>
+<td>List saved sessions</td>
+</tr>
+<tr>
+<td><code>/system &lt;text&gt;</code></td>
+<td>Override the system prompt and reset the transcript</td>
+</tr>
+<tr>
+<td><code>/sh &lt;cmd&gt;</code></td>
+<td>Run a shell command yourself (no agent involved)</td>
+</tr>
+<tr>
+<td><code>/yolo [on\|off]</code></td>
+<td>Toggle permission prompts off (use with care)</td>
+</tr>
+<tr>
+<td><code>/theme &lt;name&gt;</code></td>
+<td>Switch palette (default, mono, cyberpunk, solarized)</td>
+</tr>
+<tr>
+<td><code>/wrap [on\|off]</code></td>
+<td>Toggle word-boundary wrapping</td>
+</tr>
+<tr>
+<td><code>/auto [on\|off\|N]</code></td>
+<td>Toggle / set continuation budget</td>
+</tr>
+<tr>
+<td><code>/compact [on\|off\|now]</code></td>
+<td>Toggle auto-compaction or force it right now</td>
+</tr>
+<tr>
+<td><code>/undo</code>, <code>/undo all</code></td>
+<td>Roll back the last (or all) write_file/edit_file/multi_edit</td>
+</tr>
+<tr>
+<td><code>/journal</code></td>
+<td>List every fs mutation this session with line counts</td>
+</tr>
+<tr>
+<td><code>/diff session</code></td>
+<td>Print the aggregate unified diff for the session</td>
+</tr>
+<tr>
+<td><code>/test [on\|off]</code></td>
+<td>Toggle auto-test runner after fs mutations</td>
+</tr>
+<tr>
+<td><code>/recall &lt;query&gt;</code></td>
+<td>Search tool-result memory for a keyword/phrase</td>
+</tr>
+<tr>
+<td><code>/preview [on\|off\|url]</code></td>
+<td>Spin up / stop the live HTTP preview</td>
+</tr>
+<tr>
+<td><code>/branch &lt;name&gt;</code></td>
+<td>Snapshot the current transcript + tasks + journal as a branch</td>
+</tr>
+<tr>
+<td><code>/checkout &lt;name&gt;</code></td>
+<td>Swap to a saved branch (current state stays at its own branch)</td>
+</tr>
+<tr>
+<td><code>/branches</code></td>
+<td>List branches</td>
+</tr>
+<tr>
+<td><code>/merge &lt;name&gt;</code></td>
+<td>Pull the last assistant message + tasks of <code>&lt;name&gt;</code> into context</td>
+</tr>
+<tr>
+<td><code>/router &lt;planner\|coder\|explainer&gt; &lt;model&gt;</code></td>
+<td>Set a per-role model. <code>/router off</code> clears</td>
+</tr>
+<tr>
+<td><code>/prefetch [on\|off]</code></td>
+<td>Toggle speculative tool prefetch</td>
+</tr>
+<tr>
+<td><code>/screenshot [on\|off]</code></td>
+<td>Toggle auto-screenshot on UI mutations</td>
+</tr>
+<tr>
+<td><code>/batch [on\|off]</code></td>
+<td>Toggle aggressive multi-step batching</td>
+</tr>
+<tr>
+<td><code>/autocommit [on\|off]</code></td>
+<td>Toggle git auto-commit on task completion</td>
+</tr>
+<tr>
+<td><code>/persona [name]</code></td>
+<td>Load a persona by name (or print current)</td>
+</tr>
+<tr>
+<td><code>/lsp &lt;command&gt;</code>, <code>/lsp off</code></td>
+<td>Start/stop an LSP server (stdio JSON-RPC)</td>
+</tr>
+<tr>
+<td><code>/install</code>, <code>/install run</code></td>
+<td>Show or update the <code>~/.local/bin/lmstudio</code> symlink</td>
+</tr>
+<tr>
+<td><code>/quit</code>, <code>/exit</code></td>
+<td>Leave the REPL (writes <code>.loom/project.json</code> + persists permissions)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="built-in-tools-700-57-tools">Built-in tools (7.0.0 — 57 tools)<a class="headerlink" href="#built-in-tools-700-57-tools" title="Permanent link">&para;</a></h2>
+<p>Internet:
+- <code>web_search(query, limit?)</code> — DuckDuckGo HTML scrape
+- <code>web_fetch(url, mode?)</code> — HTTP GET + readability strip
+- <code>http_request(method, url, headers?, body?, timeout?)</code> — arbitrary REST (permission-gated)
+- <code>rss_fetch(url, limit?)</code> — parse RSS/Atom
+- <code>websocket_subscribe(url, message?, until?, timeout?)</code> — RFC6455 minimal client (permission-gated)</p>
+<p>GitHub workflow:
+- <code>gh_create_pr(title, body?, base?, draft?)</code>, <code>gh_pr_view(number?)</code>, <code>gh_pr_comment(number, body)</code>
+- <code>gh_issue_list(state?, label?, limit?)</code>, <code>gh_issue_create(title, body?, label?)</code>, <code>gh_issue_view(number)</code></p>
+<p>Communication (macOS):
+- <code>slack_post(webhook_url, text, channel?)</code> (permission-gated)
+- <code>imessage_send(recipient, body)</code> (permission-gated)
+- <code>mail_send(to, subject, body)</code> (permission-gated)</p>
+<p>Databases:
+- <code>sqlite_query(database, sql, params?, allow_mutation?)</code>, <code>sqlite_schema(database, table?)</code>
+- <code>postgres_query(sql, conn_string?, allow_mutation?)</code>, <code>mysql_query(sql, conn_string?, allow_mutation?)</code>
+- <code>redis_query(command, host?)</code></p>
+<p>macOS-native:
+- <code>keychain_get(service, account?)</code>, <code>mdfind(query, path?)</code>
+- <code>notes_create(title, body)</code>, <code>notes_search(query)</code>
+- <code>calendar_today()</code>, <code>calendar_create(title, when, duration?)</code>
+- <code>screen_capture_region()</code></p>
+<p>Symbol intelligence + dependencies:
+- <code>symbol_search(query, kind?)</code> — ctags or regex fallback
+- <code>package_list()</code>, <code>package_install(name, version?, manager?)</code></p>
+<p>Sandboxed code execution:
+- <code>exec_python(code, timeout?)</code>, <code>exec_js(code, timeout?)</code></p>
+<p>Meta:
+- <code>ship_it(spec, target?)</code> — plan → scaffold → test → commit → PR end-to-end</p>
+<p>(See earlier sections for the rest: read/write/edit/multi_edit, glob/grep, list_dir, find_todos, git_<em>, browser_</em>, lsp_*, run_bash, update_tasks, spawn_agent.)</p>
+<h2 id="built-in-tools-legacy-table">Built-in tools (legacy table)<a class="headerlink" href="#built-in-tools-legacy-table" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>read_file(path)</code></td>
+<td>UTF-8 file read; cached for the session (memory + prefetch)</td>
+</tr>
+<tr>
+<td><code>write_file(path, content)</code></td>
+<td>Create/overwrite. Journaled for <code>/undo</code>. Syntax-checked when the extension is known</td>
+</tr>
+<tr>
+<td><code>edit_file(path, old, new)</code></td>
+<td>Single-substring replace. Journaled + syntax-checked</td>
+</tr>
+<tr>
+<td><code>multi_edit(path, edits)</code></td>
+<td>N replacements in one call. Errors out on first old_string not found, naming the index</td>
+</tr>
+<tr>
+<td><code>list_dir(path)</code></td>
+<td>Directory listing</td>
+</tr>
+<tr>
+<td><code>glob(pattern, path?)</code></td>
+<td>Workspace-rooted glob (supports <code>**</code>). Cap 200 hits</td>
+</tr>
+<tr>
+<td><code>grep(pattern, path?, include?)</code></td>
+<td><code>grep -rIn</code>. Cap 200 lines</td>
+</tr>
+<tr>
+<td><code>find_todos(pattern?, path?)</code></td>
+<td>Find TODO/FIXME/XXX/HACK/NOTE markers across the workspace</td>
+</tr>
+<tr>
+<td><code>git_status</code></td>
+<td><code>git status --short --branch</code></td>
+</tr>
+<tr>
+<td><code>git_diff(path?, staged?)</code></td>
+<td><code>git diff</code> working tree (or staged)</td>
+</tr>
+<tr>
+<td><code>git_log(limit?)</code></td>
+<td><code>git log --oneline -N</code> (default 20, max 200)</td>
+</tr>
+<tr>
+<td><code>git_blame(path)</code></td>
+<td><code>git blame</code> for a single file</td>
+</tr>
+<tr>
+<td><code>git_show(commit?)</code></td>
+<td><code>git show --stat</code>, defaults to HEAD</td>
+</tr>
+<tr>
+<td><code>browser_open(url)</code></td>
+<td>Open or navigate the headless Chromium to a URL</td>
+</tr>
+<tr>
+<td><code>browser_screenshot(path?, full_page?)</code></td>
+<td>Screenshot the current page (default: full page into <code>screenshots/</code>)</td>
+</tr>
+<tr>
+<td><code>browser_click(selector)</code></td>
+<td>Click an element by CSS selector</td>
+</tr>
+<tr>
+<td><code>browser_type(selector, text)</code></td>
+<td>Fill a form field</td>
+</tr>
+<tr>
+<td><code>browser_eval(script)</code></td>
+<td>Run a JS expression, return the result</td>
+</tr>
+<tr>
+<td><code>browser_text</code></td>
+<td>Inner text of the current page</td>
+</tr>
+<tr>
+<td><code>browser_close</code></td>
+<td>Tear down the browser subprocess</td>
+</tr>
+<tr>
+<td><code>lsp_diagnostics(path)</code></td>
+<td>LSP diagnostics for a file (requires <code>--lsp</code>)</td>
+</tr>
+<tr>
+<td><code>lsp_definition(path, line, character)</code></td>
+<td>LSP go-to-definition</td>
+</tr>
+<tr>
+<td><code>lsp_references(path, line, character)</code></td>
+<td>LSP find-references</td>
+</tr>
+<tr>
+<td><code>run_bash(command, timeout?)</code></td>
+<td>Shell in a fresh session id. Output streams live to the terminal so long commands aren't silent. Gated by <code>--allow-bash</code> or <code>/bash on</code></td>
+</tr>
+<tr>
+<td><code>update_tasks(tasks)</code></td>
+<td>Replace the task list. Subjects naming a file are verified on disk — claims without the artifact get flipped back to <code>in_progress</code></td>
+</tr>
+<tr>
+<td><code>spawn_agent(prompt, role?, system?)</code></td>
+<td>Delegate a focused subtask to a child <code>lmstudio --json</code> process</td>
+</tr>
+</tbody>
+</table>
+<h2 id="file-mentions-tab-completion">@file mentions + tab completion<a class="headerlink" href="#file-mentions-tab-completion" title="Permanent link">&para;</a></h2>
+<p>Type <code>@path/to/file</code> in your message to inline that file's contents:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>❯ refactor @src/parser.py to use pathlib
+</span></code></pre></div>
+<p>The CLI rewrites the prompt to include a tagged <code>&lt;file path="..."&gt;…&lt;/file&gt;</code> block before sending. Tab completes paths from the workspace; for slash commands it opens the command palette and inserts the selected command.</p>
+<h3 id="media-types">Media types<a class="headerlink" href="#media-types" title="Permanent link">&para;</a></h3>
+<p><code>@file</code> understands more than just text:</p>
+<ul>
+<li><strong>Images</strong> (<code>.png .jpg .jpeg .heic .webp .tiff .bmp</code>) — macOS Vision OCR via <code>osascript</code>. Returns the recognized text as <code>&lt;file type="image-ocr"&gt;</code>.</li>
+<li><strong>PDFs</strong> (<code>.pdf</code>) — <code>pdftotext</code> (Homebrew Poppler) when present, with a <code>mdimport</code> fallback that pulls <code>kMDItemTextContent</code> out of Spotlight.</li>
+<li><strong>Audio</strong> (<code>.m4a .wav .mp3 .flac .aac</code>) — local <code>whisper.cpp</code> if installed at <code>~/whisper.cpp/build/bin/whisper-cli</code>. Falls back to a <code>&lt;file type="audio"/&gt;</code> placeholder.</li>
+<li><strong>Other binaries</strong> — <code>&lt;file type="binary" size="N"/&gt;</code> placeholder so the model knows the file exists.</li>
+</ul>
+<h2 id="permission-prompts">Permission prompts<a class="headerlink" href="#permission-prompts" title="Permanent link">&para;</a></h2>
+<p>Before <code>write_file</code>, <code>edit_file</code>, or <code>run_bash</code> execute, the CLI asks:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>  ⚠ Allow write_file src/parser.py?
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  [y] yes once   [n] no   [a] yes (always this session)
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>  → █
+</span></code></pre></div>
+<p>Answer <code>a</code> to allow that tool for the rest of the session. <code>--yolo</code> (or <code>LMSTUDIO_YOLO=1</code>, or <code>/yolo on</code>) disables prompts entirely.</p>
+<h2 id="auto-loaded-project-context">Auto-loaded project context<a class="headerlink" href="#auto-loaded-project-context" title="Permanent link">&para;</a></h2>
+<p>On launch (and after <code>/cwd &lt;path&gt;</code>), the CLI reads <code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>GUIDE.md</code>, and <code>README.md</code> from the workspace in priority order, concatenates up to ~5 KB total, and appends them to the system prompt under a <code># Project Context</code> heading. Disable with <code>--no-context</code>.</p>
+<h2 id="pre-flight-workspace-scan">Pre-flight workspace scan<a class="headerlink" href="#pre-flight-workspace-scan" title="Permanent link">&para;</a></h2>
+<p>Also on launch (and after <code>/cwd</code>), the CLI does a single shallow walk of the workspace (depth 3, capped at 200 entries) and injects a <code># Workspace Layout</code> block into the system prompt. Hidden dirs and the usual noise (<code>node_modules</code>, <code>__pycache__</code>, <code>.venv</code>, <code>DerivedData</code>, <code>dist</code>, <code>build</code>, <code>Pods</code>, etc.) are skipped. The banner shows <code>tree N entries</code> so you can see what the model received.</p>
+<p>The point is to stop local models from spending their first 5 turns calling <code>list_dir</code> to orient themselves. The orchestrator's path-repair also has more material to match against — when the model says "I'll create <code>index.html</code>," we know which directory to put it in. Skipped entirely under <code>--no-context</code>.</p>
+<h2 id="grammar-constrained-tool-calls">Grammar-constrained tool calls<a class="headerlink" href="#grammar-constrained-tool-calls" title="Permanent link">&para;</a></h2>
+<p>When the active LM Studio server speaks <code>response_format: json_schema</code> (probed at session start with a 10s ping), the orchestrator gains a final-fallback move: if a tool call comes in with required arguments still missing <strong>after</strong> narration repair, the CLI makes a one-shot non-streaming completion to that same server with <code>tool_choice</code> pinned to the failing tool and the tool's parameter schema as a strict <code>json_schema</code>. The server-side decoder refuses to emit JSON that violates the schema, so a successful return is guaranteed to have every required field. The dispatched tool runs with the grammar-filled args and the result is annotated <code>[orchestrator: grammar-filled \</code>path`, `content`]` so you can see exactly what the model originally dropped.</p>
+<p>The banner shows <code>grammar on (json_schema)</code> when supported. Backends that don't accept <code>response_format</code> (older OpenAI-compat servers, some MLX kernels) silently fall back to today's repair-only behavior. Force-disable with <code>LMSTUDIO_NO_GRAMMAR=1</code> to compare the two paths side-by-side.</p>
+<h2 id="inline-diffs">Inline diffs<a class="headerlink" href="#inline-diffs" title="Permanent link">&para;</a></h2>
+<p>After <code>write_file</code> or <code>edit_file</code>, a unified diff renders right in the shell so you can see exactly what changed. Capped at 12 visible lines plus a <code>…N more</code> footer when longer.</p>
+<h2 id="save-resume">Save / resume<a class="headerlink" href="#save-resume" title="Permanent link">&para;</a></h2>
+<p><code>/save demo</code> dumps the transcript + tasks + model + cwd to <code>~/.loom/sessions/demo.json</code>. <code>lmstudio --resume demo</code> (or just <code>--resume</code> for the latest) reloads it on launch. <code>/sessions</code> lists what's available.</p>
+<h2 id="themes">Themes<a class="headerlink" href="#themes" title="Permanent link">&para;</a></h2>
+<p><code>--theme default | mono | cyberpunk | solarized</code>. <code>mono</code> strips ANSI codes entirely; useful for logs, pipes, or terminals that mangle escape sequences. <code>NO_COLOR=1</code> forces mono regardless of flag.</p>
+<h2 id="status-footer-boxed-input">Status footer + boxed input<a class="headerlink" href="#status-footer-boxed-input" title="Permanent link">&para;</a></h2>
+<p>A one-line footer above each prompt shows model, cwd, approximate tokens, elapsed time, and bash state. The input itself is wrapped in a cyan box (Claude-Code style) — top and bottom borders rendered around the readline prompt.</p>
+<h2 id="history-key-bindings">History + key bindings<a class="headerlink" href="#history-key-bindings" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>↑</code> / <code>↓</code> — walk through previous prompts</li>
+<li><code>Ctrl-R</code> — reverse history search</li>
+<li><code>Ctrl-A</code> / <code>Ctrl-E</code> — line start / end (standard readline)</li>
+<li><code>Esc</code> — interrupt the running turn (drops you back at the prompt with transcript intact)</li>
+<li><code>Ctrl-D</code> — exit</li>
+</ul>
+<p>History persists at <code>~/.config/loom/lmstudio-history</code> (1000 entries).</p>
+<h2 id="subagent-dispatch">Subagent dispatch<a class="headerlink" href="#subagent-dispatch" title="Permanent link">&para;</a></h2>
+<p>The model can call a <code>spawn_agent(prompt, role?, system?)</code> tool to delegate a focused subtask. Under the hood this launches <code>lmstudio --json</code> as a subprocess with the role string folded into its system prompt and returns the child's final answer. Useful for "research this codebase" or "draft tests for this function" without bloating the parent transcript.</p>
+<h2 id="mcp-servers">MCP servers<a class="headerlink" href="#mcp-servers" title="Permanent link">&para;</a></h2>
+<p>Connect a Model Context Protocol server with <code>--mcp "&lt;command&gt;"</code>. The CLI runs the JSON-RPC <code>initialize</code> + <code>tools/list</code> handshake on stdio, then exposes every advertised tool to the model with an <code>mcp__</code> prefix. Repeatable:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>lmstudio<span class="w"> </span>--mcp<span class="w"> </span><span class="s2">&quot;node my-mcp-server.js&quot;</span><span class="w"> </span>--mcp<span class="w"> </span><span class="s2">&quot;uvx some-other-server&quot;</span>
+</span></code></pre></div>
+<p>This is a minimal client — <code>initialize</code>, <code>tools/list</code>, <code>tools/call</code>. No resources, prompts, or sampling.</p>
+<h2 id="json-output-mode">JSON output mode<a class="headerlink" href="#json-output-mode" title="Permanent link">&para;</a></h2>
+<p><code>lmstudio --json</code> emits one JSON event per line instead of styled text. Event types: <code>session_started</code>, <code>turn_started</code>, <code>content</code>, <code>thinking</code>, <code>tool_call</code>, <code>tool_result</code>, <code>completed</code>, <code>error</code>, <code>interrupted</code>, <code>session_ended</code>. Stdin reads newline-delimited prompts. Useful for piping into other tooling or scripting on top of the agent loop.</p>
+<h2 id="task-tracking-verification">Task tracking + verification<a class="headerlink" href="#task-tracking-verification" title="Permanent link">&para;</a></h2>
+<p>Every <code>update_tasks</code> call writes one JSON file per task to <code>~/.loom/tasks/&lt;session-id&gt;/&lt;task-id&gt;.json</code> in Claude's shape. <code>LiveAgentTasksService</code> polls that directory every 2 seconds and surfaces sessions under the <strong>lmstudio</strong> source in Loom's Tasks pane.</p>
+<p>When the model flips a task to <code>completed</code>, the orchestrator inspects the subject for a file mention (<code>"Create index.html"</code>, <code>"Add styles.css"</code>). If the named file doesn't exist (or is zero bytes), the task is rewritten to <code>in_progress</code> and the model is told what's missing on the next turn. Subjects with no path inference (<code>"research X"</code>, <code>"design Y"</code>) skip verification.</p>
+<h2 id="auto-compaction">Auto-compaction<a class="headerlink" href="#auto-compaction" title="Permanent link">&para;</a></h2>
+<p>When <code>approx_tokens / context_window</code> exceeds 75%, the CLI sends a one-shot summarization prompt to the model, replaces the middle of the transcript with the summary, and continues. The system message and the last ~6 turns are preserved. The footer shows <code>compacted Nx</code>. Toggle with <code>/compact on|off</code>; force a manual compaction with <code>/compact now</code>.</p>
+<h2 id="speculative-tool-prefetch">Speculative tool prefetch<a class="headerlink" href="#speculative-tool-prefetch" title="Permanent link">&para;</a></h2>
+<p>As the model streams its narration, the CLI scans for file mentions and fires off <code>read_file</code> requests in the background. When the model emits the formal <code>read_file</code> tool call a moment later, the result returns instantly from cache. Cache TTL is 30s. Stats (hits / misses) shown in <code>/prefetch</code>. Disable with <code>--no-prefetch</code> or <code>/prefetch off</code>.</p>
+<h2 id="parallel-tool-execution">Parallel tool execution<a class="headerlink" href="#parallel-tool-execution" title="Permanent link">&para;</a></h2>
+<p>When the model emits multiple tool calls in one assistant turn, the safe read-only ones (<code>read_file</code>, <code>list_dir</code>, <code>glob</code>, <code>grep</code>) run concurrently through a 4-worker thread pool. Mutating tools (<code>write_file</code>, <code>edit_file</code>, <code>multi_edit</code>, <code>run_bash</code>) run sequentially so writes are deterministic and permission prompts don't stack. Results are re-sorted into the model's original call order before being appended to the transcript.</p>
+<h2 id="self-healing-syntax-checks">Self-healing syntax checks<a class="headerlink" href="#self-healing-syntax-checks" title="Permanent link">&para;</a></h2>
+<p>After every successful <code>write_file</code>, <code>edit_file</code>, or <code>multi_edit</code>, the CLI runs a content validator keyed off file extension:</p>
+<ul>
+<li><code>.py</code> → <code>ast.parse</code></li>
+<li><code>.json</code> → <code>json.loads</code></li>
+<li><code>.html</code>/<code>.htm</code> → <code>html.parser</code></li>
+<li><code>.yml</code>/<code>.yaml</code> → <code>yaml.safe_load</code> if PyYAML is installed</li>
+<li><code>.js / .ts / .jsx / .tsx / .css / .scss / .swift / .rs / .go / .c / .cpp / .java</code> → cheap brace + quote balance check</li>
+</ul>
+<p>If validation fails, the tool result tells the model what broke. The file remains on disk so <code>/undo</code> can roll it back if needed.</p>
+<h2 id="undo-journal">Undo journal<a class="headerlink" href="#undo-journal" title="Permanent link">&para;</a></h2>
+<p>Every <code>write_file</code>, <code>edit_file</code>, or <code>multi_edit</code> snapshots <code>(path, prior, new, ts)</code> into the journal. The journal is also appended to <code>~/.loom/journal/&lt;session-id&gt;.jsonl</code> so a crashed CLI can be recovered.</p>
+<ul>
+<li><code>/undo</code> — pop the latest entry, restore the prior content (or delete the file when prior is empty).</li>
+<li><code>/undo all</code> — roll back every mutation in reverse order.</li>
+<li><code>/journal</code> — list all mutations with line-delta counts.</li>
+<li><code>/diff session</code> — render the aggregate unified diff for the session.</li>
+</ul>
+<h2 id="auto-test-integration">Auto-test integration<a class="headerlink" href="#auto-test-integration" title="Permanent link">&para;</a></h2>
+<p>With <code>--auto-test</code> (or <code>/test on</code>), the CLI auto-runs the workspace's test framework after any turn that mutated a test file. Framework detection walks the workspace for the obvious markers:</p>
+<ul>
+<li><code>pyproject.toml</code> / <code>pytest.ini</code> → <code>pytest -x --no-header</code></li>
+<li><code>package.json</code> with a <code>test</code> script → <code>npm test</code></li>
+<li><code>Package.swift</code> → <code>swift test --quiet</code></li>
+<li><code>Cargo.toml</code> → <code>cargo test --quiet</code></li>
+<li><code>go.mod</code> → <code>go test ./...</code></li>
+</ul>
+<p>Test failures (last 30 lines) are fed back to the model as a synthetic system message so it can self-correct without you having to copy-paste a stack trace.</p>
+<h2 id="tool-result-memory-recall">Tool result memory + recall<a class="headerlink" href="#tool-result-memory-recall" title="Permanent link">&para;</a></h2>
+<p>Every tool result lands in a session-scoped TF-IDF index (cheap stdlib <code>Counter</code> over alphanumeric tokens). <code>/recall &lt;query&gt;</code> searches the index and surfaces the top 3 matches with snippets. This is the cheap version of RAG: when you remember "we already saw this in some file," type <code>/recall foo</code> instead of re-reading. Bounded at 200 entries (oldest evicted).</p>
+<h2 id="project-knowledge-layer">Project knowledge layer<a class="headerlink" href="#project-knowledge-layer" title="Permanent link">&para;</a></h2>
+<p>On session start, the CLI reads <code>&lt;workspace&gt;/.loom/project.json</code> if it exists and injects it into the system prompt under <code># Project Knowledge</code>. On clean quit, it writes back an enriched version with:</p>
+<ul>
+<li>A rolling summary (the last assistant message, capped at 2 KB)</li>
+<li>The bash commands you ran successfully this session</li>
+<li>A <code>last_updated</code> timestamp</li>
+</ul>
+<p>The third session in the same workspace is dramatically smarter than the first — the model already knows your build command, the test runner, and what was done last time. Skip the load with <code>--no-context</code>.</p>
+<h2 id="live-preview-server">Live preview server<a class="headerlink" href="#live-preview-server" title="Permanent link">&para;</a></h2>
+<p><code>/preview on</code> (or with <code>index.html</code> in the workspace and a banner-prompt acceptance) spins up <code>http.server</code> on a free port bound to <code>127.0.0.1</code> and shows the URL in the banner. The browser is <strong>never</strong> auto-opened. Stop with <code>/preview off</code>. The server thread is daemon-ed and torn down on <code>/quit</code>.</p>
+<h2 id="conversation-branching">Conversation branching<a class="headerlink" href="#conversation-branching" title="Permanent link">&para;</a></h2>
+<p>Branches are full transcript snapshots (transcript + tasks + journal + token count) saved to <code>~/.loom/branches/&lt;name&gt;.json</code>.</p>
+<ul>
+<li><code>/branch &lt;name&gt;</code> — snapshot now.</li>
+<li><code>/checkout &lt;name&gt;</code> — swap to a branch.</li>
+<li><code>/branches</code> — list with token / task counts.</li>
+<li><code>/merge &lt;name&gt;</code> — pull the last assistant message + task list of another branch into the current transcript as a context note.</li>
+</ul>
+<p>Useful for "what if I told it to use JWT instead of sessions" comparisons without losing the original state.</p>
+<h2 id="multi-model-routing">Multi-model routing<a class="headerlink" href="#multi-model-routing" title="Permanent link">&para;</a></h2>
+<p>Set per-role model overrides with CLI flags or env vars:</p>
+<ul>
+<li><code>--planner-model</code> / <code>LMSTUDIO_PLANNER_MODEL</code> — fast, small (3-7B); used when the user message looks plan-y (<code>plan</code>, <code>design</code>, <code>outline</code>).</li>
+<li><code>--coder-model</code> / <code>LMSTUDIO_CODER_MODEL</code> — focused coder (14-32B coder).</li>
+<li><code>--explainer-model</code> / <code>LMSTUDIO_EXPLAINER_MODEL</code> — articulate, large; used for <code>explain</code>/<code>why</code>/<code>summarize</code>.</li>
+</ul>
+<p><code>/router planner &lt;id&gt;</code> swaps the planner mid-session. <code>/router off</code> clears all overrides. Requires LM Studio to have the relevant models loaded (or JIT-loaded on demand).</p>
+<h2 id="git-intelligence">Git intelligence<a class="headerlink" href="#git-intelligence" title="Permanent link">&para;</a></h2>
+<p>Five built-in tools shell out to <code>git</code> for repo awareness without going through <code>run_bash</code>:</p>
+<ul>
+<li><code>git_status</code> / <code>git_diff(path?, staged?)</code> / <code>git_log(limit?)</code> / <code>git_blame(path)</code> / <code>git_show(commit?)</code></li>
+</ul>
+<p>All run with output capped (32 KB for diff/log, 20 KB for blame/show, 16 KB everywhere else). All are in <code>SAFE_PARALLEL_TOOLS</code>, so the model can fan out <code>git_status + git_diff + git_log</code> in one turn.</p>
+<h3 id="auto-commit">Auto-commit<a class="headerlink" href="#auto-commit" title="Permanent link">&para;</a></h3>
+<p><code>--auto-commit</code> (or <code>/autocommit on</code>) stages everything and commits with an auto-generated message keyed off the most recently completed task whenever the task list flips a task to <code>completed</code>. Workspace must be a git repo; failures are silent (no half-staged state).</p>
+<h2 id="browser-automation">Browser automation<a class="headerlink" href="#browser-automation" title="Permanent link">&para;</a></h2>
+<p>When <code>playwright</code> is importable from the local Python and Chromium is installed (<code>python -m playwright install chromium</code>), the agent gets seven built-in browser tools driven by a persistent subprocess speaking JSON over stdin/stdout:</p>
+<ul>
+<li><code>browser_open(url)</code> — <code>page.goto</code>, returns <code>{url, title}</code>.</li>
+<li><code>browser_screenshot(path?, full_page?)</code> — saves to <code>path</code> (default <code>screenshots/shot-&lt;ts&gt;.png</code>).</li>
+<li><code>browser_click(selector)</code> / <code>browser_type(selector, text)</code> — interact with the page.</li>
+<li><code>browser_eval(script)</code> — run a JS expression and return the result.</li>
+<li><code>browser_text</code> — inner text of the current page (cap 32 KB).</li>
+<li><code>browser_close</code> — tear down.</li>
+</ul>
+<p>The subprocess is lazy-launched on the first <code>browser_*</code> call and torn down on <code>/quit</code>. When Playwright isn't installed, the tool returns a clear error pointing at the install command.</p>
+<h3 id="auto-screenshot-on-ui-edits">Auto-screenshot on UI edits<a class="headerlink" href="#auto-screenshot-on-ui-edits" title="Permanent link">&para;</a></h3>
+<p><code>--auto-screenshot</code> (or <code>/screenshot on</code>) closes the loop on web work. After any <code>write_file</code> / <code>edit_file</code> / <code>multi_edit</code> to a <code>.html / .htm / .css / .scss / .jsx / .tsx / .svelte</code> file, the orchestrator:</p>
+<ol>
+<li>Starts the preview server (if not running already).</li>
+<li>Navigates the headless browser to the URL.</li>
+<li>Screenshots full-page into <code>screenshots/auto-&lt;ts&gt;.png</code>.</li>
+<li>OCRs the screenshot via macOS Vision.</li>
+<li>Feeds the OCR text back as a synthetic system message so the model can verify the render visually without you asking it to.</li>
+</ol>
+<h2 id="streaming-run_bash">Streaming <code>run_bash</code><a class="headerlink" href="#streaming-run_bash" title="Permanent link">&para;</a></h2>
+<p><code>run_bash</code> now uses <code>Popen</code> instead of <code>subprocess.run</code>. The combined stdout/stderr is line-streamed to the terminal as the command runs (prefixed with a dim <code>│</code>), so long-running tasks (<code>npm install</code>, <code>swift build</code>) are no longer silent. The full output (capped at 32 KB) is still returned as the tool result so the model sees everything. Timeout default raised from 30s to 30s with a 600s ceiling.</p>
+<h2 id="aggressive-step-batching">Aggressive step batching<a class="headerlink" href="#aggressive-step-batching" title="Permanent link">&para;</a></h2>
+<p><code>--batch</code> (or <code>/batch on</code>) enables a more aggressive orchestrator move that requires grammar support: after <code>update_tasks</code> emits N pending tasks that each name a file, the orchestrator runs <code>force_grammar_args("write_file", ...)</code> for each task and writes them all in one batch — no model round-trips between steps. Stops at the first ambiguity (no path inference, multi-file step, run_bash required). Each successful write flips the task to <code>completed</code>. Compounds with <code>--auto-screenshot</code> and <code>--auto-commit</code> for a "scaffold + render + commit" pipeline.</p>
+<h2 id="personas">Personas<a class="headerlink" href="#personas" title="Permanent link">&para;</a></h2>
+<p>Two layers, workspace wins:</p>
+<ol>
+<li><code>&lt;workspace&gt;/.loom/persona.md</code> — committed-with-the-project persona; loads automatically on session start and after <code>/cwd</code>.</li>
+<li><code>~/.loom/personas/&lt;name&gt;.md</code> + <code>--persona &lt;name&gt;</code> (or <code>LMSTUDIO_PERSONA</code> env) — shared personas across projects.</li>
+</ol>
+<p>The persona text is prepended to the system prompt under <code># Persona</code>. Use this to set tone, role, project conventions, or hard rules that aren't in <code>CLAUDE.md</code>.</p>
+<h2 id="cross-session-permission-learning">Cross-session permission learning<a class="headerlink" href="#cross-session-permission-learning" title="Permanent link">&para;</a></h2>
+<p>When you answer <code>a</code> ("yes, always this session") to a permission prompt, the choice is now persisted to <code>~/.loom/permissions/&lt;sha256-of-workspace-path&gt;.json</code> on session quit. Next time you start lmstudio in the same workspace, those grants restore automatically — <code>npm install</code> is allowed-forever per project, but never globally.</p>
+<h2 id="lsp-integration">LSP integration<a class="headerlink" href="#lsp-integration" title="Permanent link">&para;</a></h2>
+<p><code>--lsp "typescript-language-server --stdio"</code> (or <code>/lsp &lt;command&gt;</code>) starts a stdio LSP server, runs the <code>initialize</code>/<code>initialized</code> handshake, and exposes three tools:</p>
+<ul>
+<li><code>lsp_diagnostics(path)</code> — open the file in the LSP and wait briefly for <code>publishDiagnostics</code>. Returns errors/warnings/info/hints as <code>path:line:col [sev] message</code>.</li>
+<li><code>lsp_definition(path, line, character)</code> — go-to-definition. Line/character are 0-indexed.</li>
+<li><code>lsp_references(path, line, character)</code> — find references including the declaration.</li>
+</ul>
+<p>Minimal client (no resources/prompts/sampling, one server at a time, no diagnostic refresh streaming). Pair with <code>typescript-language-server</code>, <code>pyright --stdio</code>, <code>sourcekit-lsp</code>, etc.</p>
+<h2 id="find_todos">find_todos<a class="headerlink" href="#find_todos" title="Permanent link">&para;</a></h2>
+<p><code>find_todos(pattern?, path?)</code> greps the workspace for the usual markers (<code>TODO|FIXME|XXX|HACK|NOTE</code> by default) with <code>WORKSPACE_TREE_IGNORE</code> excluded so <code>node_modules</code> etc. don't dominate the results. Cap 200 hits.</p>
+<h2 id="800-claude-code-parity-batch">8.0.0 — Claude Code parity batch<a class="headerlink" href="#800-claude-code-parity-batch" title="Permanent link">&para;</a></h2>
+<h3 id="hooks-system">Hooks system<a class="headerlink" href="#hooks-system" title="Permanent link">&para;</a></h3>
+<p>Drop executable scripts into <code>~/.loom/hooks/&lt;event&gt;</code> or <code>&lt;workspace&gt;/.loom/hooks/&lt;event&gt;</code>. Workspace hooks run before user-level hooks. Events:</p>
+<ul>
+<li><code>user-prompt-submit</code> — runs before each user message goes to the model. Stdin: <code>{"prompt", "workspace"}</code>. Non-zero exit blocks the prompt entirely. Stdout becomes a synthetic system note.</li>
+<li><code>pre-tool-use</code> — runs before every tool dispatch. Stdin: <code>{"name", "args"}</code>. Non-zero exit refuses the call.</li>
+<li><code>post-tool-use</code> — runs after every successful dispatch. Stdin: <code>{"name", "args", "result", "error": false}</code>. Stdout is appended to the tool result.</li>
+<li><code>on-error</code> — runs after a tool raises. Stdin: <code>{"name", "args", "error"}</code>. Stdout is appended.</li>
+<li><code>session-start</code> / <code>session-end</code> — one-shot bookends.</li>
+</ul>
+<p><code>/hooks</code> lists registered hooks; <code>/hooks reload</code> re-scans. Skip discovery entirely with <code>--no-hooks</code>.</p>
+<h3 id="ask_user-tool-interactive-picker"><code>ask_user</code> tool (interactive picker)<a class="headerlink" href="#ask_user-tool-interactive-picker" title="Permanent link">&para;</a></h3>
+<p>The model can call <code>ask_user(question, options[, header])</code> to present a multi-choice picker. Arrow keys navigate, Enter selects, Esc cancels. The picker always appends an "Other" option that lets the user supply free text. Returns JSON <code>{"selected", "index", "notes"}</code> back to the model. Non-TTY sessions fall back to a numbered prompt.</p>
+<h3 id="schedule_wakeup-loop_complete-loop-mode"><code>schedule_wakeup</code> + <code>loop_complete</code> + <code>--loop</code> mode<a class="headerlink" href="#schedule_wakeup-loop_complete-loop-mode" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>schedule_wakeup(delay_seconds, prompt, reason?)</code> writes a record to <code>~/.loom/wakeups/&lt;id&gt;.json</code> and returns. The agent does NOT block waiting — an external scheduler (cron / launchd) is expected to fire <code>lmstudio --check-wakeups</code> periodically.</li>
+<li><code>lmstudio --check-wakeups</code> scans the wakeup directory and runs every record whose <code>wake_at</code> is in the past via <code>lmstudio --resume-wakeup &lt;path&gt;</code> as a fresh subprocess.</li>
+<li><code>--loop</code> re-drives the same prompt in a tight loop until the model calls <code>loop_complete(summary)</code> (or hits the 100-iteration safety ceiling). Enables truly autonomous workflows.</li>
+<li><code>/wake</code> lists pending wakeups.</li>
+</ul>
+<h3 id="loomsettingsjson"><code>.loom/settings.json</code><a class="headerlink" href="#loomsettingsjson" title="Permanent link">&para;</a></h3>
+<p>Centralized workspace config. Loaded at session start; explicit CLI flags still win over settings.</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;model&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;qwen/qwen3-coder-30b&quot;</span><span class="p">,</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;theme&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;cyberpunk&quot;</span><span class="p">,</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nt">&quot;allow_bash&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span><span class="nt">&quot;auto_test&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span><span class="nt">&quot;auto_compact&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span><span class="nt">&quot;auto_screenshot&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span><span class="nt">&quot;auto_commit&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span><span class="nt">&quot;aggressive_batching&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">  </span><span class="nt">&quot;self_reflect&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">  </span><span class="nt">&quot;max_continuations&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">20</span><span class="p">,</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">  </span><span class="nt">&quot;router&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;planner&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;qwen-3b&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;coder&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;qwen-30b&quot;</span><span class="p">},</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="w">  </span><span class="nt">&quot;tools_disabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;http_request&quot;</span><span class="p">],</span>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="w">  </span><span class="nt">&quot;env&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;OPENAI_API_KEY&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;${KEYCHAIN:openai-key}&quot;</span><span class="p">}</span>
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="p">}</span>
+</span></code></pre></div>
+<p><code>${ENV:NAME}</code> interpolates env vars; <code>${KEYCHAIN:service}</code> runs <code>security find-generic-password -s service -w</code>. <code>/settings</code> shows the loaded config; <code>/settings reload</code> re-reads.</p>
+<h3 id="background-bash-trio">Background bash trio<a class="headerlink" href="#background-bash-trio" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>background_bash(command, label?)</code> — detaches a shell, returns a <code>shell_id</code>. Output streams to <code>~/.loom/shells/&lt;id&gt;.log</code>.</li>
+<li><code>monitor(shell_id, follow?, until?, timeout?, lines?)</code> — read or follow the log. <code>follow=true</code> blocks for new output up to <code>timeout</code> seconds (default 30); <code>until</code> is a regex that ends the follow early.</li>
+<li><code>bash_output(shell_id, since_line?, max_lines?)</code> — incremental reads.</li>
+<li><code>kill_shell(shell_id)</code> — SIGTERM, escalate to SIGKILL after 5s.</li>
+<li><code>/bg</code> lists, <code>/bg &lt;command&gt;</code> starts; <code>/mon &lt;id&gt;</code> reads; <code>/kill &lt;id&gt;</code> terminates.</li>
+</ul>
+<h3 id="jupyter-notebook-tools">Jupyter notebook tools<a class="headerlink" href="#jupyter-notebook-tools" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>notebook_read(path, cell_index?)</code> — read whole notebook or one cell.</li>
+<li><code>notebook_edit(path, cell_index, new_source, run?)</code> — replace cell source; with <code>run=true</code>, execute via <code>jupyter nbconvert --execute --inplace</code>.</li>
+<li><code>notebook_append(path, source, kind?)</code> — append a <code>code</code> or <code>markdown</code> cell.</li>
+</ul>
+<p>Edits go through the journal so <code>/undo</code> rolls them back. <code>/nb &lt;path&gt;</code> shows the cell list.</p>
+<h3 id="worktree-isolation-for-spawn_agent">Worktree isolation for <code>spawn_agent</code><a class="headerlink" href="#worktree-isolation-for-spawn_agent" title="Permanent link">&para;</a></h3>
+<p>Pass <code>isolation="worktree"</code> to <code>spawn_agent</code> and the subagent runs in <code>~/.loom/worktrees/&lt;id&gt;</code> (a temporary git worktree on a fresh branch). On exit the diff vs HEAD is printed; the worktree is preserved for inspection (clean up with <code>git worktree remove</code>). Parent workspace untouched even if the subagent thrashes.</p>
+<h3 id="slash-command-files">Slash command files<a class="headerlink" href="#slash-command-files" title="Permanent link">&para;</a></h3>
+<p>Drop a <code>.md</code> file into <code>~/.loom/commands/&lt;name&gt;.md</code> (user-level) or <code>&lt;workspace&gt;/.loom/commands/&lt;name&gt;.md</code> (workspace overrides user). The file's body becomes the prompt sent to the model when the user types <code>/&lt;name&gt;</code>.</p>
+<p>Frontmatter (optional):</p>
+<div class="language-markdown highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>---
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>description: Review the current changes for bugs
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="gu">model: qwen/qwen3-coder-30b</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="gu">---</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>Review the staged changes carefully. Look for:
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="k">-</span><span class="w"> </span>Bugs and logic errors
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="k">-</span><span class="w"> </span>Performance issues
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="k">-</span><span class="w"> </span>Test coverage gaps
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>$ARGS
+</span></code></pre></div>
+<p><code>$ARGS</code> is replaced with whatever the user typed after the command name. <code>model</code> routes that single turn to a specific model.</p>
+<h3 id="skills-loomskillsname">Skills (<code>~/.loom/skills/&lt;name&gt;/</code>)<a class="headerlink" href="#skills-loomskillsname" title="Permanent link">&para;</a></h3>
+<p>A directory with <code>skill.md</code> (system-prompt addendum) and an optional <code>tools.py</code> (declaring <code>LMSTUDIO_TOOLS</code>) loads as a skill. <code>/skill &lt;name&gt;</code> activates it for the current session. <code>/skill</code> (no arg) lists installed skills with a <code>*</code> next to active ones. The model can also call <code>activate_skill(name)</code> mid-session.</p>
+<p>Skills differ from plugins (always-on, persistent tools) by being session-scoped and prompt-extending — useful for "load my test-writing skill for the next 10 turns."</p>
+<h3 id="auto-memory-cross-workspace">Auto-memory (cross-workspace)<a class="headerlink" href="#auto-memory-cross-workspace" title="Permanent link">&para;</a></h3>
+<p><code>~/.loom/memory/MEMORY.md</code> is a markdown index pointing at <code>~/.loom/memory/&lt;name&gt;.md</code> files. The contents are auto-injected into the system prompt regardless of workspace.</p>
+<p>The model can call <code>save_memory(name, body, kind?)</code> to add a memory. <code>kind</code> is freeform (typical: <code>user</code>, <code>feedback</code>, <code>reference</code>). <code>/memory</code> prints the current MEMORY.md; <code>/memory reload</code> re-reads.</p>
+<p>Workspace <code>project_knowledge</code> is for per-project state; user memory is for cross-workspace facts ("user prefers pytest", "user has a Loom project at ~/Documents/Xcode/Loom").</p>
+<h3 id="stability-fixes-710-batch-shipped-with-800">Stability fixes (7.1.0 batch, shipped with 8.0.0)<a class="headerlink" href="#stability-fixes-710-batch-shipped-with-800" title="Permanent link">&para;</a></h3>
+<ul>
+<li>WebSocket frame buffering — added <code>_recv_exact</code> helper so frames no longer truncate on partial recv()s.</li>
+<li>Prefetch thread pool — bounded <code>ThreadPoolExecutor(max_workers=4)</code>; no more unbounded daemon spawn during heavy narration.</li>
+<li>Two-phase file watcher — 2s fast stat of the known set; 30s full rglob to discover new files. Cheap on huge repos.</li>
+<li><code>run_bash</code> select-based reads — wakes every 1s to check the deadline; children that prompt without a newline are killed cleanly.</li>
+<li>Fail-fast missing args — when <code>_dispatch_tool</code> sees required args still missing after repair + grammar, it returns a structured error with the schema instead of letting the tool raise <code>KeyError</code>.</li>
+<li>Stale permission filter — <code>load_permission_grants</code> drops entries for tools no longer registered (e.g., uninstalled plugins).</li>
+<li><code>ship_it</code> recursion fix — refactored to queue followups onto <code>state.queued_followups</code> and drain them after the human turn, avoiding the nested <code>run_turn</code> hazard.</li>
+</ul>
+<h2 id="internet-access-700">Internet access (7.0.0)<a class="headerlink" href="#internet-access-700" title="Permanent link">&para;</a></h2>
+<p>Five tools let the agent reach the web without going through the browser subprocess:</p>
+<ul>
+<li><code>web_search(query)</code> — DuckDuckGo HTML scrape. No API key. Cap 20.</li>
+<li><code>web_fetch(url, mode?)</code> — <code>mode='text'</code> (default) strips HTML, <code>'raw'</code> and <code>'html'</code> return as-is. Cap 64 KB. Honors <code>state.web_blocklist</code> (suffix match on hostname; <code>/blocklist &lt;host&gt;</code> to add).</li>
+<li><code>http_request(method, url, headers?, body?)</code> — full REST. Permission-gated.</li>
+<li><code>rss_fetch(url, limit?)</code> — stdlib <code>xml.etree</code>-based RSS/Atom parsing.</li>
+<li><code>websocket_subscribe(url, message?, until?)</code> — RFC6455 client implemented over <code>socket</code>. Connects, optionally sends one frame, collects frames until <code>until</code> regex matches or 30s. Permission-gated.</li>
+</ul>
+<h2 id="github-workflow-700">GitHub workflow (7.0.0)<a class="headerlink" href="#github-workflow-700" title="Permanent link">&para;</a></h2>
+<p>Six tools wrap the <code>gh</code> CLI: <code>gh_create_pr</code>, <code>gh_pr_view</code>, <code>gh_pr_comment</code>, <code>gh_issue_list</code>, <code>gh_issue_create</code>, <code>gh_issue_view</code>. PR creation is permission-gated and drafts by default.</p>
+<h2 id="databases-700">Databases (7.0.0)<a class="headerlink" href="#databases-700" title="Permanent link">&para;</a></h2>
+<p><code>sqlite_query</code> runs through stdlib <code>sqlite3</code> — fully local, no extra deps. <code>postgres_query</code>, <code>mysql_query</code>, and <code>redis_query</code> shell out to <code>psql</code>, <code>mysql</code>, and <code>redis-cli</code>. All queries that match the mutation regex (<code>INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|REPLACE</code>) are refused unless <code>allow_mutation=true</code> is passed explicitly.</p>
+<h2 id="macos-native-700">macOS-native (7.0.0)<a class="headerlink" href="#macos-native-700" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>keychain_get(service, account?)</code> — <code>security find-generic-password -w</code>. Returns the raw password so the agent can use it (e.g., as a Bearer token for <code>http_request</code>).</li>
+<li><code>mdfind(query, path?)</code> — Spotlight metadata search via <code>mdfind</code>.</li>
+<li><code>notes_create(title, body)</code>, <code>notes_search(query)</code> — Apple Notes via <code>osascript</code>.</li>
+<li><code>calendar_today()</code>, <code>calendar_create(title, when, duration?)</code> — Apple Calendar via <code>osascript</code>.</li>
+<li><code>screen_capture_region()</code> — <code>screencapture -i</code> with interactive selection; returns the saved PNG path.</li>
+</ul>
+<h2 id="symbol-intelligence-700">Symbol intelligence (7.0.0)<a class="headerlink" href="#symbol-intelligence-700" title="Permanent link">&para;</a></h2>
+<p><code>symbol_search(query, kind?)</code> indexes the workspace's symbols. Uses <code>universal-ctags</code> when available; otherwise falls back to a regex scan covering <code>.py / .js / .ts / .tsx / .jsx / .swift / .go / .rs</code>. Index is cached on first use; subsequent calls are instant.</p>
+<p><code>package_list()</code> reads the appropriate manifest (<code>package.json</code>, <code>requirements.txt</code>, <code>pyproject.toml</code>, <code>Cargo.toml</code>, <code>go.mod</code>, <code>Brewfile</code>). <code>package_install(name, version?, manager?)</code> shells out to the obvious package manager. Auto-detect uses the same manifest hits. Permission-gated.</p>
+<h2 id="sandboxed-code-execution-700">Sandboxed code execution (7.0.0)<a class="headerlink" href="#sandboxed-code-execution-700" title="Permanent link">&para;</a></h2>
+<p><code>exec_python(code, timeout?)</code> runs a snippet through <code>python3 -I -S -c</code> (no site-packages, isolated env) inside a fresh <code>/tmp</code> directory. <code>exec_js(code, timeout?)</code> does the equivalent with <code>node -e</code>. Both default to a 10s wall-clock cap, max 60s.</p>
+<p>Use for testing one-off snippets without mutating the workspace.</p>
+<h2 id="continuous-file-watcher">Continuous file watcher<a class="headerlink" href="#continuous-file-watcher" title="Permanent link">&para;</a></h2>
+<p><code>--watch</code> (or <code>/watch on</code>) starts a 2-second polling watcher over the workspace tree. External file additions / changes / deletions are collected into a buffer; the buffer is flushed as a system message at the start of the next turn so the model knows to re-read files you've edited yourself. Stop with <code>/watch off</code> or session quit.</p>
+<h2 id="cost-meter-per-tool">Cost meter (per-tool)<a class="headerlink" href="#cost-meter-per-tool" title="Permanent link">&para;</a></h2>
+<p><code>/cost</code> now shows a per-tool breakdown: calls, elapsed ms, estimated tokens. Plus a "top file paths read" list so you can see what the model fixated on. Prefetch hits/misses are also shown.</p>
+<h2 id="plugin-architecture">Plugin architecture<a class="headerlink" href="#plugin-architecture" title="Permanent link">&para;</a></h2>
+<p>Drop a Python file into <code>~/.loom/tools/</code> that defines <code>LMSTUDIO_TOOLS = [{"schema": ..., "func": ...}]</code> and lmstudio will auto-import it on session start. Each entry registers a new builtin tool. Errors during import surface as warnings but never abort the session. Use <code>/plugins</code> to list loaded plugins. Disable with <code>--no-plugins</code>.</p>
+<p>Example plugin:
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># ~/.loom/tools/weather.py</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">tool_weather</span><span class="p">(</span><span class="n">state</span><span class="p">,</span> <span class="n">args</span><span class="p">):</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>    <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;It&#39;s always sunny in </span><span class="si">{</span><span class="n">args</span><span class="p">[</span><span class="s1">&#39;city&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="n">LMSTUDIO_TOOLS</span> <span class="o">=</span> <span class="p">[{</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>    <span class="s2">&quot;schema&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;function&quot;</span><span class="p">,</span> <span class="s2">&quot;function&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;weather&quot;</span><span class="p">,</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>        <span class="s2">&quot;description&quot;</span><span class="p">:</span> <span class="s2">&quot;Get the weather.&quot;</span><span class="p">,</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>        <span class="s2">&quot;parameters&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;object&quot;</span><span class="p">,</span> <span class="s2">&quot;properties&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>            <span class="s2">&quot;city&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;string&quot;</span><span class="p">}},</span> <span class="s2">&quot;required&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;city&quot;</span><span class="p">]}}},</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>    <span class="s2">&quot;func&quot;</span><span class="p">:</span> <span class="n">tool_weather</span><span class="p">,</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="p">}]</span>
+</span></code></pre></div></p>
+<h2 id="self-reflection-drift">Self-reflection + drift<a class="headerlink" href="#self-reflection-drift" title="Permanent link">&para;</a></h2>
+<p><code>--reflect</code> (or <code>/reflect on</code>) sends a small judge prompt at the end of each human turn that scores the turn and writes a one-line lesson into <code>.loom/project.json</code> under <code>lessons</code>. Future sessions read those lessons through the project knowledge load.</p>
+<p>Drift detector runs at session start: any <code>build_commands</code> recorded in project knowledge that reference files no longer in the workspace get flagged in the banner. Prevents stale knowledge from poisoning sessions.</p>
+<h2 id="mermaid-rendering">Mermaid rendering<a class="headerlink" href="#mermaid-rendering" title="Permanent link">&para;</a></h2>
+<p>When the assistant turn contains a <code>```mermaid</code> block, lmstudio pipes it through <code>mmdc</code> (Mermaid CLI, <code>npm i -g @mermaid-js/mermaid-cli</code>) and writes the PNG to <code>diagrams/mermaid-&lt;ts&gt;.png</code>. Silent skip when <code>mmdc</code> isn't on PATH.</p>
+<h2 id="constitution-mode">Constitution mode<a class="headerlink" href="#constitution-mode" title="Permanent link">&para;</a></h2>
+<p>Drop a <code>&lt;workspace&gt;/.loom/constitution.md</code> with hard rules — one per line — and lmstudio injects it into the system prompt AND validates every tool call against it before dispatch. If the model tries to violate a rule, the dispatcher refuses <em>before</em> the tool runs and tells the model exactly which rule it broke.</p>
+<p>Rules can be:
+- <strong>Mechanical</strong> (matched by built-in patterns): <code>rm -rf</code>, <code>git push --force</code>, <code>DROP DATABASE</code>, <code>DROP TABLE</code>, <code>TRUNCATE TABLE</code>.
+- <strong>Phrase-based</strong>: if a rule mentions a tool name plus a forbidden phrase in backticks/quotes, the dispatcher will refuse matching args.</p>
+<p>Example <code>.loom/constitution.md</code>:
+<div class="language-markdown highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="gh"># Constitution</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="k">-</span><span class="w"> </span>Never call <span class="sb">`run_bash`</span> with <span class="sb">`rm -rf`</span>.
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="k">-</span><span class="w"> </span>Never call <span class="sb">`run_bash`</span> with <span class="sb">`git push --force`</span>.
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="k">-</span><span class="w"> </span>Never call <span class="sb">`sqlite_query`</span> with <span class="sb">`DROP TABLE`</span>.
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="k">-</span><span class="w"> </span>Refuse <span class="sb">`http_request`</span> to any host under <span class="sb">`production.example.com`</span>.
+</span></code></pre></div></p>
+<p><code>/constitution reload</code> re-reads the file mid-session. <code>/constitution</code> (no args) lists the active rules.</p>
+<h2 id="ship_it">ship_it<a class="headerlink" href="#ship_it" title="Permanent link">&para;</a></h2>
+<p><code>ship_it(spec, target?)</code> is the end-to-end capstone. One tool call:</p>
+<ol>
+<li>Runs an aggressive-batch turn against the spec (model emits tasks → orchestrator scaffolds files in one batch via grammar-forced writes).</li>
+<li>Runs the workspace's test runner (<code>detect_test_runner</code>).</li>
+<li>Auto-commits the journaled changes.</li>
+<li>Opens a draft PR via <code>gh_create_pr</code>.</li>
+<li>Notes a deploy target if one was provided (but does NOT execute it; manual step).</li>
+</ol>
+<p>Permission-gated. Use <code>/ship "&lt;spec&gt;"</code> to invoke from the REPL.</p>
+<h2 id="slash-commands-added-in-700">Slash commands added in 7.0.0<a class="headerlink" href="#slash-commands-added-in-700" title="Permanent link">&para;</a></h2>
+<p><code>/watch [on|off]</code>, <code>/reflect [on|off]</code>, <code>/plugins</code>, <code>/constitution [reload]</code>, <code>/ship &lt;spec&gt;</code>, <code>/web &lt;query&gt;</code>, <code>/blocklist [host|-host]</code>.</p>
+<h2 id="model-recommendations">Model recommendations<a class="headerlink" href="#model-recommendations" title="Permanent link">&para;</a></h2>
+<p>Tool-calling collapses on small or non-coder models. Reliable picks:</p>
+<ul>
+<li>Qwen2.5-Coder 7B / 14B Instruct</li>
+<li>DeepSeek-Coder-V2-Lite-Instruct</li>
+<li>Llama 3.1 70B Instruct (with the VRAM)</li>
+</ul>
+<p>General-purpose 3B–4B models will usually skip <code>update_tasks</code> or call it once and forget.</p>
+<h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
+<p><strong>"Could not reach LM Studio at http://localhost:1234/v1"</strong> — server isn't running. Start it from the LM Studio app, or <code>lms server start --port 1234</code>.</p>
+<p><strong>"multiple models loaded"</strong> — pass <code>--model</code> or set <code>LMSTUDIO_MODEL</code>. <code>/model</code> in the REPL lists what's loaded.</p>
+<p><strong>Box drawing looks broken after resizing the terminal</strong> — boxes recompute width on each new prompt, so the next turn after a resize renders cleanly. The in-flight box on the line you resized over stays at its original width until you submit.</p>
+<p><strong>Tasks aren't appearing in Loom's Tasks pane</strong> — confirm Loom is running and Settings → Tasks "Stale window" isn't set so tight the session is being hidden. Check <code>~/.loom/tasks/&lt;session&gt;/</code>; if files are there, the pickup is on Loom's side.</p>
+<h2 id="803-fixes">8.0.3 fixes<a class="headerlink" href="#803-fixes" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>update_tasks({})</code> (empty call) no longer silently clears the visible task list. The dispatcher refuses the call, returns a schema-aware error, and preserves the existing tasks. This was the root cause of the 8.0.x "model loops forever narrating without writing files" pattern.</li>
+<li>Zero-progress orchestrator guard. The continuation loop tracks consecutive turns where no real tool work happened (only narration + bare <code>update_tasks</code> calls) and breaks out after 2 unproductive rounds, returning control to the user instead of running through the full 12 continuations.</li>
+<li>Up/down arrow history fixed. Three causes were in play simultaneously: the Esc-to-CSI peek timeout (40 ms) was too tight for some terminals, VMIN/VTIME were never set in the manual termios setup so <code>read(1)</code> could return early with no bytes, and <code>\x1bOA</code>-style SS3 application-cursor-key sequences weren't handled. All three are addressed.</li>
+</ul>
+<h2 id="8019-dual-load-per-turn-routing-claude-style">8.0.19 — dual-load + per-turn routing (Claude-style)<a class="headerlink" href="#8019-dual-load-per-turn-routing-claude-style" title="Permanent link">&para;</a></h2>
+<p>The user asked: "Why can't I use a low-end model, then have it switch mid-generation to a better one for tool calls?" 8.0.19 does the next best thing — loads two models simultaneously and routes each turn to the appropriate one.</p>
+<p>How it works:</p>
+<ol>
+<li>
+<p><strong>At session start, dual-load both a planner and a coder.</strong> <code>auto_load_dual_models</code> picks the best small fast model (default ~4B, jan-v1-4b on the test system) AND the best stronger coder-class (default ~9B, qwen/qwen3.5-9b). Both loaded with <code>--parallel 1</code> to keep memory usage minimal.</p>
+</li>
+<li>
+<p><strong>Per-turn routing in <code>pick_model_for_turn</code>.</strong> The router scans the user message for intent:</p>
+</li>
+<li><strong>Coder words</strong> (write, create, build, scaffold, implement, fix, refactor, code, generate, function, class, module, etc.) → <code>coder_model</code>.</li>
+<li><strong>Explainer words</strong> (explain, why, how does, summarize, describe) → <code>explainer_model</code> (falls back to planner).</li>
+<li><strong>Planner words</strong> (plan, outline, design, what should we) → <code>planner_model</code>.</li>
+<li>
+<p><strong>Default</strong>: coder when set, else <code>state.model</code>.</p>
+</li>
+<li>
+<p><strong>Streaming completion stays on the picked model</strong> for the duration of the turn. We don't (yet) swap mid-stream — that's a much harder problem because the inference state lives inside the model. Per-turn is the practical middle ground and covers 90% of the real win.</p>
+</li>
+</ol>
+<p>Memory cost on the test system: 4B + 9B GGUFs at Q4 plus runtime = ~9 GB total. Easily fits alongside the model weights of either alone (~33 GB previously for the 31B Gemma).</p>
+<p>OOM fallback: if the second load OOMs, the agent continues with just the coder; the routing slots stay empty and <code>pick_model_for_turn</code> falls through to <code>state.model</code>. The banner shows <code>family qwen3 (native tools)</code> instead of dual.</p>
+<p>Flags:</p>
+<ul>
+<li><code>--dual-load</code> (default on, <code>LMSTUDIO_DUAL_LOAD=0</code> to disable).</li>
+<li><code>--no-dual-load</code> shorthand.</li>
+<li><code>--planner-size N</code> (default 4).</li>
+<li><code>--coder-size N</code> (default 9).</li>
+</ul>
+<p>About mid-stream model swap. Real Claude-style "switch model mid-generation" requires re-prompting the new model with the same conversation when a tool call header appears. That's a bigger feature (would need explicit stream-cancel + handoff prompt + KV state transfer). Per-turn routing covers the bulk of the perceived benefit. Open a follow-up if you want true mid-stream swap.</p>
+<h2 id="8018-fix-the-actual-reason-the-update-pill-never-showed">8.0.18 — fix the actual reason the update pill never showed<a class="headerlink" href="#8018-fix-the-actual-reason-the-update-pill-never-showed" title="Permanent link">&para;</a></h2>
+<p>Root cause from the user's running app log:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>Update check failed: Error Domain=NSURLErrorDomain Code=-1001
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>&quot;The request timed out.&quot;
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>URL: https://api.github.com/repos/BigBeardedMan/Loom/releases?per_page=30
+</span></code></pre></div>
+<p>The 10-second timeout on the GitHub API request was too tight for the user's network. Every poll cycle timed out, so the manifest never got written, so <code>refresh()</code> never set <code>available</code>, so the pill never appeared.</p>
+<p>Three layered fixes:</p>
+<ol>
+<li>
+<p><strong>Bump every URLRequest timeout from 10s → 30s</strong> in <code>GitHubReleaseFetcher</code> (releases list, latest, checksum sidecar). Slow networks, DNS lag, and busy laptops were all paying the price for a budget tuned to a fast desktop.</p>
+</li>
+<li>
+<p><strong>Add a one-shot retry on transient errors</strong> in <code>UpdateService.checkRemote</code>. URLError codes <code>-1001</code> (timed out), <code>-1009</code> (not connected), <code>-1004</code> (cannot connect), <code>-1005</code> (network connection lost) get a 3-second backoff and one more attempt before reporting failure. Drops the cost of an unlucky moment from "wait 60s for the next poll" to "wait 3s and retry inline."</p>
+</li>
+<li>
+<p><strong>Diagnosed in passing</strong>: the user's <code>/Applications/Loom Testing Edition.app</code> doesn't exist — they were running directly from the staging directory. The apply script swaps the staged bundle INTO <code>installedBundleURL</code>, which is hard-coded to <code>/Applications/Loom Testing Edition.app</code>. Without a real install there, no manifest gets cleared after apply, no clean handoff. <strong>Manual one-time step:</strong> download <code>LoomTestingEdition-8.0.18.dmg</code> from the GitHub release, drag the app into <code>/Applications</code>, launch from there. After that, the pill mechanism works.</p>
+</li>
+</ol>
+<h2 id="8017-session-start-auto-route-force-the-upgrade">8.0.17 — session-start auto-route (force the upgrade)<a class="headerlink" href="#8017-session-start-auto-route-force-the-upgrade" title="Permanent link">&para;</a></h2>
+<p>8.0.16 fixed the auto-load picker but auto-load only fires when nothing is loaded. A user with a 4B model already loaded from a prior session stayed on that model forever, even when their qwen3.5-9b was sitting on disk unused.</p>
+<p>8.0.17 makes auto-route actually swap. At session start:</p>
+<ol>
+<li>Read the currently-loaded models from <code>/api/v0/models</code>.</li>
+<li>Compute the optimal pick from disk via <code>pick_default_model</code> (coder-family bias, prefer 7B, cap 12B).</li>
+<li>If a model is loaded but the optimal pick differs, unload the loaded one and load the optimal via <code>lms load ... --parallel 1 -c 16384</code>.</li>
+</ol>
+<p>Side effects:</p>
+<ul>
+<li>Explicit <code>--model X</code> skips the swap entirely.</li>
+<li><code>--no-auto-route</code> (or <code>LMSTUDIO_NO_AUTO_ROUTE=1</code>) skips the swap and uses whatever's loaded.</li>
+<li>Multiple models loaded: pick the optimal one of them.</li>
+</ul>
+<p>Dry-run on the test system: <code>jan-v1-4b</code> loaded → optimal pick <code>qwen/qwen3.5-9b</code> → swap planned. After install, every session with auto-route on will move the user onto a coder-class model when one is available, no manual <code>lms load</code> required.</p>
+<p>The swap costs ~10 seconds (unload + reload). Trade-off: one-time tax for a measurably stronger model for the rest of the session. Use <code>--no-auto-route</code> if you want the launch to be instant.</p>
+<h2 id="8016-coder-aware-default-faster-update-pill">8.0.16 — coder-aware default + faster update pill<a class="headerlink" href="#8016-coder-aware-default-faster-update-pill" title="Permanent link">&para;</a></h2>
+<p>Two real fixes from the field.</p>
+<p><strong>Default model now biases toward coder-strong families.</strong> 8.0.13's auto-load picked the smallest 4B-class model regardless of whether it was meant for code. On a user system with both <code>jan-v1-4b</code> (generalist 4B) and <code>qwen/qwen3.5-9b</code> available, the picker would auto-load the 4B and then struggle on coding tasks like "scaffold a website."</p>
+<p>New scoring in <code>pick_default_model</code>:
+1. <strong>Coder family score</strong> (primary). Regex over key + architecture: <code>qwen</code>, <code>deepseek</code>, <code>codestral</code>, <code>coder</code>, <code>stable-code</code>, <code>yi-coder</code>, <code>magicoder</code>, <code>wizardcoder</code>, <code>starcoder</code>, <code>granite-code</code>, <code>codellama</code>, <code>codegemma</code>. Matches score 0; everything else scores 1.
+2. <strong>Distance from <code>--default-size</code></strong> (now 7, was 4).
+3. <strong>File size on disk</strong> (smaller wins ties between same-family same-size).
+4. <strong>Alphabetical key</strong> for determinism.</p>
+<p>Hard cap raised from <code>--default-size-max=8</code> to <code>12</code> so 9B qwen variants are eligible. On the test system this flips the auto-pick from <code>jan-v1-4b</code> → <code>qwen/qwen3.5-9b</code> — exactly what a coding session wants.</p>
+<p><strong>Update pill checks on app activation.</strong> Previously only every 60 seconds via the background poll. 8.0.16 adds an <code>onReceive(NSApplication.didBecomeActiveNotification)</code> hook in <code>LoomApp</code> so coming back to Loom from another app triggers an immediate <code>checkRemote()</code>. The 60-second background poll still runs as a safety net.</p>
+<h2 id="8015-fix-mouse-click-random-char-injection">8.0.15 — fix mouse-click random-char injection<a class="headerlink" href="#8015-fix-mouse-click-random-char-injection" title="Permanent link">&para;</a></h2>
+<p>Clicking inside the input box was inserting characters like <code>0;42;15</code> into the in-flight line. Cause: when a terminal has SGR mouse tracking enabled (vim or tmux often leave it on for the parent shell), a click emits <code>\x1b[&lt;0;42;15M</code>. The editor's CSI handler only recognized digit-prefixed multi-byte sequences, so the <code>&lt;</code> parameter prefix fell through to <code>_handle_csi("&lt;")</code> (a no-op) and the trailing <code>0;42;15M</code> bytes were read as individual printable characters and inserted into the line.</p>
+<p>Two fixes layered:</p>
+<ol>
+<li>
+<p><strong>Drain any CSI sequence that isn't one of the known single-byte commands</strong> (A/B/C/D/H/F/Z). Anything else is multi-byte and gets consumed until its terminator (<code>~</code> or any alpha). Covers SGR mouse press/release (M / m), DEC private mode replies, function keys, and any other CSI sequence the terminal might send.</p>
+</li>
+<li>
+<p><strong>Explicitly disable all mouse tracking modes</strong> at session start: <code>\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l</code>. Belt + suspenders so the terminal stops sending mouse events altogether even if a parent program (vim, tmux) left them on.</p>
+</li>
+</ol>
+<p>Note: with this fix, mouse clicks are silently consumed rather than corrupting input. Click-to-position-cursor inside the input is a separate feature (would require enabling SGR mouse, parsing click coordinates, mapping them to a char offset in the wrapped line) — currently not implemented; cursor positioning is via arrow keys, Home/End, Ctrl-A/E.</p>
+<h2 id="8014-friendly-install-detection">8.0.14 — friendly install detection<a class="headerlink" href="#8014-friendly-install-detection" title="Permanent link">&para;</a></h2>
+<p>If someone runs <code>lmstudio</code> without LM Studio installed at all, the CLI now detects that and points them to the download page instead of erroring out with a Python URLError.</p>
+<p>Three distinguishable failure modes at startup, each with its own message:</p>
+<ol>
+<li>
+<p><strong>Not installed.</strong> No <code>lms</code> CLI on PATH, no <code>~/.lmstudio</code> directory, no <code>LM Studio.app</code> in /Applications. Prints "LM Studio does not appear to be installed on this Mac" with the download URL and a one-line walkthrough: install → open app → Discover tab → download a 4B model → re-run <code>lmstudio</code> (auto-load picks it up on first launch).</p>
+</li>
+<li>
+<p><strong>Installed but server cold.</strong> App markers found, but no response from <code>/v1/models</code>. Prints "LM Studio is installed but the local server isn't reachable" with two ways to start it: open the app and click Developer → Local Server → Start, or run <code>lms server start</code> from the shell.</p>
+</li>
+<li>
+<p><strong>Reachable.</strong> Normal session flow continues.</p>
+</li>
+</ol>
+<p>Detection is a fast pre-flight: 2-second timeout on <code>/v1/models</code>, plus filesystem checks for <code>~/.lmstudio</code>, <code>/Applications/LM Studio.app</code>, and <code>~/Applications/LM Studio.app</code>. Runs before any other model probing so the first thing a brand-new user sees is the friendly nudge, not a stack trace.</p>
+<h2 id="8013-zero-config-model-selection">8.0.13 — zero-config model selection<a class="headerlink" href="#8013-zero-config-model-selection" title="Permanent link">&para;</a></h2>
+<p>Until 8.0.13, launching the CLI with no model loaded in LM Studio errored out and demanded the user load one manually. Now the CLI inspects <code>lms ls --json</code>, picks the best small tool-use model on disk, and loads it automatically.</p>
+<p>How the default is chosen:</p>
+<ol>
+<li>Enumerate all LLMs on disk via <code>lms ls --json</code>. Filter to local (<code>deviceIdentifier=null</code>) + tool-use trained (<code>trainedForToolUse=true</code>).</li>
+<li>Score each candidate by <code>(distance from --default-size, file size on disk, name)</code>. Default <code>--default-size=4</code> so 3-4 B models win. Hard cap <code>--default-size-max=8</code> skips anything larger.</li>
+<li>Tie-break by actual disk size, so a 4B dense model beats a 26B-A4B MoE that just happens to share active-params count.</li>
+<li>Load via <code>lms load &lt;key&gt; -y --parallel 1 -c 16384 --gpu max</code>.</li>
+</ol>
+<p>Live-tested against a system with seven local tool-use LLMs (3B to 31B): picked <code>jan-v1-4b</code> (2.5 GB, qwen3 arch, tool-use). Loaded in under 10 seconds.</p>
+<p>Manual override flags:</p>
+<ul>
+<li><code>--no-autoload</code> keeps the old "error out" behavior.</li>
+<li><code>--default-size N</code> picks closer to N billion params.</li>
+<li><code>--default-size-max N</code> raises or lowers the hard cap.</li>
+</ul>
+<p>In-session model management:</p>
+<ul>
+<li><code>/models</code> lists every local LLM with size, context cap, tool-use status, loaded marker.</li>
+<li><code>/load &lt;key&gt; [ctx]</code> loads a model (auto-rebuilds the family adapter + essential-tools flag for the new model).</li>
+<li><code>/unload &lt;key&gt;</code> unloads.</li>
+</ul>
+<h2 id="8012-multi-task-transcript-economy">8.0.12 — multi-task transcript economy<a class="headerlink" href="#8012-multi-task-transcript-economy" title="Permanent link">&para;</a></h2>
+<p>Targets the "slow after 3-4 tasks" pattern by reducing per-turn token waste. The agent's API calls send the entire transcript on every turn; older messages keep paying tokens forever. This release adds four mechanisms that keep the working set small.</p>
+<ol>
+<li>
+<p><strong>Stale tool-result pruning.</strong> At the top of every turn, walk the transcript and replace older tool result bodies with a 240-char head plus a "[pruned: full result was N chars, re-call to fetch]" marker. Keeps the most recent six tool results full. A session that read a 500-line file 5 turns ago stops paying 2k+ tokens for it on every subsequent API call. The model can re-call any tool if it needs the rest.</p>
+</li>
+<li>
+<p><strong><code>read_file</code> truncation at source.</strong> Files longer than 1500 lines now return the first 100 + last 50 lines with a <code>[TRUNCATED ... use offset/limit for range]</code> marker. The new <code>offset</code> (1-indexed start line) and <code>limit</code> (line count) arguments let the model fetch any specific range instead of dragging the whole file into context. Schema advertises the new parameters so models discover them naturally.</p>
+</li>
+<li>
+<p><strong>Cached grammar probe.</strong> The session-startup grammar capability probe is now cached to <code>~/.loom/cache/grammar/&lt;key&gt;.json</code> with a 7-day TTL. Subsequent sessions with the same model skip the 5-10 second live probe. Force a re-probe by deleting the cache file or setting <code>LMSTUDIO_NO_GRAMMAR=1</code>.</p>
+</li>
+<li>
+<p><strong>Lower auto-compact threshold.</strong> <code>COMPACT_TRIGGER_RATIO</code> dropped from 0.75 to 0.60. Compaction kicks in earlier, leaving more usable headroom on the back half of long sessions before the model starts losing context.</p>
+</li>
+</ol>
+<p>These compose with the existing 8.0.9 <code>cache_prompt: true</code> to give the agent a much smaller working set across turns. The stable prefix (system prompt + tool catalogue) stays cached, the dynamic tail (recent tool results + assistant messages) stays the only thing actively burning compute.</p>
+<h2 id="8011-shifttab-mode-cycle-4-modes-claude-code-parity">8.0.11 — Shift+Tab mode cycle (4 modes, Claude Code parity)<a class="headerlink" href="#8011-shifttab-mode-cycle-4-modes-claude-code-parity" title="Permanent link">&para;</a></h2>
+<p>Updated to four modes matching Claude Code exactly. Press Shift+Tab to cycle:</p>
+<ul>
+<li><strong>default</strong> — permissions gate everything. Normal behavior.</li>
+<li><strong>PLAN</strong> — read-only. Hard-blocks write_file / edit_file / multi_edit / run_bash / background_bash / git_commit / ship_it / spawn_agent at the dispatcher level. Allowed: read tools, list/glob/grep, git read-only, update_tasks, recall.</li>
+<li><strong>ACCEPT EDITS</strong> — write_file, edit_file, multi_edit auto-approve without prompts. run_bash still gates. Useful when you trust file edits but want to review shell commands.</li>
+<li><strong>BYPASS PERMISSIONS</strong> — full yolo. All permission prompts off; bash auto-enabled; every tool runs without confirmation. Use when you trust the model end-to-end.</li>
+</ul>
+<p>The active mode renders as a colored pill in the input box's top border: <code>╭── [ACCEPT EDITS] ──────╮</code>. Default mode shows no pill (clean look).</p>
+<p>CLI flag <code>--bypass-bash</code> (alias <code>--bypass-permissions</code>) launches directly into BYPASS PERMISSIONS mode. Equivalent to launching then pressing Shift+Tab three times. <code>LMSTUDIO_BYPASS_BASH=1</code> env var also works.</p>
+<p>Side effects per transition are computed from a clean baseline each time — switching back to default reliably restores <code>permissions.yolo</code> to its launch-time value and clears the <code>allowed_forever</code> set, so a session that briefly used BYPASS PERMISSIONS doesn't leak yolo state into a return to default mode.</p>
+<p>On every mode change, a synthetic system note is appended to the transcript so the model knows about the switch on the next turn. The dispatcher hard-block still catches plan-mode violations as the final safety net.</p>
+<p><code>/mode &lt;name&gt;</code> switches by name for terminals that swallow Shift+Tab. Names: <code>default</code>, <code>plan</code>, <code>accept-edits</code>, <code>bypass-permissions</code>.</p>
+<h2 id="809-multi-task-performance">8.0.9 — multi-task performance<a class="headerlink" href="#809-multi-task-performance" title="Permanent link">&para;</a></h2>
+<p>Five additions targeting wall-clock latency on multi-tool workflows. None of them help GPU throughput, but together they shave a lot of waste off each round-trip.</p>
+<ol>
+<li>
+<p><code>cache_prompt: true</code> on every completion call. LM Studio / llama.cpp reuses the KV state for unchanged prefixes across turns. System prompt + tool catalogue stay identical turn-over-turn, so the second turn onward only pays for the new user message and assistant output. Time-to-first-token on follow-up turns drops 60-80% in practice.</p>
+</li>
+<li>
+<p>Per-turn output token cap. <code>--max-tokens</code> (default 4096) prevents runaway narration like Gemma's "Step 1: Setup. Step 2: Initialize. Step 3: ..." essays that burned 60 seconds before reaching a tool call. The cap fits one tool call plus reasonable preface; raise via <code>--max-tokens N</code> or <code>LMSTUDIO_MAX_TOKENS</code> env.</p>
+</li>
+<li>
+<p>Early-stop streaming after a fenced <code>\</code>``tool_call` closes. For text-mode families only. The moment the model writes the closing ``` we cut the stream rather than waiting for whatever filler prose follows. Combined with #2 this often cuts a turn's wall-clock by 30-50%.</p>
+</li>
+<li>
+<p>Workspace tree dump trimmed from 200 → 80 entries. The tree is auto-injected into every system message, so each entry is paid for in every turn forever. 80 is enough for the model to orient; the prior 200 was bloating cache size and slowing first-token on flat projects.</p>
+</li>
+<li>
+<p>Auto multi-model routing. When the user has multiple models loaded in LM Studio, lmstudio picks the smallest (by parameter count parsed from the model id) and assigns it as <code>planner_model</code>. Triage / planning prompts route there, the user's <code>--model</code> stays the coder. Explicit <code>--planner-model</code>, <code>--coder-model</code>, <code>--explainer-model</code> flags override.</p>
+</li>
+</ol>
+<h2 id="808-auto-scale-that-actually-scales">8.0.8 — auto-scale that actually scales<a class="headerlink" href="#808-auto-scale-that-actually-scales" title="Permanent link">&para;</a></h2>
+<p>8.0.7 detected the small context but failed to bump it on memory-constrained systems. Live-testing on a 36 GB Mac with Gemma 4 31B revealed why: LM Studio's JIT load defaults to <code>parallel=4</code>, which keeps four KV cache slots in memory simultaneously. Most agent workloads run one completion at a time, so three of those slots are pure waste.</p>
+<p>8.0.8 changes the autoscale strategy:</p>
+<ul>
+<li>Always force <code>--parallel 1</code> on the reload. That alone shrinks the KV cache by 75% per token.</li>
+<li>Always <code>lms unload &lt;id&gt;</code> before the load, so the new instance reclaims the original identifier instead of being assigned <code>:2</code> / <code>:3</code> / etc.</li>
+<li>Initial target raised to <code>min(--autoscale-max, model_cap)</code> rather than <code>loaded * 4</code>. With parallel=1 the bigger sizes actually fit.</li>
+<li>Default <code>--autoscale-min</code> raised to 16384 and <code>--autoscale-max</code> to 65536.</li>
+</ul>
+<p>Verified on the same hardware that previously refused any bump: Gemma 4 31B (Q4_K_M) now loads at 65536 context, parallel=1, using the same 33.84 GB unified memory that 4096 context previously required. The trick is that llama.cpp on Apple Silicon mmaps the model weights, so weights page in on demand and the in-memory delta is only the actively-used KV cache.</p>
+<p>Also: when a non-OOM error happens mid-ladder, autoscale tries to restore the prior loaded size before returning so the user isn't left with no model loaded.</p>
+<h2 id="807-auto-scale-model-context-at-session-start">8.0.7 — auto-scale model context at session start<a class="headerlink" href="#807-auto-scale-model-context-at-session-start" title="Permanent link">&para;</a></h2>
+<p>LM Studio's JIT loader gives many models a tiny default <code>loaded_context_length</code> (often just 4096) even when the model's GGUF supports 32k, 128k, or 262k. The lmstudio CLI now bumps this automatically.</p>
+<p>How it works:</p>
+<ol>
+<li>At session start, query <code>/api/v0/models</code> for the loaded model's <code>loaded_context_length</code> and <code>max_context_length</code>.</li>
+<li>If <code>loaded_context_length &lt; --autoscale-min</code> (default 8192) AND the cap allows more, build a candidate ladder: <code>min(autoscale-max, cap, loaded * 4)</code> at 100% / 75% / 50% / 33% / 25%.</li>
+<li>For each candidate (highest first), shell out to <code>lms load &lt;model&gt; -c &lt;target&gt; -y --gpu max</code>. On a non-OOM error, abort. On an OOM error ("insufficient system resources", "out of memory", "would likely overload"), step down to the next candidate.</li>
+<li>Stop at the first successful load. Update the status footer with the new size.</li>
+</ol>
+<p>Hard cases handled cleanly:</p>
+<ul>
+<li>Very large models on tight RAM (e.g. Gemma 4 31B on 36 GB) - the ladder exhausts, the agent logs a clear warning, and starts the session on the smaller context. Tool surface auto-trims to the essentials.</li>
+<li><code>lms</code> not on PATH - falls back to <code>~/.lmstudio/bin/lms</code>. If neither exists, skips autoscale with a one-line note.</li>
+<li>Server cold - autoscale fails silently and the agent reports the underlying connection error on the next call.</li>
+</ul>
+<p>Manual control:</p>
+<ul>
+<li><code>--no-autoscale</code> skips at session start.</li>
+<li><code>--autoscale-min N</code> raises or lowers the threshold (LMSTUDIO_AUTOSCALE_MIN env var).</li>
+<li><code>--autoscale-max N</code> caps the ladder's top candidate.</li>
+<li><code>/autoscale &lt;target&gt;</code> mid-session to bump again. <code>/autoscale max</code> targets the model's cap. <code>/autoscale</code> with no argument shows current loaded/cap values.</li>
+</ul>
+<p>Also: <code>fetch_model_context_window</code> now reads <code>loaded_context_length</code> (the runtime capacity) rather than <code>max_context_length</code> (the GGUF cap). The status footer no longer shows misleading "262k context" for a model actually loaded with 4k.</p>
+<h2 id="806-text-mode-tool-calling-actually-works-on-gemma">8.0.6 — text-mode tool calling actually works on Gemma<a class="headerlink" href="#806-text-mode-tool-calling-actually-works-on-gemma" title="Permanent link">&para;</a></h2>
+<p>The 8.0.5 framework was correct in shape but the model still wouldn't tool-call from a prose-heavy plan. 8.0.6 adds three reinforcements so Gemma (and other text-mode families) reliably emit JSON tool calls instead of writing essays:</p>
+<ol>
+<li>
+<p><strong>TEXT_TOOL_INSTRUCTIONS rewritten and prepended.</strong> The format guidance is now the FIRST thing the model sees, not the last. Includes a complete worked example and an explicit anti-pattern list: no multi-step prose plans, no "Commands to Execute" markdown headings, no descriptions of what the tool will do. Just the fenced <code>\</code>``tool_call` block.</p>
+</li>
+<li>
+<p><strong>Plan-without-action detection in <code>should_auto_continue</code>.</strong> When a non-native family emits a long response (&gt;200 chars) containing file paths or shell-command tokens but no tool calls, the orchestrator injects a strict "emit ONE tool call NOW" nudge instead of giving up.</p>
+</li>
+<li>
+<p><strong>Grammar-forced rescue.</strong> Last resort: when the zero-progress streak hits the limit on a text-mode family, the orchestrator picks the most likely intended tool from the model's narration (<code>write_file</code> if paths are present, <code>run_bash</code> if backticked commands are mentioned, etc.), forces valid arguments via <code>response_format</code> JSON schema, dispatches the result, and appends a synthetic system note. The loop continues from the rescued state. Capped at 2 rescues per human-issued turn to prevent runaway.</p>
+</li>
+</ol>
+<p>The fix flow for a typical "build me a website" prompt under Gemma:</p>
+<ul>
+<li>Turn 1: model writes a plan as prose. Extractor finds nothing. Plan-without-action detector fires.</li>
+<li>Turn 2: model retries; emits a proper <code>\</code>``tool_call` block this time. Extractor parses it. Dispatch runs.</li>
+<li>If turn 2 still fails: zero-progress streak fires. Grammar-rescue infers <code>write_file</code>, forces args, dispatches.</li>
+<li>Turn 3+: model sees the rescued state and continues normally.</li>
+</ul>
+<h2 id="805-model-family-adapters">8.0.5 — model family adapters<a class="headerlink" href="#805-model-family-adapters" title="Permanent link">&para;</a></h2>
+<p><code>bin/lmstudio</code> now ships a <code>ModelAdapter</code> layer that recognizes the family of the loaded model and adjusts behavior accordingly. The agent works on Qwen3, Qwen2.5-Coder, Gemma 2 / Gemma 3, Llama 3.x, Llama 2, DeepSeek-Coder, DeepSeek-R1, Codestral, Mistral, Phi-3 / 3.5 / 4, Granite, Hermes, and Yi-Coder out of the box. Unknown model ids default to "try native tools, fall through to text extraction" so an unfamiliar checkpoint still does useful work.</p>
+<p>Behavior changes per family:</p>
+<ul>
+<li><strong>Native tool callers</strong> (Qwen3, Qwen-Coder, Llama 3.x, DeepSeek, Codestral, Mistral, Phi-3.5/4, Hermes): the dispatcher trusts the structured <code>tool_calls</code> field and acts on it directly.</li>
+<li><strong>Text-mode families</strong> (Gemma, Llama 2, base Phi-3): a TEXT_TOOL_INSTRUCTIONS block is appended to the system prompt explaining the JSON-in-text wire format. After streaming, the agent scans the assistant text for any of these wire forms and re-dispatches them as tool calls.</li>
+</ul>
+<p>Wire formats accepted by the text extractor:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>&lt;tool_call&gt;{&quot;name&quot;: &quot;...&quot;, &quot;arguments&quot;: {...}}&lt;/tool_call&gt;
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>&lt;function_call&gt;{...}&lt;/function_call&gt;
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>```tool_call
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>{&quot;name&quot;: &quot;...&quot;, &quot;arguments&quot;: {...}}
+</span></code></pre></div>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="p">{</span><span class="nt">&quot;tool_calls&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="err">...</span><span class="p">}},</span><span class="w"> </span><span class="err">...</span><span class="p">]}</span>
+</span></code></pre></div>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="p">{</span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="err">...</span><span class="p">}}</span>
+</span></code></pre></div>
+<p>Plus a trailing bare-JSON object at the end of the message as a last-resort fallback. Unknown tool names are rejected by the extractor so prose mentions of "name": don't accidentally fire calls.</p>
+<p>Per-family essentials default. Small / less-reliable families (Gemma, Phi-3, Llama 2, Granite) default to the 15-tool essentials subset so the runtime schema fits the native context window. Full 70+ surface is one <code>/tools full</code> away.</p>
+<p>New slash commands:</p>
+<ul>
+<li><code>/model-info</code> — print what the adapter detected, capabilities, and current essentials/full setting.</li>
+<li><code>/tools [full|essentials]</code> — toggle or set the tool surface manually.</li>
+<li><code>/model &lt;id&gt;</code> now rebuilds the adapter and re-applies the new family's defaults.</li>
+</ul>
+<p>The banner shows <code>family &lt;name&gt; (native tools | text-mode tools)</code> so you know what you're talking to before the first prompt.</p>
+<h2 id="804-fixes">8.0.4 fixes<a class="headerlink" href="#804-fixes" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Progress snapshot order. In 8.0.3 the new-completions snapshot was taken AFTER <code>verify_task_completions</code> mutated <code>raw_tasks</code> in place, so a legitimate completion that got false-flipped by the verifier was counted as zero progress. The snapshot now happens before the verify call, and progress is only credited when verify reports no failures.</li>
+<li>Duplicate subjects in the task list no longer collide in the progress check. Switched from <code>set</code> to <code>collections.Counter</code> so two tasks with the same subject string register as two distinct completions.</li>
+<li>Partial escape sequences from slow terminals no longer wipe the input line. When <code>Esc + [</code> or <code>Esc + O</code> arrived but the trailing byte missed the 120 ms window, the editor previously assumed the user pressed plain Esc twice and cleared the buffer. It now drops the partial sequence and resumes editing.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/BigBeardedMan/Loom" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.expand", "navigation.top", "navigation.tracking", "navigation.indexes", "content.code.copy", "content.action.edit", "search.highlight", "search.suggest"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

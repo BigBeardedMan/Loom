@@ -694,6 +694,8 @@
       
         
       
+        
+      
     
     
     
@@ -840,6 +842,34 @@
     
   
     Local LLMs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/lmstudio-cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    lmstudio CLI
   
 
     
@@ -1056,6 +1086,8 @@
       
         
       
+        
+      
     
     
     
@@ -1146,6 +1178,34 @@
     
   
     CLI agent detection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../terminal/command-history/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command history
   
 
     
@@ -1304,6 +1364,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -1422,6 +1486,62 @@
     
   
     Settings → Providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../settings/mcp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../settings/shell/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings -&gt; Shell
   
 
     
@@ -1751,7 +1871,7 @@
   <span class="md-ellipsis">
     
   
-    Cutting a release
+    Cutting a Loom release
   
 
     
@@ -2140,9 +2260,20 @@
 
 <h2 id="changes">Changes<a class="headerlink" href="#changes" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Fixes Codex live task clearing so completed plans do not reappear after pressing clear.</li>
-<li>Codex task sessions now use the latest <code>update_plan</code> timestamp for live activity instead of unrelated rollout log writes.</li>
-<li>Fully completed Codex plans now disappear from the Tasks pane instead of lingering as live sessions.</li>
+<li>Stable Loom is now version 9.0.0 on macOS and Windows, bringing the full Testing Edition feature set into the production channel.</li>
+<li>LM Studio is now a first-class agent provider with saved endpoints, model discovery, readiness checks, load/unload/download controls, run profiles, local tool-loop execution, concise progress, and slash-command workflows.</li>
+<li>Local-model tool calls are more reliable: Loom parses XML-style and fenced tool calls, suppresses raw tool markup from the visible stream, blocks repeated no-result retries, and summarizes before a max-turn stop.</li>
+<li>Terminal transcripts now support Recently Closed restore, Recently Deleted recovery, bounded previews for large sessions, Finder reveal, transcript pruning, and saved raw ANSI history.</li>
+<li>Terminal image handoff now saves pasted or dropped images locally and inserts editable <code>--image '&lt;path&gt;'</code> prompt text while preserving text paste priority.</li>
+<li>Mac dictation now streams live speech text into terminal and editor inputs, starts recognition before microphone capture, reports no-speech and no-audio errors clearly, and avoids the Swift 6 mic tap crash.</li>
+<li>Usage dashboards now carry the selected Day, Week, Month, or Year range through the snapshot and show range-specific sessions, tokens, prompts, topics, heatmaps, and Codex limit labels.</li>
+<li>Notes editing now debounces SwiftData saves instead of saving on every keystroke.</li>
+<li>The workspace UI now uses the Mac-style shell, left navigation, block controls, task sessions, usage surfaces, and terminal history workflows across macOS and Windows.</li>
+<li>Live tasks now include Claude, Codex, and LM Studio sessions with model labels, plan activity, clear-one, and clear-all behavior that does not resurrect completed Codex plans after clearing.</li>
+<li>Windows Loom now includes the macOS parity work from Testing Edition: LM Studio model management, terminal transcripts, command cards, image handoff, usage views, settings access, sidebar cleanup, and task-session UI.</li>
+<li>Windows in-app updates now select the highest stable <code>v*</code> semver release with a matching versioned installer, verify installer bytes against the embedded Tauri updater public key, and run the NSIS updater arguments with a legacy silent fallback.</li>
+<li>Windows releases now publish signed bridge recovery installers and legacy installer aliases so older installed builds can update forward to Loom 9 even if they still expect older asset names or installer behavior.</li>
+<li>Release metadata, docs, macOS project settings, Windows package settings, updater endpoints, and release scripts now target stable Loom 9.0.0.</li>
 </ul>
 
 

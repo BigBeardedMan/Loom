@@ -27,7 +27,7 @@
     
     
       
-        <title>Cutting a release - Loom</title>
+        <title>Cutting a Loom release - Loom</title>
       
     
     
@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#cutting-a-release" class="md-skip">
+        <a href="#cutting-a-loom-release" class="md-skip">
           Skip to content
         </a>
       
@@ -114,7 +114,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Cutting a release
+              Cutting a Loom release
             
           </span>
         </div>
@@ -694,6 +694,8 @@
       
         
       
+        
+      
     
     
     
@@ -840,6 +842,34 @@
     
   
     Local LLMs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/lmstudio-cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    lmstudio CLI
   
 
     
@@ -1056,6 +1086,8 @@
       
         
       
+        
+      
     
     
     
@@ -1146,6 +1178,34 @@
     
   
     CLI agent detection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../terminal/command-history/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command history
   
 
     
@@ -1304,6 +1364,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -1422,6 +1486,62 @@
     
   
     Settings → Providers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../settings/mcp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../settings/shell/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings -&gt; Shell
   
 
     
@@ -1706,7 +1826,7 @@
   <span class="md-ellipsis">
     
   
-    Cutting a release
+    Cutting a Loom release
   
 
     
@@ -1724,7 +1844,7 @@
   <span class="md-ellipsis">
     
   
-    Cutting a release
+    Cutting a Loom release
   
 
     
@@ -1761,10 +1881,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#the-flow" class="md-nav__link">
+  <a href="#flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        The flow
+        Flow
       
     </span>
   </a>
@@ -1772,10 +1892,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#post-release" class="md-nav__link">
+  <a href="#compatibility" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Post-release
+        Compatibility
       
     </span>
   </a>
@@ -1783,10 +1903,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#what-can-go-wrong" class="md-nav__link">
+  <a href="#post-release-checks" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What can go wrong
+        Post-release checks
       
     </span>
   </a>
@@ -1794,10 +1914,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#why-ad-hoc-signing" class="md-nav__link">
+  <a href="#common-failures" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Why ad-hoc signing?
+        Common failures
       
     </span>
   </a>
@@ -2162,10 +2282,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#the-flow" class="md-nav__link">
+  <a href="#flow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        The flow
+        Flow
       
     </span>
   </a>
@@ -2173,10 +2293,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#post-release" class="md-nav__link">
+  <a href="#compatibility" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Post-release
+        Compatibility
       
     </span>
   </a>
@@ -2184,10 +2304,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#what-can-go-wrong" class="md-nav__link">
+  <a href="#post-release-checks" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What can go wrong
+        Post-release checks
       
     </span>
   </a>
@@ -2195,10 +2315,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#why-ad-hoc-signing" class="md-nav__link">
+  <a href="#common-failures" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Why ad-hoc signing?
+        Common failures
       
     </span>
   </a>
@@ -2230,44 +2350,64 @@
   
 
 
-<h1 id="cutting-a-release">Cutting a release<a class="headerlink" href="#cutting-a-release" title="Permanent link">&para;</a></h1>
-<p>Loom's release script is <code>bin/release.sh</code>. It bumps nothing for you — bump <code>MARKETING_VERSION</code> in <code>project.yml</code> first, commit, then run the script.</p>
+<h1 id="cutting-a-loom-release">Cutting a Loom release<a class="headerlink" href="#cutting-a-loom-release" title="Permanent link">&para;</a></h1>
+<p>Stable Loom releases ship from <code>main</code> with <code>bin/release.sh</code>. Bump
+<code>MARKETING_VERSION</code> and <code>CURRENT_PROJECT_VERSION</code> in <code>project.yml</code>, update
+<code>docs/releasing/current-release-notes.md</code>, commit, push, then run the script.</p>
 <h2 id="prereqs">Prereqs<a class="headerlink" href="#prereqs" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>xcodegen</code> and <code>xcodebuild</code> (Xcode CLI tools).</li>
-<li><code>hdiutil</code> (built-in).</li>
-<li><code>gh</code> CLI authenticated (<code>gh auth login -h github.com</code>).</li>
+<li><code>xcodegen</code> and <code>xcodebuild</code> from full Xcode.</li>
+<li><code>hdiutil</code> (built in to macOS).</li>
+<li><code>gh</code> CLI authenticated for <code>BigBeardedMan/Loom</code>.</li>
+<li>OpenSSL 3 for signing the checksum sidecar.</li>
+<li>Production release signing keys in Keychain or <code>~/.loom/release-signing</code>.</li>
 <li>A clean working tree at the commit you want to tag.</li>
 </ul>
-<h2 id="the-flow">The flow<a class="headerlink" href="#the-flow" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># 1. Bump MARKETING_VERSION (and CURRENT_PROJECT_VERSION) in project.yml.</span>
+<h2 id="flow">Flow<a class="headerlink" href="#flow" title="Permanent link">&para;</a></h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># 1. Bump MARKETING_VERSION and CURRENT_PROJECT_VERSION in project.yml.</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># 2. Update docs/releasing/current-release-notes.md.</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="c1"># 3. Commit + push.</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>bin/release.sh<span class="w">                 </span><span class="c1"># run from the repo root</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="c1"># 3. Commit + push main.</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>bin/release.sh
 </span></code></pre></div>
 <p>What the script does:</p>
 <ol>
-<li><strong>Reads version</strong> — <code>MARKETING_VERSION</code> and <code>CURRENT_PROJECT_VERSION</code> from <code>project.yml</code>.</li>
-<li><strong>Pre-flight</strong> — verifies <code>gh</code> is authed (via <code>gh api user</code>, not <code>gh auth status</code> which trips on stale background accounts), the local tag doesn't already exist, and the GitHub release doesn't already exist.</li>
-<li><strong>Regenerates the Xcode project</strong> — <code>xcodegen generate</code>.</li>
-<li><strong>Builds Release</strong> — <code>xcodebuild -project Loom.xcodeproj -scheme Loom -configuration Release build</code>.</li>
-<li><strong>Locates the built <code>.app</code></strong> — searches <code>~/Library/Developer/Xcode/DerivedData/.../Build/Products/Release/Loom.app</code>.</li>
-<li><strong>Packages the DMG</strong> — copies <code>Loom.app</code> and an <code>/Applications</code> alias into a staging temp dir, runs <code>hdiutil create -format UDZO</code>, names the file <code>Loom-&lt;version&gt;.dmg</code>.</li>
-<li><strong>Tags and pushes</strong> — <code>git tag -a vX.Y.Z -m "Loom &lt;version&gt; (&lt;build&gt;)"</code>, <code>git push origin vX.Y.Z</code>.</li>
-<li><strong>Creates or updates the GitHub release</strong> — writes the notes from <code>docs/releasing/current-release-notes.md</code>, then attaches the DMG, checksum, and signature.</li>
+<li>Reads <code>MARKETING_VERSION</code> and <code>CURRENT_PROJECT_VERSION</code> from <code>project.yml</code>.</li>
+<li>Verifies <code>gh</code>, OpenSSL, signing keys, a clean tree, and a free <code>vX.Y.Z</code> tag.</li>
+<li>Regenerates <code>Loom.xcodeproj</code> with <code>xcodegen generate</code>.</li>
+<li>Builds <code>Loom.app</code> in Release configuration.</li>
+<li>Validates bundle name, bundle ID, executable, version, and embedded update public key.</li>
+<li>Packages <code>Loom-&lt;version&gt;.dmg</code>.</li>
+<li>Writes and signs <code>Loom-&lt;version&gt;.dmg.sha256</code>.</li>
+<li>Tags and pushes <code>v&lt;version&gt;</code>.</li>
+<li>Creates or updates the GitHub Release with the DMG, checksum, signature, and release notes.</li>
 </ol>
-<p>The release notes include <code>docs/releasing/current-release-notes.md</code> plus install and auto-update instructions. Keep that file focused on the update you are about to tag; it is the changelog section that appears on the GitHub release.</p>
-<h2 id="post-release">Post-release<a class="headerlink" href="#post-release" title="Permanent link">&para;</a></h2>
-<p>Every running Loom on every machine picks the new build up via the <a href="../../updates/auto-update/">auto-update</a> path within 60 seconds.</p>
-<h2 id="what-can-go-wrong">What can go wrong<a class="headerlink" href="#what-can-go-wrong" title="Permanent link">&para;</a></h2>
+<p>Windows assets are built by the <code>Windows Release</code> GitHub Actions workflow after
+the <code>v&lt;version&gt;</code> tag is pushed. That workflow appends the x64/arm64 NSIS
+installers, installer signatures, <code>latest-windows.json</code>, bridge recovery
+installers, and legacy installer aliases to the same GitHub Release.</p>
+<h2 id="compatibility">Compatibility<a class="headerlink" href="#compatibility" title="Permanent link">&para;</a></h2>
+<p>Loom 9 keeps the stable macOS updater on <code>/releases/latest</code> and the Windows
+updater on stable <code>v*</code> releases. Windows release assets include both
+versioned installers (<code>Loom_&lt;version&gt;_&lt;arch&gt;-setup.exe</code>) and legacy aliases
+(<code>Loom_&lt;arch&gt;-setup.exe</code>) so older installed builds can find the update. The
+bridge recovery installers are uploaded first so older helpers that select the
+first compatible asset can still hand off to the real versioned installer.</p>
+<h2 id="post-release-checks">Post-release checks<a class="headerlink" href="#post-release-checks" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong><code>error: tag vX.Y.Z already exists locally</code></strong> — you forgot to bump <code>MARKETING_VERSION</code>. Bump it, commit, retry.</li>
-<li><strong><code>error: built Release/Loom.app not found under DerivedData</code></strong> — <code>xcodebuild</code> failed silently. Re-run with <code>-quiet</code> removed from the script to see the actual compile errors.</li>
-<li><strong><code>gh release create</code> 422</strong> — the release already exists on GitHub. Bump version, retry.</li>
+<li><code>git ls-remote --heads origin main</code> points at the release commit.</li>
+<li><code>git ls-remote --tags origin v&lt;version&gt;</code> exists.</li>
+<li><code>gh release view v&lt;version&gt;</code> shows the DMG, checksum, signature, Windows
+  installers, installer signatures, bridge installers, and <code>latest-windows.json</code>.</li>
+<li>The DMG checksum verifies with <code>shasum -a 256 -c</code>.</li>
+<li>The Windows Release workflow completes successfully for x64 and arm64.</li>
 </ul>
-<h2 id="why-ad-hoc-signing">Why ad-hoc signing?<a class="headerlink" href="#why-ad-hoc-signing" title="Permanent link">&para;</a></h2>
-<p>Loom is a personal tool with no Apple Developer Program enrollment. Ad-hoc signing (<code>CODE_SIGN_IDENTITY: "-"</code>) is enough for local distribution; users do the right-click → Open dance once and macOS remembers.</p>
-<p>If you ever do enroll, change <code>DEVELOPMENT_TEAM</code> and <code>CODE_SIGN_IDENTITY</code> in <code>project.yml</code>. The DMG flow doesn't change.</p>
+<h2 id="common-failures">Common failures<a class="headerlink" href="#common-failures" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>tag vX.Y.Z already exists</code>: bump <code>MARKETING_VERSION</code>, commit, and retry.</li>
+<li><code>built app has wrong bundle identifier</code>: production metadata was overwritten by a testing-channel merge; fix <code>project.yml</code> and <code>Info.plist</code>.</li>
+<li><code>Release is missing a .sha256.sig signature</code>: the macOS update pill will refuse to stage the DMG until the signature asset exists.</li>
+<li>Windows CI created the release first: <code>bin/release.sh</code> appends the DMG assets to the existing release instead of creating a duplicate.</li>
+</ul>
 
 
 

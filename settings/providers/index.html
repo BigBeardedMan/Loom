@@ -16,7 +16,7 @@
         <link rel="prev" href="../tasks/">
       
       
-        <link rel="next" href="../advanced/">
+        <link rel="next" href="../mcp/">
       
       
         
@@ -694,6 +694,8 @@
       
         
       
+        
+      
     
     
     
@@ -840,6 +842,34 @@
     
   
     Local LLMs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/lmstudio-cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    lmstudio CLI
   
 
     
@@ -1056,6 +1086,8 @@
       
         
       
+        
+      
     
     
     
@@ -1146,6 +1178,34 @@
     
   
     CLI agent detection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../terminal/command-history/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Command history
   
 
     
@@ -1297,6 +1357,10 @@
   
     
     
+      
+        
+      
+        
       
         
       
@@ -1572,6 +1636,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../mcp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../shell/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Settings -&gt; Shell
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../advanced/" class="md-nav__link">
         
   
@@ -1827,7 +1947,7 @@
   <span class="md-ellipsis">
     
   
-    Cutting a release
+    Cutting a Loom release
   
 
     
@@ -2295,6 +2415,11 @@
 <li><strong>Trash icon</strong> — removes the endpoint and clears its Keychain auth token (if any).</li>
 </ul>
 <p>Empty state shows a hint pointing at Add.</p>
+<p>If LM Studio's default server is already running on <code>localhost:1234</code> and no
+LM Studio endpoint exists yet, Loom shows an <strong>LM Studio server detected</strong>
+callout. Click <strong>Add LM Studio</strong> to save the standard local endpoint in one
+step. Windows also keeps an <strong>Add LM Studio</strong> shortcut in the endpoint toolbar
+so the standard <code>http://localhost:1234/v1</code> endpoint is one click away.</p>
 <h2 id="adding-an-endpoint">Adding an endpoint<a class="headerlink" href="#adding-an-endpoint" title="Permanent link">&para;</a></h2>
 <p>Click <strong>Add</strong> to open the editor:</p>
 <table>
@@ -2311,15 +2436,15 @@
 </tr>
 <tr>
 <td><strong>Kind</strong></td>
-<td>Ollama or OpenAI-compatible. Switching kinds swaps the default base URL hint.</td>
+<td>Ollama, LM Studio, or OpenAI-compatible. Switching kinds swaps the default base URL hint.</td>
 </tr>
 <tr>
 <td><strong>Base URL</strong></td>
-<td>Full URL. Trailing slash is stripped. Ollama defaults to <code>http://localhost:11434</code>; OpenAI-compatible defaults to <code>http://localhost:1234/v1</code>.</td>
+<td>Full URL. Trailing slash is stripped. Ollama defaults to <code>http://localhost:11434</code>; LM Studio and OpenAI-compatible default to <code>http://localhost:1234/v1</code>.</td>
 </tr>
 <tr>
 <td><strong>Default model / Model</strong></td>
-<td>For Ollama, optional fallback if <code>/api/tags</code> fails. For OpenAI-compatible, required (the model id sent in the request body).</td>
+<td>For Ollama and LM Studio, optional fallback if discovery fails. For OpenAI-compatible, required (the model id sent in the request body).</td>
 </tr>
 <tr>
 <td><strong>Requires auth token</strong></td>
@@ -2331,8 +2456,13 @@
 <p>Click <strong>Test connection</strong> before saving:</p>
 <ul>
 <li><strong>Ollama:</strong> hits <code>GET &lt;baseURL&gt;/api/tags</code>. Reports the number of models (or "No models / unreachable").</li>
+<li><strong>LM Studio:</strong> hits <code>/api/v0/models</code> first, then falls back to <code>GET &lt;baseURL&gt;/models</code>. Reports installed and loaded model counts.</li>
 <li><strong>OpenAI-compatible:</strong> hits <code>GET &lt;baseURL&gt;/models</code>. Reports HTTP 200 (or the failure reason).</li>
 </ul>
+<p>For LM Studio, the model menu lists loaded models first and includes available
+context length, quantization, and architecture details from <code>/api/v0/models</code>.
+On Windows, the Agent pane can also start the <code>lms</code> server and load the selected
+model from the LM Studio runtime strip.</p>
 <p>Test does <strong>not</strong> save the endpoint. You still have to click Save.</p>
 <h2 id="editing">Editing<a class="headerlink" href="#editing" title="Permanent link">&para;</a></h2>
 <p>Selecting <strong>Edit</strong> on an existing row pre-fills the form, including the auth token (read from Keychain). Save overwrites the existing endpoint.</p>
@@ -2346,7 +2476,7 @@
 <h2 id="storage">Storage<a class="headerlink" href="#storage" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Endpoint metadata: <code>UserDefaults</code> under key <code>loom.localEndpoints</code>, JSON-encoded <code>[LocalEndpoint]</code>.</li>
-<li>Auth tokens: macOS Keychain, service <code>com.chasesims.Loom</code>, account <code>local_endpoint_&lt;UUID&gt;</code>.</li>
+<li>Auth tokens: macOS Keychain or Windows Credential Manager, scoped to the endpoint UUID.</li>
 </ul>
 <p>See <a href="../../reference/keychain-keys/">Keychain keys</a>.</p>
 <h2 id="auto-refresh-on-save">Auto-refresh on save<a class="headerlink" href="#auto-refresh-on-save" title="Permanent link">&para;</a></h2>
