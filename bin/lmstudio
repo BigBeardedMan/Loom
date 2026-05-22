@@ -59,7 +59,7 @@ except ImportError:
 
 DEFAULT_BASE_URL = "http://localhost:1234/v1"
 DEFAULT_MAX_TURNS = 60
-CLI_VERSION = "8.2.86"
+CLI_VERSION = "8.2.87"
 TASK_ROOT = Path.home() / ".loom" / "tasks"
 SESSION_ROOT = Path.home() / ".loom" / "sessions"
 HISTORY_FILE = Path.home() / ".config" / "loom" / "lmstudio-history"
@@ -5325,7 +5325,8 @@ def apply_settings_to_state(state, settings):
         state.allow_bash = True
         state.permissions.allowed_forever.add("run_bash")
     for key in ("auto_test", "auto_compact", "auto_screenshot",
-                "auto_commit", "aggressive_batching", "self_reflect"):
+                "auto_commit", "aggressive_batching", "self_reflect",
+                "concise_progress"):
         if key in settings:
             setattr(state, key, bool(settings[key]))
     if "max_continuations" in settings:
@@ -8383,6 +8384,11 @@ class AgentState:
         self.max_turns = DEFAULT_MAX_TURNS
         self.last_turn_had_tool_calls = False
         self.auto_continue = True
+        # Codex-style progress: hide local-model scratch narration during
+        # tool loops, while still showing concise tool activity and the
+        # final assistant answer. Use /progress verbose or
+        # --verbose-progress for the old raw stream.
+        self.concise_progress = True
         # 8.0.3 — zero-progress guard. Set True by _dispatch_tool when any
         # non-update_tasks tool succeeds OR when update_tasks completes a
         # task (status flips to "completed"). Reset to False at the top of
@@ -8740,8 +8746,11 @@ def run_turn(state, user_message, *, json_emit=None):
 
     max_turns = max(1, int(getattr(state, "max_turns", DEFAULT_MAX_TURNS)))
     for turn_index in range(1, max_turns + 1):
+        concise_progress = (
+            bool(getattr(state, "concise_progress", False)) and not json_emit
+        )
         streamer = ThinkStreamer(
-            quiet=bool(json_emit),
+            quiet=bool(json_emit) or concise_progress,
             emit_event=(lambda kind, text: json_emit(kind, text=text)) if json_emit else None,
             wrap=state.wrap,
         )
@@ -8793,7 +8802,8 @@ def run_turn(state, user_message, *, json_emit=None):
                         if spinner and not first_chunk_seen:
                             spinner.stop()
                             spinner = None
-                            sys.stdout.write("  ")
+                            if not concise_progress:
+                                sys.stdout.write("  ")
                         first_chunk_seen = True
                         had_content = True
                         streamer.feed(data)
@@ -8833,7 +8843,8 @@ def run_turn(state, user_message, *, json_emit=None):
 
         assistant_text = streamer.finish()
         state.absorb_text(assistant_text)
-        if had_content and not assistant_text.endswith("\n") and not json_emit:
+        if (had_content and not assistant_text.endswith("\n")
+                and not json_emit and not concise_progress):
             print()
         if error_message:
             # Auto-recover from "n_keep > n_ctx" by retrying once with the
@@ -8879,7 +8890,7 @@ def run_turn(state, user_message, *, json_emit=None):
                     json_emit("tool_calls_extracted",
                               count=len(extracted),
                               family=state.adapter.family)
-                else:
+                elif not concise_progress:
                     print(style(
                         f"  ▸ extracted {len(extracted)} tool call(s) "
                         f"from assistant text ({state.adapter.family} "
@@ -8906,6 +8917,9 @@ def run_turn(state, user_message, *, json_emit=None):
             # Don't auto-mark-complete here - the continuation policy may
             # want to push the model to actually do the work.
             state.last_turn_had_tool_calls = False
+            if concise_progress:
+                _render_concise_assistant_answer(
+                    assistant_text, wrap=state.wrap)
             if not json_emit:
                 draw_task_list(state.sink.current)
             if json_emit:
@@ -8913,7 +8927,7 @@ def run_turn(state, user_message, *, json_emit=None):
             return assistant_text
         state.last_turn_had_tool_calls = True
 
-        if not json_emit:
+        if not json_emit and not concise_progress:
             print()
         # Partition tool calls into safe (parallel) vs dangerous (serial).
         # Safe set is whitelist-only; everything else stays serial so
@@ -8931,7 +8945,10 @@ def run_turn(state, user_message, *, json_emit=None):
         # what's about to run even though execution interleaves.
         if not json_emit:
             for _, name, args in parsed_calls:
-                _render_tool_call_line(name, args)
+                if concise_progress:
+                    _render_tool_progress_line(name, args)
+                else:
+                    _render_tool_call_line(name, args)
 
         if json_emit:
             for _, name, args in parsed_calls:
@@ -9068,7 +9085,7 @@ def run_turn(state, user_message, *, json_emit=None):
                                 f"{len(batch)} step(s) ahead.\n" + summary),
                 })
 
-        if not json_emit:
+        if not json_emit and not concise_progress:
             print()
 
     if json_emit:
@@ -9226,6 +9243,105 @@ def _render_tool_call_line(name, args):
         preview = preview[: width - 15] + "…"
     head = style(GLYPH_TOOL, "tool") + " " + style(name, "key")
     print(f"  {head} {style(preview, 'dim')}")
+
+
+def _progress_arg(args, *names, default=""):
+    if not isinstance(args, dict):
+        return default
+    for name in names:
+        value = args.get(name)
+        if value not in (None, ""):
+            return str(value)
+    return default
+
+
+def _quote_progress_value(value):
+    value = str(value).strip()
+    if not value:
+        return ""
+    return '"' + value.replace('"', '\\"') + '"'
+
+
+def _tool_progress_summary(name, args):
+    path = _progress_arg(args, "path", "file", "target", default=".")
+    command = _progress_arg(args, "command", "cmd", default="")
+    pattern = _progress_arg(args, "pattern", "query", "needle", default="")
+
+    if name == "list_dir":
+        return f"checking {path}"
+    if name == "grep":
+        target = path if path else "."
+        if pattern:
+            return f"searching {target} for {_quote_progress_value(pattern)}"
+        return f"searching {target}"
+    if name == "glob":
+        glob_pattern = _progress_arg(args, "pattern", "glob", default="")
+        if glob_pattern:
+            return f"finding {_quote_progress_value(glob_pattern)}"
+        return f"finding files in {path}"
+    if name == "read_file":
+        return f"reading {path}"
+    if name == "write_file":
+        return f"writing {path}"
+    if name in ("edit_file", "multi_edit"):
+        return f"editing {path}"
+    if name == "update_tasks":
+        return "updating tasks"
+    if name == "run_bash":
+        return f"running {command or 'shell command'}"
+    if name == "git_status":
+        return "checking git status"
+    if name == "git_diff":
+        return "checking git diff"
+    if name == "find_todos":
+        return f"scanning todos in {path}"
+    if name == "spawn_agent":
+        return "delegating work"
+    if name == "ask_user":
+        return "asking for input"
+    if name.startswith("browser_"):
+        return name.replace("_", " ")
+    if name.startswith("web_"):
+        return name.replace("_", " ")
+    preview = json.dumps(args if isinstance(args, dict) else {},
+                         separators=(", ", ": "))
+    if preview == "{}":
+        return name
+    return f"{name} {preview}"
+
+
+def _render_tool_progress_line(name, args):
+    summary = _tool_progress_summary(name, args)
+    width = box_width()
+    if len(summary) > width - 8:
+        summary = summary[: width - 9] + "…"
+    head = style(GLYPH_TOOL, "tool")
+    print(f"  {head} {style(summary, 'dim')}")
+
+
+def _assistant_display_text(text):
+    if not text:
+        return ""
+    without_think = re.sub(r"(?is)<think>.*?(?:</think>|$)", "", text)
+    without_think = re.sub(r"(?is)</?think>", "", without_think)
+    tool_filter = ToolBlockDisplayFilter()
+    return tool_filter.feed(without_think) + tool_filter.finish()
+
+
+def _render_concise_assistant_answer(text, *, wrap=True):
+    visible = _assistant_display_text(text).strip()
+    if not visible:
+        return
+    wrapper = StreamingWrapper(
+        get_width=lambda: max(40, term_width() - 2),
+        enabled=wrap,
+    )
+    rendered = wrapper.feed(visible) + wrapper.finish()
+    rendered = rendered.rstrip()
+    if not rendered:
+        return
+    for line in rendered.splitlines():
+        print(f"  {line}")
 
 
 def _dispatch_tool(state, name, args, *, narration=""):
@@ -9560,6 +9676,7 @@ SLASH_COMMAND_HELP = {
     "/yolo": "Toggle permission prompts off/on for dangerous tools.",
     "/theme": "Switch terminal theme.",
     "/wrap": "Toggle word-boundary wrapping.",
+    "/progress": "Switch concise/verbose agent progress output.",
     "/auto": "Toggle or set continuation budget.",
     "/compact": "Toggle auto-compaction or force /compact now.",
     "/undo": "Undo the last/all filesystem mutation journal entries.",
@@ -9603,7 +9720,7 @@ SLASH_COMMAND_HELP = {
 SLASH_COMMAND_GROUPS = [
     ("LM Studio", ["/doctor", "/server", "/status", "/model", "/models", "/model-info", "/load", "/unload", "/autoscale", "/install"]),
     ("Session", ["/commands", "/help", "/clear", "/save", "/resume", "/sessions", "/cwd", "/cost", "/theme", "/wrap", "/compact", "/quit"]),
-    ("Agent Control", ["/mode", "/bash", "/yolo", "/tools", "/auto", "/router", "/prefetch", "/batch", "/test", "/screenshot", "/autocommit"]),
+    ("Agent Control", ["/mode", "/bash", "/yolo", "/tools", "/progress", "/auto", "/router", "/prefetch", "/batch", "/test", "/screenshot", "/autocommit"]),
     ("Workspace", ["/tasks", "/journal", "/diff", "/undo", "/preview", "/branch", "/branches", "/checkout", "/merge", "/watch", "/lsp"]),
     ("Extensions", ["/persona", "/skill", "/memory", "/plugins", "/constitution", "/hooks", "/settings", "/blocklist"]),
     ("Shell and Utilities", ["/sh", "/bg", "/mon", "/kill", "/nb", "/web", "/ship", "/wake", "/reflect"]),
@@ -9762,6 +9879,7 @@ class SlashRouter:
             "/yolo":    self.cmd_yolo,
             "/theme":   self.cmd_theme,
             "/wrap":    self.cmd_wrap,
+            "/progress": self.cmd_progress,
             "/auto":    self.cmd_auto,
             "/compact": self.cmd_compact,
             "/undo":    self.cmd_undo,
@@ -10026,6 +10144,7 @@ class SlashRouter:
         print(f"   run_bash:       {'enabled' if self.state.allow_bash else 'disabled'}")
         print(f"   permissions:    {'yolo' if self.state.permissions.yolo else 'prompted'}")
         print(f"   tools:          {'essentials' if self.state.essential_tools_only else 'full'}")
+        print(f"   progress:       {'concise' if self.state.concise_progress else 'verbose'}")
         print(f"   grammar:        {'on' if self.state.grammar_supported else 'off'}")
         print(f"   context:        {self.state.approx_tokens:,}/{self.state.context_window or '?'} tokens")
         print(f"   routing:        planner={self.state.planner_model or '-'} coder={self.state.coder_model or '-'} explainer={self.state.explainer_model or '-'}")
@@ -10431,6 +10550,27 @@ class SlashRouter:
         else:
             self.state.wrap = not self.state.wrap
         print(style(f"  word wrap {'on' if self.state.wrap else 'off'}", "ok"))
+        return "continue"
+
+    def cmd_progress(self, rest):
+        opt = (rest or "").strip().lower()
+        if opt in ("concise", "summary", "summarized", "quiet", "on"):
+            self.state.concise_progress = True
+        elif opt in ("verbose", "raw", "full", "off"):
+            self.state.concise_progress = False
+        elif opt:
+            print(style(
+                "  usage: /progress concise | /progress verbose", "dim"))
+            return "continue"
+        else:
+            mode = "concise" if self.state.concise_progress else "verbose"
+            print(style(f"  progress: {mode}", "key"))
+            print(style(
+                "  concise hides model narration during tool loops; "
+                "verbose shows the raw stream.", "dim"))
+            return "continue"
+        mode = "concise" if self.state.concise_progress else "verbose"
+        print(style(f"  progress -> {mode}", "ok"))
         return "continue"
 
     def cmd_auto(self, rest):
@@ -11138,6 +11278,10 @@ def main():
     parser.add_argument("--no-wrap", action="store_true",
         help="Disable word-boundary wrapping of model output; let the "
              "terminal hard-wrap at the right edge instead.")
+    parser.add_argument("--verbose-progress", action="store_true",
+        default=os.environ.get("LMSTUDIO_VERBOSE_PROGRESS", "0") == "1",
+        help="Show full assistant narration and parser diagnostics during "
+             "tool loops. Default output is concise, Codex-style progress.")
     parser.add_argument("--json", action="store_true",
         help="Emit one JSON event per line instead of styled output. "
              "Implies --no-banner.")
@@ -11610,6 +11754,8 @@ def main():
         state.settings = load_workspace_settings(workspace)
         if state.settings:
             apply_settings_to_state(state, state.settings)
+    if args.verbose_progress:
+        state.concise_progress = False
     # 8.0.0 — hooks discovery.
     if not args.no_hooks:
         state.hooks = discover_hooks(workspace)
