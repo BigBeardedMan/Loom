@@ -26,6 +26,7 @@ Loom's Tasks pane picks them up.
 import argparse
 import difflib
 import fcntl
+import html
 import json
 import os
 import re
@@ -58,7 +59,7 @@ except ImportError:
 
 DEFAULT_BASE_URL = "http://localhost:1234/v1"
 DEFAULT_MAX_TURNS = 30
-CLI_VERSION = "8.2.84"
+CLI_VERSION = "8.2.85"
 TASK_ROOT = Path.home() / ".loom" / "tasks"
 SESSION_ROOT = Path.home() / ".loom" / "sessions"
 HISTORY_FILE = Path.home() / ".config" / "loom" / "lmstudio-history"
@@ -6932,6 +6933,16 @@ class ModelAdapter:
                 text, re.DOTALL | re.IGNORECASE):
             push(_try_parse_tool_call_json(m.group(1), schema_names))
 
+        # Pattern 1b: XML-ish tool calls emitted by some LM Studio chat
+        # templates:
+        # <tool_call><function=list_dir><parameter=path>Documents</parameter>
+        # </function></tool_call>
+        for m in re.finditer(
+                r"<(?:tool_call|function_call|tool)>\s*(.*?)\s*"
+                r"</(?:tool_call|function_call|tool)>",
+                text, re.DOTALL | re.IGNORECASE):
+            push(_try_parse_tool_call_xml(m.group(1), schema_names))
+
         # Pattern 2: fenced JSON / tool_call blocks (Gemma's preferred
         # format under TEXT_TOOL_INSTRUCTIONS, plus generic ```json```).
         for m in re.finditer(
@@ -7015,6 +7026,57 @@ def _try_parse_tool_call_json(body, schema_names):
         "name": name,
         "arguments": json.dumps(args),
     }
+
+
+def _try_parse_tool_call_xml(body, schema_names):
+    """Parse XML-ish tool calls some chat templates produce despite the
+    fenced JSON instruction. Returns the canonical tool-call shape or None."""
+    if not body:
+        return None
+    fn_match = re.search(
+        r"<function\s*=\s*[\"']?([A-Za-z_][\w]*)[\"']?\s*>\s*(.*?)\s*</function>",
+        body, re.DOTALL | re.IGNORECASE)
+    if not fn_match:
+        fn_match = re.search(
+            r"<function\s+name=[\"']?([A-Za-z_][\w]*)[\"']?\s*>\s*(.*?)\s*</function>",
+            body, re.DOTALL | re.IGNORECASE)
+    if not fn_match:
+        return None
+    name = fn_match.group(1)
+    if name not in schema_names:
+        return None
+    fn_body = fn_match.group(2)
+    args = {}
+    patterns = (
+        r"<(?:parameter|param)\s*=\s*[\"']?([A-Za-z_][\w]*)[\"']?\s*>\s*(.*?)\s*</(?:parameter|param)>",
+        r"<(?:parameter|param)\s+name=[\"']?([A-Za-z_][\w]*)[\"']?\s*>\s*(.*?)\s*</(?:parameter|param)>",
+    )
+    for pat in patterns:
+        for param in re.finditer(pat, fn_body, re.DOTALL | re.IGNORECASE):
+            key = param.group(1)
+            value = html.unescape(param.group(2).strip())
+            args[key] = _coerce_xml_tool_arg(value)
+    return {
+        "id": f"text_call_{uuid.uuid4().hex[:10]}",
+        "name": name,
+        "arguments": json.dumps(args),
+    }
+
+
+def _coerce_xml_tool_arg(value):
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if not stripped:
+        return ""
+    if (stripped.startswith(("{", "[", "\""))
+            or stripped in ("true", "false", "null")
+            or re.fullmatch(r"-?\d+(?:\.\d+)?", stripped)):
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            pass
+    return stripped
 
 
 # =============================================================================
