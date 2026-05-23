@@ -19,7 +19,7 @@
 - macOS and Windows Testing now include LM Studio run profile controls for planner, coder, and reviewer models, with coder-model routing used for local agent runs when routing is enabled.
 - macOS Testing now adds LM Studio readiness and model-library cards to the Agent Workbench, including native v1 load/unload/download support and fallback `lms` loading when native management is unavailable.
 - Windows Testing now adds the matching LM Studio readiness, model-library, and run-profile surface in the Agent pane, backed by new Tauri commands for native v1 load, unload, download, and download-status calls.
-- macOS Testing version metadata is now 8.2.89 for the mac-only usage dashboard release.
+- macOS Testing version metadata now matches production main at 9.0.2 (92).
 - Windows Testing now treats LM Studio as a first-class Agent Pane provider with saved LM Studio endpoints, native `/api/v0/models` discovery, loaded-model prioritization, server status, runtime prepare, auto-scale controls, and terminal launch shortcuts.
 - Windows Testing now restores the missing visible Settings button in the title bar, matching the macOS always-available settings entry point.
 - Windows Testing now moves the Settings close button to the top-right corner of the Settings panel for update-pill verification.
