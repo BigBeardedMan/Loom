@@ -8,12 +8,22 @@ struct LMStudioProvider: LLMProvider {
     let baseURL: URL
     let model: String
     let apiKey: String?
+    let previousResponseID: String?
+    let nativeContextLength: Int?
     var displayName: String { "LM Studio · \(model)" }
 
-    init(baseURL: URL, model: String, apiKey: String? = nil) {
+    init(
+        baseURL: URL,
+        model: String,
+        apiKey: String? = nil,
+        previousResponseID: String? = nil,
+        nativeContextLength: Int? = nil
+    ) {
         self.baseURL = baseURL
         self.model = model
         self.apiKey = apiKey
+        self.previousResponseID = previousResponseID
+        self.nativeContextLength = nativeContextLength
     }
 
     func stream(
@@ -290,6 +300,10 @@ struct LMStudioProvider: LLMProvider {
     struct CapabilitySnapshot: Hashable, Sendable {
         let apiMode: String
         let supportsV1: Bool
+        let supportsNativeChat: Bool
+        let supportsStreamingEvents: Bool
+        let supportsStatefulChat: Bool
+        let supportsNativeMCP: Bool
         let supportsModelManagement: Bool
         let supportsDownloads: Bool
         let supportsAuthToken: Bool
@@ -320,6 +334,10 @@ struct LMStudioProvider: LLMProvider {
                 return CapabilitySnapshot(
                     apiMode: "v1",
                     supportsV1: true,
+                    supportsNativeChat: true,
+                    supportsStreamingEvents: true,
+                    supportsStatefulChat: true,
+                    supportsNativeMCP: true,
                     supportsModelManagement: true,
                     supportsDownloads: true,
                     supportsAuthToken: apiKey?.isEmpty == false,
@@ -336,6 +354,10 @@ struct LMStudioProvider: LLMProvider {
                 return CapabilitySnapshot(
                     apiMode: "v0",
                     supportsV1: false,
+                    supportsNativeChat: false,
+                    supportsStreamingEvents: false,
+                    supportsStatefulChat: false,
+                    supportsNativeMCP: false,
                     supportsModelManagement: false,
                     supportsDownloads: false,
                     supportsAuthToken: apiKey?.isEmpty == false,
@@ -345,6 +367,10 @@ struct LMStudioProvider: LLMProvider {
             return CapabilitySnapshot(
                 apiMode: "openai",
                 supportsV1: false,
+                supportsNativeChat: false,
+                supportsStreamingEvents: false,
+                supportsStatefulChat: false,
+                supportsNativeMCP: false,
                 supportsModelManagement: false,
                 supportsDownloads: false,
                 supportsAuthToken: apiKey?.isEmpty == false,
@@ -354,6 +380,10 @@ struct LMStudioProvider: LLMProvider {
         return CapabilitySnapshot(
             apiMode: "openai",
             supportsV1: false,
+            supportsNativeChat: false,
+            supportsStreamingEvents: false,
+            supportsStatefulChat: false,
+            supportsNativeMCP: false,
             supportsModelManagement: false,
             supportsDownloads: false,
             supportsAuthToken: apiKey?.isEmpty == false,
@@ -580,6 +610,220 @@ struct LMStudioProvider: LLMProvider {
         return request
     }
 
+    private static var nativeV1ChatEnabled: Bool {
+        if UserDefaults.standard.object(forKey: "loom.lmstudio.nativeMode") == nil {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: "loom.lmstudio.nativeMode")
+    }
+
+    private static var nativeStatefulChatsEnabled: Bool {
+        if UserDefaults.standard.object(forKey: "loom.lmstudio.statefulSessions") == nil {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: "loom.lmstudio.statefulSessions")
+    }
+
+    private func nativeChatFallbackReason(messages: [LLMMessage], tools: [LLMTool]) -> String? {
+        if !Self.nativeV1ChatEnabled {
+            return "Native v1 chat disabled in LM Studio settings."
+        }
+        if !tools.isEmpty {
+            return "Native v1 chat does not accept Loom's custom tool schemas yet; using OpenAI-compatible tool calling."
+        }
+        if previousResponseID?.hasPrefix("resp_") == true {
+            return nil
+        }
+        if messages.count > 1 {
+            return "Native v1 chat cannot replay assistant history without a response id; using OpenAI-compatible history."
+        }
+        return nil
+    }
+
+    private func latestUserInput(from messages: [LLMMessage]) -> String {
+        messages.last(where: { $0.role == .user })?.content
+            ?? messages.last?.content
+            ?? ""
+    }
+
+    private func runNativeV1Stream(
+        messages: [LLMMessage],
+        system: String?,
+        continuation: AsyncThrowingStream<LLMEvent, Error>.Continuation
+    ) async throws {
+        var request = Self.authorizedRequest(url: Self.nativeAPIRoot(from: baseURL, version: "v1").appendingPathComponent("chat"), apiKey: apiKey)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 600
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue("text/event-stream", forHTTPHeaderField: "accept")
+
+        let payload = NativeChatRequest(
+            model: model,
+            input: latestUserInput(from: messages),
+            system_prompt: system?.isEmpty == false ? system : nil,
+            stream: true,
+            temperature: 0,
+            context_length: nativeContextLength.map { max(4_096, $0) },
+            store: Self.nativeStatefulChatsEnabled,
+            previous_response_id: Self.nativeStatefulChatsEnabled && previousResponseID?.hasPrefix("resp_") == true ? previousResponseID : nil
+        )
+        request.httpBody = try JSONEncoder().encode(payload)
+
+        continuation.yield(.providerNotice("LM Studio native v1 chat active."))
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        try await ensureLLMSuccess(response: response, bytes: bytes)
+
+        var eventName: String?
+        var dataLines: [String] = []
+
+        func flushEvent() throws {
+            guard !dataLines.isEmpty else {
+                eventName = nil
+                return
+            }
+            let payload = dataLines.joined(separator: "\n")
+            try handleNativeEvent(name: eventName, payload: payload, continuation: continuation)
+            eventName = nil
+            dataLines.removeAll(keepingCapacity: true)
+        }
+
+        for try await line in bytes.lines {
+            try Task.checkCancellation()
+            if line.isEmpty {
+                try flushEvent()
+                continue
+            }
+            if line.hasPrefix("event:") {
+                eventName = line.dropFirst("event:".count).trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("data:") {
+                dataLines.append(line.dropFirst("data:".count).trimmingCharacters(in: .whitespaces))
+            }
+        }
+        try flushEvent()
+    }
+
+    private func handleNativeEvent(
+        name: String?,
+        payload: String,
+        continuation: AsyncThrowingStream<LLMEvent, Error>.Continuation
+    ) throws {
+        guard let data = payload.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return
+        }
+        let type = (object["type"] as? String) ?? name ?? ""
+        switch type {
+        case "chat.start":
+            let detail = object["model_instance_id"] as? String
+            continuation.yield(.providerProgress(LLMProviderProgress(
+                phase: "native-chat",
+                label: "Native chat started",
+                detail: detail,
+                progress: nil
+            )))
+        case "model_load.start":
+            continuation.yield(.providerProgress(LLMProviderProgress(
+                phase: "model-load",
+                label: "Loading model",
+                detail: object["model_instance_id"] as? String,
+                progress: 0
+            )))
+        case "model_load.progress":
+            continuation.yield(.providerProgress(LLMProviderProgress(
+                phase: "model-load",
+                label: "Loading model",
+                detail: object["model_instance_id"] as? String,
+                progress: object["progress"] as? Double
+            )))
+        case "model_load.end":
+            let seconds = object["load_time_seconds"] as? Double
+            continuation.yield(.providerProgress(LLMProviderProgress(
+                phase: "model-load",
+                label: "Model loaded",
+                detail: seconds.map { String(format: "%.1fs", $0) },
+                progress: 1
+            )))
+        case "prompt_processing.start":
+            continuation.yield(.providerProgress(LLMProviderProgress(
+                phase: "prompt-processing",
+                label: "Processing prompt",
+                detail: nil,
+                progress: 0
+            )))
+        case "prompt_processing.progress":
+            continuation.yield(.providerProgress(LLMProviderProgress(
+                phase: "prompt-processing",
+                label: "Processing prompt",
+                detail: nil,
+                progress: object["progress"] as? Double
+            )))
+        case "prompt_processing.end":
+            continuation.yield(.providerProgress(LLMProviderProgress(
+                phase: "prompt-processing",
+                label: "Prompt processed",
+                detail: nil,
+                progress: 1
+            )))
+        case "reasoning.start":
+            continuation.yield(.providerProgress(LLMProviderProgress(
+                phase: "reasoning",
+                label: "Reasoning",
+                detail: nil,
+                progress: nil
+            )))
+        case "reasoning.delta":
+            if let content = object["content"] as? String, !content.isEmpty {
+                continuation.yield(.reasoningDelta(content))
+            }
+        case "message.delta":
+            if let content = object["content"] as? String, !content.isEmpty {
+                continuation.yield(.textDelta(content))
+            }
+        case "tool_call.start", "tool_call.arguments", "tool_call.success":
+            let toolName = object["tool"] as? String ?? "tool"
+            continuation.yield(.providerProgress(LLMProviderProgress(
+                phase: "native-tool",
+                label: toolName,
+                detail: type.replacingOccurrences(of: "tool_call.", with: ""),
+                progress: nil
+            )))
+        case "tool_call.failure":
+            let reason = object["reason"] as? String ?? "Native tool call failed."
+            continuation.yield(.providerNotice(reason))
+        case "error":
+            if let error = object["error"] as? [String: Any],
+               let message = error["message"] as? String {
+                continuation.yield(.providerNotice("LM Studio native event error: \(message)"))
+            }
+        case "chat.end":
+            if let result = object["result"] as? [String: Any] {
+                if let stats = result["stats"] as? [String: Any] {
+                    continuation.yield(.usage(LLMProviderUsageStats(
+                        inputTokens: stats["input_tokens"] as? Int,
+                        outputTokens: stats["total_output_tokens"] as? Int,
+                        reasoningTokens: stats["reasoning_output_tokens"] as? Int,
+                        tokensPerSecond: stats["tokens_per_second"] as? Double,
+                        timeToFirstTokenSeconds: stats["time_to_first_token_seconds"] as? Double,
+                        modelLoadTimeSeconds: stats["model_load_time_seconds"] as? Double,
+                        responseID: result["response_id"] as? String
+                    )))
+                } else if let responseID = result["response_id"] as? String {
+                    continuation.yield(.usage(LLMProviderUsageStats(
+                        inputTokens: nil,
+                        outputTokens: nil,
+                        reasoningTokens: nil,
+                        tokensPerSecond: nil,
+                        timeToFirstTokenSeconds: nil,
+                        modelLoadTimeSeconds: nil,
+                        responseID: responseID
+                    )))
+                }
+            }
+        default:
+            break
+        }
+    }
+
     // MARK: - Streaming
 
     private func runStream(
@@ -588,6 +832,19 @@ struct LMStudioProvider: LLMProvider {
         tools: [LLMTool],
         continuation: AsyncThrowingStream<LLMEvent, Error>.Continuation
     ) async throws {
+        if let reason = nativeChatFallbackReason(messages: messages, tools: tools) {
+            if Self.nativeV1ChatEnabled {
+                continuation.yield(.providerNotice(reason))
+            }
+        } else {
+            do {
+                try await runNativeV1Stream(messages: messages, system: system, continuation: continuation)
+                return
+            } catch {
+                continuation.yield(.providerNotice("LM Studio native v1 chat failed; falling back to OpenAI-compatible chat."))
+            }
+        }
+
         var request = Self.authorizedRequest(url: baseURL.appendingPathComponent("chat/completions"), apiKey: apiKey)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -700,6 +957,17 @@ struct LMStudioProvider: LLMProvider {
             self.max_tokens = max_tokens
             self.temperature = temperature
         }
+    }
+
+    private struct NativeChatRequest: Encodable {
+        let model: String
+        let input: String
+        let system_prompt: String?
+        let stream: Bool
+        let temperature: Double?
+        let context_length: Int?
+        let store: Bool
+        let previous_response_id: String?
     }
 
     private struct Msg: Encodable {

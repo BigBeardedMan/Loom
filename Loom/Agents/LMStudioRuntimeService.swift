@@ -88,6 +88,10 @@ final class LMStudioRuntimeService {
     private(set) var preparedModelID: String?
     private(set) var apiMode: String = "unknown"
     private(set) var supportsV1: Bool = false
+    private(set) var supportsNativeChat: Bool = false
+    private(set) var supportsStreamingEvents: Bool = false
+    private(set) var supportsStatefulChat: Bool = false
+    private(set) var supportsNativeMCP: Bool = false
     private(set) var supportsModelManagement: Bool = false
     private(set) var supportsDownloads: Bool = false
     private(set) var supportsAuthToken: Bool = false
@@ -113,6 +117,10 @@ final class LMStudioRuntimeService {
             models = []
             apiMode = "unknown"
             supportsV1 = false
+            supportsNativeChat = false
+            supportsStreamingEvents = false
+            supportsStatefulChat = false
+            supportsNativeMCP = false
             supportsModelManagement = false
             supportsDownloads = false
             lastCapabilityError = nil
@@ -133,6 +141,10 @@ final class LMStudioRuntimeService {
             let capabilities = await LMStudioProvider.fetchCapabilities(baseURL: baseURL, apiKey: apiKey)
             apiMode = capabilities.apiMode
             supportsV1 = capabilities.supportsV1
+            supportsNativeChat = capabilities.supportsNativeChat
+            supportsStreamingEvents = capabilities.supportsStreamingEvents
+            supportsStatefulChat = capabilities.supportsStatefulChat
+            supportsNativeMCP = capabilities.supportsNativeMCP
             supportsModelManagement = capabilities.supportsModelManagement
             supportsDownloads = capabilities.supportsDownloads
             supportsAuthToken = capabilities.supportsAuthToken
@@ -167,6 +179,10 @@ final class LMStudioRuntimeService {
             models = []
             apiMode = installed ? "offline" : "missing-cli"
             supportsV1 = false
+            supportsNativeChat = false
+            supportsStreamingEvents = false
+            supportsStatefulChat = false
+            supportsNativeMCP = false
             supportsModelManagement = false
             supportsDownloads = false
             supportsAuthToken = apiKey?.isEmpty == false

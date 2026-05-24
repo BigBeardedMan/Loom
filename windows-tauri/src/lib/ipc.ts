@@ -257,6 +257,7 @@ export const ipc = {
       system?: string;
       maxTokens?: number;
       temperature?: number;
+      previousResponseId?: string | null;
     }) => invoke<string>("agent_openai_send", { args }),
     mcpList: () => invoke<McpServer[]>("mcp_list"),
     mcpAdd: (name: string, command: string, args: string[]) =>
@@ -488,6 +489,10 @@ export type LmStudioRuntimeStatus = {
   state: "no-endpoint" | "missing-cli" | "stopped" | "running" | string;
   apiMode: string;
   supportsV1: boolean;
+  supportsNativeChat: boolean;
+  supportsStreamingEvents: boolean;
+  supportsStatefulChat: boolean;
+  supportsNativeMcp: boolean;
   supportsModelManagement: boolean;
   supportsDownloads: boolean;
   supportsAuthToken: boolean;

@@ -28,6 +28,26 @@ type Turn = {
   vendor?: Vendor;
 };
 
+type LmStudioRunStatus = {
+  phase: string;
+  label: string;
+  detail?: string | null;
+  progress?: number | null;
+};
+
+type LmStudioRunUsage = {
+  stats?: {
+    input_tokens?: number;
+    total_output_tokens?: number;
+    reasoning_output_tokens?: number;
+    tokens_per_second?: number;
+    time_to_first_token_seconds?: number;
+    model_load_time_seconds?: number;
+  } | null;
+  responseId?: string | null;
+  modelInstanceId?: string | null;
+};
+
 const VENDORS: { value: Vendor; label: string }[] = [
   { value: "claude", label: "Claude CLI" },
   { value: "codex", label: "Codex" },
@@ -87,6 +107,9 @@ export function AgentPane({ workspace, blockId }: Props) {
   const [lmDownloadModel, setLmDownloadModel] = useState("");
   const [lmDownloadQuantization, setLmDownloadQuantization] = useState("");
   const [lmDownloadStatus, setLmDownloadStatus] = useState<LmStudioDownloadStatus | null>(null);
+  const [lmRunStatus, setLmRunStatus] = useState<LmStudioRunStatus | null>(null);
+  const [lmRunUsage, setLmRunUsage] = useState<LmStudioRunUsage | null>(null);
+  const [lmNativeResponseId, setLmNativeResponseId] = useState<string | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -149,6 +172,10 @@ export function AgentPane({ workspace, blockId }: Props) {
     vendor === "lmstudio" && lmRoutingEnabled && lmCoderModel.trim()
       ? lmCoderModel.trim()
       : model;
+
+  useEffect(() => {
+    setLmNativeResponseId(null);
+  }, [activeEndpoint?.id, lmEffectiveModel, vendor]);
 
   useEffect(() => {
     if (!usesEndpoint || matchingEndpoints.length === 0) return;
@@ -321,6 +348,13 @@ export function AgentPane({ workspace, blockId }: Props) {
     const prompt = draft.trim();
     if (!prompt || busy) return;
     setDraft("");
+    const lmPreviousResponseId =
+      vendor === "lmstudio" && turns.length > 0 ? lmNativeResponseId : null;
+    if (vendor === "lmstudio") {
+      setLmRunStatus(null);
+      setLmRunUsage(null);
+      if (!lmPreviousResponseId) setLmNativeResponseId(null);
+    }
     const userTurn: Turn = { id: crypto.randomUUID(), role: "user", text: prompt };
     const asstId = crypto.randomUUID();
     const asstTurn: Turn = {
@@ -340,7 +374,7 @@ export function AgentPane({ workspace, blockId }: Props) {
         vendor === "lmstudio" ||
         (vendor === "ollama" && activeEndpoint)
       )
-        await runOpenAi(prompt, asstId);
+        await runOpenAi(prompt, asstId, lmPreviousResponseId);
       else await runCli(prompt, asstId);
     } catch (e) {
       setTurns((prev) =>
@@ -383,7 +417,7 @@ export function AgentPane({ workspace, blockId }: Props) {
     };
   };
 
-  const runOpenAi = async (prompt: string, asstId: string) => {
+  const runOpenAi = async (prompt: string, asstId: string, previousResponseId?: string | null) => {
     if (!activeEndpoint) {
       throw new Error("No endpoint configured. Open Settings → AI Providers to add one.");
     }
@@ -397,6 +431,7 @@ export function AgentPane({ workspace, blockId }: Props) {
       model: selectedModel,
       messages,
       maxTokens: 4096,
+      previousResponseId: vendor === "lmstudio" ? previousResponseId ?? undefined : undefined,
     });
     const off1 = await on<{ kind: string; data: unknown }>(
       `agent://${streamId}/event`,
@@ -407,6 +442,12 @@ export function AgentPane({ workspace, blockId }: Props) {
             setTurns((prev) =>
               prev.map((x) => (x.id === asstId ? { ...x, text: x.text + t } : x))
             );
+        } else if (ev.kind === "lmstudio_status") {
+          setLmRunStatus(ev.data as LmStudioRunStatus);
+        } else if (ev.kind === "lmstudio_usage") {
+          const usage = ev.data as LmStudioRunUsage;
+          setLmRunUsage(usage);
+          if (usage.responseId) setLmNativeResponseId(usage.responseId);
         }
       }
     );
@@ -503,8 +544,12 @@ export function AgentPane({ workspace, blockId }: Props) {
     },
     {
       label: "API",
-      ok: lmRuntime?.supportsV1 === true,
-      detail: lmRuntime?.apiMode ? lmRuntime.apiMode.toUpperCase() : "checking",
+      ok: lmRuntime?.supportsNativeChat === true || lmRuntime?.supportsV1 === true,
+      detail: lmRuntime?.supportsNativeChat
+        ? "Native v1 chat + streaming"
+        : lmRuntime?.apiMode
+          ? lmRuntime.apiMode.toUpperCase()
+          : "checking",
     },
   ];
 
@@ -666,6 +711,38 @@ export function AgentPane({ workspace, blockId }: Props) {
               title={lmRuntime.recommendedModelId}
             >
               {lmRuntime.recommendedModelId}
+            </span>
+          )}
+          {lmRunStatus && (
+            <span
+              title={lmRunStatus.detail || lmRunStatus.phase}
+              style={{
+                maxWidth: 220,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                color: "rgba(255,255,255,0.62)",
+              }}
+            >
+              {lmRunStatus.label}
+              {typeof lmRunStatus.progress === "number"
+                ? ` · ${Math.round(lmRunStatus.progress * 100)}%`
+                : ""}
+            </span>
+          )}
+          {lmRunUsage && (
+            <span
+              title={lmRunUsage.modelInstanceId || undefined}
+              style={{
+                maxWidth: 190,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                color: "rgba(255,255,255,0.55)",
+                fontFamily: "var(--font-mono)",
+              }}
+            >
+              {lmUsageText(lmRunUsage)}
             </span>
           )}
           <button
@@ -1063,6 +1140,10 @@ function emptyLmRuntime(error: string): LmStudioRuntimeStatus {
     state: "stopped",
     apiMode: "unknown",
     supportsV1: false,
+    supportsNativeChat: false,
+    supportsStreamingEvents: false,
+    supportsStatefulChat: false,
+    supportsNativeMcp: false,
     supportsModelManagement: false,
     supportsDownloads: false,
     supportsAuthToken: false,
@@ -1140,4 +1221,20 @@ function downloadStatusText(status: LmStudioDownloadStatus): string {
     return `${status.jobId ?? "download"} · ${status.status} · ${pct}%`;
   }
   return `${status.jobId ?? "download"} · ${status.status}`;
+}
+
+function lmUsageText(usage: LmStudioRunUsage): string {
+  const stats = usage.stats;
+  if (!stats) return usage.responseId ? "stateful" : "native";
+  const bits: string[] = [];
+  if (typeof stats.input_tokens === "number") bits.push(`in ${stats.input_tokens}`);
+  if (typeof stats.total_output_tokens === "number") bits.push(`out ${stats.total_output_tokens}`);
+  if (typeof stats.reasoning_output_tokens === "number" && stats.reasoning_output_tokens > 0) {
+    bits.push(`r ${stats.reasoning_output_tokens}`);
+  }
+  if (typeof stats.tokens_per_second === "number") bits.push(`${stats.tokens_per_second.toFixed(1)} tok/s`);
+  if (typeof stats.time_to_first_token_seconds === "number") {
+    bits.push(`ttft ${stats.time_to_first_token_seconds.toFixed(2)}s`);
+  }
+  return bits.length ? bits.join(" · ") : "native stats";
 }

@@ -14,7 +14,28 @@ enum LLMEvent: Sendable {
     /// Provider invoked a tool. `input` is the raw JSON payload the model
     /// produced for the tool's parameters; the consumer decodes it.
     case toolUse(name: String, input: Data)
+    case providerProgress(LLMProviderProgress)
+    case reasoningDelta(String)
+    case usage(LLMProviderUsageStats)
+    case providerNotice(String)
     case done
+}
+
+struct LLMProviderProgress: Hashable, Sendable {
+    let phase: String
+    let label: String
+    let detail: String?
+    let progress: Double?
+}
+
+struct LLMProviderUsageStats: Hashable, Sendable {
+    let inputTokens: Int?
+    let outputTokens: Int?
+    let reasoningTokens: Int?
+    let tokensPerSecond: Double?
+    let timeToFirstTokenSeconds: Double?
+    let modelLoadTimeSeconds: Double?
+    let responseID: String?
 }
 
 /// Tool the agent may invoke during a stream. Only Anthropic-backed providers

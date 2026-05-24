@@ -34,13 +34,19 @@ Click **Add** to open the editor:
 Click **Test connection** before saving:
 
 - **Ollama:** hits `GET <baseURL>/api/tags`. Reports the number of models (or "No models / unreachable").
-- **LM Studio:** hits `/api/v0/models` first, then falls back to `GET <baseURL>/models`. Reports installed and loaded model counts.
+- **LM Studio:** hits native `/api/v1/models` first, then `/api/v0/models`, then `GET <baseURL>/models`. Reports installed and loaded model counts plus native capability details when available.
 - **OpenAI-compatible:** hits `GET <baseURL>/models`. Reports HTTP 200 (or the failure reason).
 
 For LM Studio, the model menu lists loaded models first and includes available
-context length, quantization, and architecture details from `/api/v0/models`.
-On Windows, the Agent pane can also start the `lms` server and load the selected
-model from the LM Studio runtime strip.
+context length, quantization, architecture, tool-use, and native API details.
+When the server supports native v1 chat, chat-mode runs can show model-load
+progress, prompt-processing progress, stateful response IDs, and token-speed
+stats. Agent Mode still uses OpenAI-compatible tool calling so Loom's file,
+shell, git, test, and preview tools keep the same workspace and permission
+guards.
+
+On Windows, the Agent pane can also start the `lms` server, load the selected
+model, and show native chat progress from the LM Studio runtime strip.
 
 Test does **not** save the endpoint. You still have to click Save.
 

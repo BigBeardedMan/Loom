@@ -1162,6 +1162,8 @@ private struct AgentSettings: View {
     @AppStorage("loom.lmstudio.routingEnabled") private var lmStudioRoutingEnabled: Bool = false
     @AppStorage("loom.lmstudio.workbenchEnabled") private var lmStudioWorkbenchEnabled: Bool = true
     @AppStorage("loom.lmstudio.autoPrepare") private var lmStudioAutoPrepare: Bool = true
+    @AppStorage("loom.lmstudio.nativeMode") private var lmStudioNativeMode: Bool = true
+    @AppStorage("loom.lmstudio.statefulSessions") private var lmStudioStatefulSessions: Bool = true
     @AppStorage("loom.agent.autoVerify") private var autoVerify: Bool = true
     @AppStorage("loom.agent.previewSnapshots") private var previewSnapshots: Bool = false
     @State private var helperStatus: HelperStatus = .unknown
@@ -1234,6 +1236,17 @@ private struct AgentSettings: View {
                 Text("When the LM Studio pane opens and the server is stopped, Loom can start the daemon and load the selected model for agent work.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                Toggle("Use native v1 chat for LM Studio chat", isOn: $lmStudioNativeMode)
+                Text("Enables LM Studio's native streaming events, prompt-processing progress, model-load progress, and usage stats for chat-mode runs. Agent Mode still falls back to OpenAI-compatible tool calling until native MCP tool bridging is enabled safely.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Keep native LM Studio chats stateful", isOn: $lmStudioStatefulSessions)
+                Text("Stores the native response id for chat-mode follow-ups so LM Studio can preserve context without resending assistant history.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .disabled(!lmStudioNativeMode)
 
                 Toggle("Auto-scale loaded model context", isOn: $lmStudioAutoScale)
                 Stepper(value: $lmStudioMaxContext, in: 4_096...131_072, step: 4_096) {

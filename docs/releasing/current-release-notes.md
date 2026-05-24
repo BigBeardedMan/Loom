@@ -1,6 +1,12 @@
 ## Changes
 
-- Testing Edition version metadata now moves to 9.0.3 across macOS, Windows/Tauri, and the bundled LM Studio helper.
+- Testing Edition version metadata now moves to 9.0.4 across macOS, Windows/Tauri, and the bundled LM Studio helper.
+- LM Studio chat-mode runs now prefer native `/api/v1/chat`, capturing model-load progress, prompt-processing progress, reasoning state, token-speed stats, model-load timing, and stateful response IDs.
+- LM Studio Agent Mode keeps the OpenAI-compatible tool-calling path so Loom's workspace boundary checks and permission prompts still protect file, shell, git, test, preview, and task tools.
+- macOS LM Studio runtime cards now show native chat/stateful capability badges, active run progress, fallback notices, and native usage summaries.
+- Windows LM Studio chat now attempts native v1 streaming first, preserves response IDs for stateful follow-ups, and falls back to OpenAI-compatible chat with a visible fallback reason if the native path is unavailable.
+- Windows LM Studio runtime status now reports native chat, streaming event, stateful chat, and native MCP capability flags.
+- LM Studio helper regression tests now include native SSE event parsing and response-id preservation.
 - Testing release packaging now fails early if macOS and Windows Testing version sources drift apart.
 - Repository hygiene now ignores iCloud/Finder duplicate Testing project and Windows Rust shadow files before release.
 - Windows Testing usage analytics now use the cleaner token mix bar plus ranked model/project breakdowns already used on macOS.

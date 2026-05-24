@@ -5,7 +5,7 @@ Loom can stream chat from any LLM you run on `localhost` or your LAN. Three inte
 | Kind | Best for | Wire format |
 | ---- | -------- | ----------- |
 | **Ollama** | `ollama serve` running locally or on a homelab box | `POST /api/chat` (NDJSON stream), `GET /api/tags` for models |
-| **LM Studio** | LM Studio's local server, with richer model discovery through `/api/v0/models` | OpenAI SSE stream plus LM Studio model metadata |
+| **LM Studio** | LM Studio's local server, with richer model discovery and runtime controls through native v1 APIs | Native `/api/v1/chat` for chat-mode runs; OpenAI-compatible fallback for custom Loom tools |
 | **OpenAI-compatible** | llama.cpp's `llama-server`, Jan, vLLM, LocalAI, anything that speaks `/v1/chat/completions` | OpenAI SSE stream |
 
 All three are added in [Settings → Providers](../settings/providers.md).
@@ -32,7 +32,11 @@ Run `ollama serve` on another machine with `OLLAMA_HOST=0.0.0.0:11434 ollama ser
 
 ## LM Studio setup
 
-LM Studio exposes an OpenAI-shaped chat API plus a native model-discovery API that tells Loom which models are installed and loaded.
+LM Studio exposes an OpenAI-shaped chat API plus native v1 APIs for chat,
+model discovery, model load/unload, download status, prompt-processing
+progress, and usage stats. Loom uses the native v1 path when it can and keeps
+the OpenAI-compatible path as the fallback for older LM Studio builds and
+custom Loom tool schemas.
 
 1. In LM Studio: **Developer** → **Local Server** → start the server (default port `1234`).
 2. Load a model in LM Studio, or use the `lms` CLI to load one.
@@ -40,21 +44,34 @@ LM Studio exposes an OpenAI-shaped chat API plus a native model-discovery API th
    - **Display name:** `LM Studio`
    - **Kind:** LM Studio
    - **Base URL:** `http://localhost:1234/v1`
-   - **Default model:** optional fallback only; Loom auto-discovers installed models through `/api/v0/models`.
+   - **Default model:** optional fallback only; Loom auto-discovers installed models through `/api/v1/models`, then `/api/v0/models`, then `/v1/models`.
    - **Requires auth:** off.
 4. **Test connection** → should report installed and loaded model counts.
 5. **Save**.
 
 If the LM Studio server is already running when you open **Settings → Providers**,
 Loom offers an **Add LM Studio** shortcut that creates this endpoint for you.
-Loaded models appear first in the Agent picker with their context and
-quantization details.
+Loaded models appear first in the Agent picker with their context,
+quantization, architecture, tool-use, and native API details.
+
+In chat mode, LM Studio runs through `/api/v1/chat` when available. Loom shows
+model-load progress, prompt-processing progress, native usage stats, and keeps
+stateful follow-ups with LM Studio response IDs. If native chat is unavailable
+or the current conversation cannot be represented safely through native state,
+Loom falls back to `/v1/chat/completions`.
+
+In Agent Mode, Loom currently keeps the OpenAI-compatible path so its local
+file, git, shell, test, preview, and task tools continue to use Loom's existing
+workspace boundary checks and permission prompts. Native MCP tool bridging is
+not used until it can preserve that same permission model.
 
 On Windows, the Agent pane also exposes a compact LM Studio runtime strip. Use
-**Refresh** to re-read `/api/v0/models`, **Prepare** to start the `lms` server
-and load the selected or recommended model, and **Auto-scale** to request the
-target context size with `--parallel 1 --gpu max`. The terminal launch menu can
-insert `lmstudio`, `lmstudio --allow-bash`, `lmstudio --bypass-permissions`, or
+**Refresh** to re-read native model metadata, **Prepare** to start the `lms`
+server and load the selected or recommended model, and **Auto-scale** to request
+the target context size. During native chat-mode runs, the strip also shows
+load/progress status, token-speed stats, and preserves native response IDs for
+stateful follow-ups. The terminal launch menu can insert
+`lmstudio`, `lmstudio --allow-bash`, `lmstudio --bypass-permissions`, or
 `lms server status` into the active shell.
 
 > Prefer a terminal? The [`lmstudio` CLI](lmstudio-cli.md) ships with Loom and gives you a `claude`-style agent loop in any terminal, backed by the same LM Studio server. Tasks flow into Loom's Tasks pane automatically.

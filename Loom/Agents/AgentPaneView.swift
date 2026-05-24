@@ -54,6 +54,10 @@ struct AgentPaneView: View {
     @State private var isRunningVerification: Bool = false
     @State private var downloadModelID: String = ""
     @State private var downloadQuantization: String = ""
+    @State private var lmStudioNativeResponseID: String?
+    @State private var lmStudioRunProgress: LLMProviderProgress?
+    @State private var lmStudioLastUsage: LLMProviderUsageStats?
+    @State private var lmStudioFallbackNotice: String?
 
     /// Persisted across panes: when on, local-HTTP providers run through
     /// `AgentOrchestrator` (multi-turn loop, tool calls, task list) instead
@@ -70,6 +74,7 @@ struct AgentPaneView: View {
     @AppStorage("loom.lmstudio.maxContext") private var lmStudioMaxContext: Int = 65_536
     @AppStorage("loom.lmstudio.workbenchEnabled") private var lmStudioWorkbenchEnabled: Bool = true
     @AppStorage("loom.lmstudio.autoPrepare") private var lmStudioAutoPrepare: Bool = true
+    @AppStorage("loom.lmstudio.statefulSessions") private var lmStudioStatefulSessions: Bool = true
     @AppStorage("loom.agent.autoVerify") private var autoVerifyAgentRuns: Bool = true
     @AppStorage("loom.agent.previewSnapshots") private var previewSnapshots: Bool = false
 
@@ -980,12 +985,44 @@ struct AgentPaneView: View {
                     .lineLimit(3)
             }
 
+            if let progress = lmStudioRunProgress {
+                HStack(spacing: 6) {
+                    ProgressView(value: progress.progress ?? 0)
+                        .progressViewStyle(.linear)
+                        .opacity(progress.progress == nil ? 0.45 : 1)
+                    Text(progress.label)
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            if let usage = lmStudioLastUsage {
+                Text(lmStudioUsageSummary(usage))
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            if let notice = lmStudioFallbackNotice {
+                Text(notice)
+                    .font(.system(size: 9))
+                    .foregroundStyle(LoomTheme.orange)
+                    .lineLimit(2)
+            }
+
             HStack(spacing: 6) {
                 LoomStatusPill(
                     title: lmStudioRuntime.apiMode.uppercased(),
                     systemImage: lmStudioRuntime.supportsV1 ? "checkmark.seal" : "arrow.triangle.2.circlepath",
                     tint: lmStudioRuntime.supportsV1 ? .green : .orange
                 )
+                if lmStudioRuntime.supportsNativeChat {
+                    LoomStatusPill(title: "Native Chat", systemImage: "bolt.horizontal", tint: LoomTheme.blue)
+                }
+                if lmStudioRuntime.supportsStatefulChat {
+                    LoomStatusPill(title: "Stateful", systemImage: "link", tint: LoomTheme.purple)
+                }
                 if lmStudioRuntime.supportsModelManagement {
                     LoomStatusPill(title: "Manage", systemImage: "shippingbox", tint: LoomTheme.purple)
                 }
@@ -1375,6 +1412,26 @@ struct AgentPaneView: View {
         }
     }
 
+    private func lmStudioUsageSummary(_ stats: LLMProviderUsageStats) -> String {
+        var bits: [String] = []
+        if let inputTokens = stats.inputTokens {
+            bits.append("in \(inputTokens)")
+        }
+        if let outputTokens = stats.outputTokens {
+            bits.append("out \(outputTokens)")
+        }
+        if let reasoningTokens = stats.reasoningTokens, reasoningTokens > 0 {
+            bits.append("reason \(reasoningTokens)")
+        }
+        if let tokensPerSecond = stats.tokensPerSecond {
+            bits.append(String(format: "%.1f tok/s", tokensPerSecond))
+        }
+        if let timeToFirstTokenSeconds = stats.timeToFirstTokenSeconds {
+            bits.append(String(format: "ttft %.2fs", timeToFirstTokenSeconds))
+        }
+        return bits.isEmpty ? "native stats captured" : bits.joined(separator: " · ")
+    }
+
     private var latestRunStatus: String? {
         if isWaiting { return "running" }
         if verificationResults.contains(where: { !$0.succeeded }) { return "needs_attention" }
@@ -1515,6 +1572,9 @@ struct AgentPaneView: View {
         changedFiles = []
         verificationResults = []
         isRunningVerification = false
+        lmStudioRunProgress = nil
+        lmStudioLastUsage = nil
+        lmStudioFallbackNotice = nil
     }
 
     private func appendWorkbenchEvent(
@@ -1633,6 +1693,9 @@ struct AgentPaneView: View {
         error = nil
         if selectedAgent.vendor == .lmstudio {
             resetWorkbenchForRun()
+            if messages.isEmpty {
+                lmStudioNativeResponseID = nil
+            }
         }
         let userMsg = AgentMessage(role: .user, text: prompt)
         messages.append(userMsg)
@@ -1747,6 +1810,33 @@ struct AgentPaneView: View {
                 detail: preview,
                 status: record.succeeded ? .succeeded : .failed,
                 systemImage: toolIcon(record.name)
+            )
+        case .providerProgress(let progress):
+            lmStudioRunProgress = progress
+            appendWorkbenchEvent(
+                title: progress.label,
+                detail: progress.detail ?? progress.phase,
+                status: progress.progress == 1 ? .succeeded : .running,
+                systemImage: "bolt.horizontal"
+            )
+        case .providerUsage(let stats):
+            lmStudioLastUsage = stats
+            if let responseID = stats.responseID {
+                lmStudioNativeResponseID = responseID
+            }
+            appendWorkbenchEvent(
+                title: "Native stats",
+                detail: lmStudioUsageSummary(stats),
+                status: .info,
+                systemImage: "speedometer"
+            )
+        case .providerNotice(let message):
+            lmStudioFallbackNotice = message
+            appendWorkbenchEvent(
+                title: "LM Studio",
+                detail: message,
+                status: .info,
+                systemImage: "info.circle"
             )
         case .compacted(let count, let summary):
             compactionCount = count
@@ -1890,7 +1980,13 @@ struct AgentPaneView: View {
             let provider = OpenAICompatibleProvider(baseURL: url, model: model, apiKey: token)
             stream = provider.stream(messages: history, system: workspaceSystemPrompt)
         case .lmstudio:
-            let provider = LMStudioProvider(baseURL: url, model: model, apiKey: token)
+            let provider = LMStudioProvider(
+                baseURL: url,
+                model: model,
+                apiKey: token,
+                previousResponseID: lmStudioStatefulSessions ? lmStudioNativeResponseID : nil,
+                nativeContextLength: lmStudioMaxContext
+            )
             stream = provider.stream(messages: history, system: workspaceSystemPrompt)
         }
 
@@ -1903,6 +1999,22 @@ struct AgentPaneView: View {
                     case .toolUse:
                         // Local providers never emit tool-use today; ignore.
                         break
+                    case .providerProgress(let progress):
+                        lmStudioRunProgress = progress
+                    case .reasoningDelta:
+                        lmStudioRunProgress = LLMProviderProgress(
+                            phase: "reasoning",
+                            label: "Reasoning",
+                            detail: nil,
+                            progress: nil
+                        )
+                    case .usage(let stats):
+                        lmStudioLastUsage = stats
+                        if let responseID = stats.responseID {
+                            lmStudioNativeResponseID = responseID
+                        }
+                    case .providerNotice(let message):
+                        lmStudioFallbackNotice = message
                     case .done:
                         finalizeStreamWithFallbackParser()
                     }

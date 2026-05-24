@@ -40,6 +40,10 @@ pub struct LmStudioRuntimeStatus {
     pub state: String,
     pub api_mode: String,
     pub supports_v1: bool,
+    pub supports_native_chat: bool,
+    pub supports_streaming_events: bool,
+    pub supports_stateful_chat: bool,
+    pub supports_native_mcp: bool,
     pub supports_model_management: bool,
     pub supports_downloads: bool,
     pub supports_auth_token: bool,
@@ -423,6 +427,10 @@ pub fn chat_completions_url(base_url: &str) -> String {
     format!("{}/chat/completions", openai_api_root(base_url))
 }
 
+pub fn native_chat_url(base_url: &str) -> String {
+    format!("{}/chat", native_api_root(base_url, "v1"))
+}
+
 pub fn native_models_url(base_url: &str) -> String {
     format!("{}/models", native_api_root(base_url, "v1"))
 }
@@ -472,6 +480,10 @@ async fn runtime_status(
             state: "no-endpoint".to_string(),
             api_mode: "none".to_string(),
             supports_v1: false,
+            supports_native_chat: false,
+            supports_streaming_events: false,
+            supports_stateful_chat: false,
+            supports_native_mcp: false,
             supports_model_management: false,
             supports_downloads: false,
             supports_auth_token: false,
@@ -496,6 +508,10 @@ async fn runtime_status(
             }
             .to_string(),
             supports_v1: false,
+            supports_native_chat: false,
+            supports_streaming_events: false,
+            supports_stateful_chat: false,
+            supports_native_mcp: false,
             supports_model_management: false,
             supports_downloads: false,
             supports_auth_token: token.as_deref().is_some_and(|t| !t.is_empty()),
@@ -526,6 +542,10 @@ async fn runtime_status(
         state,
         api_mode: capabilities.api_mode,
         supports_v1: capabilities.supports_v1,
+        supports_native_chat: capabilities.supports_native_chat,
+        supports_streaming_events: capabilities.supports_streaming_events,
+        supports_stateful_chat: capabilities.supports_stateful_chat,
+        supports_native_mcp: capabilities.supports_native_mcp,
         supports_model_management: capabilities.supports_model_management,
         supports_downloads: capabilities.supports_downloads,
         supports_auth_token: capabilities.supports_auth_token,
@@ -560,6 +580,10 @@ fn first_lmstudio_endpoint(state: &State<'_, AppState>) -> Option<LocalEndpoint>
 struct CapabilityStatus {
     api_mode: String,
     supports_v1: bool,
+    supports_native_chat: bool,
+    supports_streaming_events: bool,
+    supports_stateful_chat: bool,
+    supports_native_mcp: bool,
     supports_model_management: bool,
     supports_downloads: bool,
     supports_auth_token: bool,
@@ -577,6 +601,10 @@ async fn capability_status(base_url: &str, auth_token: Option<&str>) -> Capabili
             return CapabilityStatus {
                 api_mode: "unavailable".to_string(),
                 supports_v1: false,
+                supports_native_chat: false,
+                supports_streaming_events: false,
+                supports_stateful_chat: false,
+                supports_native_mcp: false,
                 supports_model_management: false,
                 supports_downloads: false,
                 supports_auth_token: auth_token.is_some_and(|s| !s.is_empty()),
@@ -592,6 +620,10 @@ async fn capability_status(base_url: &str, auth_token: Option<&str>) -> Capabili
         Ok(response) if response.status().is_success() => CapabilityStatus {
             api_mode: "v1".to_string(),
             supports_v1: true,
+            supports_native_chat: true,
+            supports_streaming_events: true,
+            supports_stateful_chat: true,
+            supports_native_mcp: true,
             supports_model_management: true,
             supports_downloads: true,
             supports_auth_token: auth_token.is_some_and(|s| !s.is_empty()),
@@ -600,6 +632,10 @@ async fn capability_status(base_url: &str, auth_token: Option<&str>) -> Capabili
         Ok(response) => CapabilityStatus {
             api_mode: "openai".to_string(),
             supports_v1: false,
+            supports_native_chat: false,
+            supports_streaming_events: false,
+            supports_stateful_chat: false,
+            supports_native_mcp: false,
             supports_model_management: false,
             supports_downloads: false,
             supports_auth_token: auth_token.is_some_and(|s| !s.is_empty()),
@@ -616,6 +652,10 @@ async fn capability_status(base_url: &str, auth_token: Option<&str>) -> Capabili
                 CapabilityStatus {
                     api_mode: "v0".to_string(),
                     supports_v1: false,
+                    supports_native_chat: false,
+                    supports_streaming_events: false,
+                    supports_stateful_chat: false,
+                    supports_native_mcp: false,
                     supports_model_management: false,
                     supports_downloads: false,
                     supports_auth_token: auth_token.is_some_and(|s| !s.is_empty()),
@@ -625,6 +665,10 @@ async fn capability_status(base_url: &str, auth_token: Option<&str>) -> Capabili
                 CapabilityStatus {
                     api_mode: "openai".to_string(),
                     supports_v1: false,
+                    supports_native_chat: false,
+                    supports_streaming_events: false,
+                    supports_stateful_chat: false,
+                    supports_native_mcp: false,
                     supports_model_management: false,
                     supports_downloads: false,
                     supports_auth_token: auth_token.is_some_and(|s| !s.is_empty()),
@@ -1217,6 +1261,10 @@ mod tests {
         assert_eq!(
             native_v0_models_url("http://localhost:1234/v1"),
             "http://localhost:1234/api/v0/models"
+        );
+        assert_eq!(
+            native_chat_url("http://localhost:1234/v1"),
+            "http://localhost:1234/api/v1/chat"
         );
     }
 

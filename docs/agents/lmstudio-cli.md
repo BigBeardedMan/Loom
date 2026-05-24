@@ -35,6 +35,15 @@ lmstudio --json "..."                 # structured event stream (scripting)
 
 The CLI runs in the current working directory. Tool paths are resolved relative to it; the runner refuses to read or write outside.
 
+## Native API compatibility
+
+The desktop Agent pane can use LM Studio's native `/api/v1/chat` stream for
+plain chat-mode runs. The terminal CLI still uses `/v1/chat/completions` for
+agent loops because it needs custom tool schemas, grammar-constrained repair,
+and local permission prompts. The helper regression suite does validate native
+SSE frames so desktop and CLI parsing do not drift when LM Studio changes event
+payloads.
+
 ## Slash commands
 
 Type these at the `❯` prompt (they don't go to the model):

@@ -40,6 +40,9 @@ final class AgentOrchestrator {
         case taskListUpdated([LiveAgentTask])
         case toolStarted(name: String, arguments: String)
         case toolFinished(ToolCallRecord)
+        case providerProgress(LLMProviderProgress)
+        case providerUsage(LLMProviderUsageStats)
+        case providerNotice(String)
         case compacted(count: Int, summary: String)
         case reviewReady(String)
         case completed(finalText: String)
@@ -176,6 +179,19 @@ final class AgentOrchestrator {
                     onEvent(.textDelta(chunk))
                 case .toolUse(let name, let input):
                     toolCalls.append((name: name, input: input))
+                case .providerProgress(let progress):
+                    onEvent(.providerProgress(progress))
+                case .reasoningDelta:
+                    onEvent(.providerProgress(LLMProviderProgress(
+                        phase: "reasoning",
+                        label: "Reasoning",
+                        detail: nil,
+                        progress: nil
+                    )))
+                case .usage(let stats):
+                    onEvent(.providerUsage(stats))
+                case .providerNotice(let message):
+                    onEvent(.providerNotice(message))
                 case .done:
                     break
                 }
