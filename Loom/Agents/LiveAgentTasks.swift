@@ -70,6 +70,10 @@ enum LiveAgentTaskStatus: String, Codable, Hashable {
         case .deleted:    return 4
         }
     }
+
+    var isActive: Bool {
+        self == .pending || self == .inProgress
+    }
 }
 
 struct LiveAgentTask: Identifiable, Hashable {
@@ -332,7 +336,7 @@ final class LiveAgentTasksService {
         var collected: [LiveAgentTaskGroup] = []
         for session in activeClaudeSessions(root: root, cutoff: cutoff) {
             let tasks = readLoomTasks(in: session)
-            guard !tasks.isEmpty else { continue }
+            guard tasks.contains(where: { $0.status.isActive }) else { continue }
             collected.append(LiveAgentTaskGroup(
                 sessionID: session.id,
                 source: .lmstudio,
@@ -397,7 +401,7 @@ final class LiveAgentTasksService {
         for session in sessions {
             let modelLabel = modelLabels[session.id]
             let tasks = readClaudeTasks(in: session, modelLabel: modelLabel)
-            guard !tasks.isEmpty else { continue }
+            guard tasks.contains(where: { $0.status.isActive }) else { continue }
             collected.append(LiveAgentTaskGroup(
                 sessionID: session.id,
                 source: .claude,
@@ -565,6 +569,7 @@ final class LiveAgentTasksService {
             let sessionID = codexSessionID(from: url)
             guard let snapshot = readLatestCodexPlanSnapshot(at: url, fallbackActivity: mtime),
                   !snapshot.plan.isEmpty,
+                  !snapshot.isTerminatedAfterPlan,
                   snapshot.planActivity >= cutoff else { continue }
             let modelLabel = snapshot.modelLabel
 
@@ -583,7 +588,7 @@ final class LiveAgentTasksService {
                     updatedAt: snapshot.planActivity
                 )
             }
-            guard tasks.contains(where: { $0.status == .pending || $0.status == .inProgress }) else {
+            guard tasks.contains(where: { $0.status.isActive }) else {
                 continue
             }
             collected.append(LiveAgentTaskGroup(
@@ -629,6 +634,7 @@ final class LiveAgentTasksService {
             let name: String?
             let arguments: String?
             let model: String?
+            let phase: String?
             let collaborationMode: CollaborationMode?
 
             enum CodingKeys: String, CodingKey {
@@ -636,6 +642,7 @@ final class LiveAgentTasksService {
                 case name
                 case arguments
                 case model
+                case phase
                 case collaborationMode = "collaboration_mode"
             }
         }
@@ -657,6 +664,12 @@ final class LiveAgentTasksService {
         let plan: [CodexPlanStep]
         let modelLabel: String?
         let planActivity: Date
+        let terminalActivity: Date?
+
+        var isTerminatedAfterPlan: Bool {
+            guard let terminalActivity else { return false }
+            return terminalActivity >= planActivity
+        }
     }
 
     /// Scan a rollout JSONL for `function_call` lines whose `name` is
@@ -673,10 +686,20 @@ final class LiveAgentTasksService {
         var latest: [CodexPlanStep]?
         var modelLabel: String?
         var planActivity: Date?
+        var terminalActivity: Date?
         for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            guard line.contains("\"update_plan\"") || line.contains("\"turn_context\"") else { continue }
+            guard line.contains("\"update_plan\"")
+                    || line.contains("\"turn_context\"")
+                    || line.contains("\"task_complete\"")
+                    || line.contains("\"final_answer\"") else { continue }
             guard let lineData = String(line).data(using: .utf8) else { continue }
             guard let parsed = try? decoder.decode(CodexPlanLine.self, from: lineData) else { continue }
+            if parsed.payload?.type == "task_complete" || parsed.payload?.phase == "final_answer" {
+                if let timestamp = parseCodexTimestamp(parsed.timestamp),
+                   terminalActivity == nil || timestamp > terminalActivity! {
+                    terminalActivity = timestamp
+                }
+            }
             if parsed.type == "turn_context" {
                 modelLabel = LiveAgentTaskGroup.normalizedModelLabel(
                     parsed.payload?.model ?? parsed.payload?.collaborationMode?.settings?.model
@@ -699,7 +722,8 @@ final class LiveAgentTasksService {
         return CodexPlanSnapshot(
             plan: latest,
             modelLabel: modelLabel,
-            planActivity: planActivity ?? fallbackActivity
+            planActivity: planActivity ?? fallbackActivity,
+            terminalActivity: terminalActivity
         )
     }
 

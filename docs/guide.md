@@ -1310,9 +1310,11 @@ status.
 ```
 
 Loom scans the rollout for `update_plan` function calls and surfaces the
-most recent plan from each rollout that's been touched inside the active
-window. Codex steps map onto the same statuses as Claude (`pending`,
-`in_progress`, `completed`).
+most recent active plan from each rollout that's been touched inside the
+active window. A later Codex `task_complete` event or final-answer event
+hides that plan until a newer `update_plan` appears, so completed turns do
+not remain pinned as live work. Codex steps map onto the same statuses as
+Claude (`pending`, `in_progress`, `completed`).
 
 **Gemini CLI** does not currently write plan state to disk in any format
 Loom can read. Gemini terminals show in the agent picker, but their
@@ -1345,7 +1347,8 @@ section above the kanban columns:
 - Click a task to expand and read its full description and `activeForm`.
 
 When a session finishes, all tasks become terminal, or its session id rotates,
-the live block clears on the next 2 second poll.
+the live block clears on the next 2 second poll. Completed and cancelled-only
+groups are not treated as live.
 
 ### Multiple sessions
 
@@ -1392,9 +1395,10 @@ Every session header carries a × icon, and the trash icon in the pane header
 runs "Clear all". Claude Code and LM Studio task JSON files are deleted. Codex
 rollout files are left untouched because they hold conversation history; Loom
 records a dismissal timestamp keyed to the product/model/session and hides the
-group until a newer `update_plan` event advances past that mark. Active Codex
-sessions reappear after their next plan update; stuck or completed sessions
-stay cleared.
+group until a newer `update_plan` event advances past that mark. Codex
+`task_complete` and final-answer events also suppress older plans until a
+newer plan appears. Active Codex sessions reappear after their next plan
+update; stuck or completed sessions stay cleared.
 
 ---
 

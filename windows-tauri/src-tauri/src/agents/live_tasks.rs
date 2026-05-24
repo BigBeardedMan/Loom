@@ -90,6 +90,10 @@ fn status_sort_priority(status: &str) -> u8 {
     }
 }
 
+fn is_active_status(status: &str) -> bool {
+    matches!(status, "pending" | "in_progress")
+}
+
 fn normalized_model_label(raw: Option<String>) -> Option<String> {
     let trimmed = raw?.trim().to_string();
     if trimmed.is_empty() {
@@ -286,7 +290,7 @@ fn collect_claude_groups(
     for session in sessions {
         let model_label = model_labels.get(&session.id).cloned();
         let tasks = read_json_tasks(&session, "claude", model_label.as_deref());
-        if tasks.is_empty() {
+        if !tasks.iter().any(|task| is_active_status(&task.status)) {
             continue;
         }
         let headline = headline_for(&tasks);
@@ -357,7 +361,7 @@ fn collect_lmstudio_groups(root: &Path, cutoff: DateTime<Local>) -> Vec<LiveAgen
     let mut out = Vec::new();
     for session in active_json_task_sessions(root, cutoff) {
         let tasks = read_json_tasks(&session, "lmstudio", None);
-        if tasks.is_empty() {
+        if !tasks.iter().any(|task| is_active_status(&task.status)) {
             continue;
         }
         let headline = headline_for(&tasks);
@@ -381,6 +385,7 @@ struct CodexLinePayload {
     name: Option<String>,
     arguments: Option<String>,
     model: Option<String>,
+    phase: Option<String>,
     #[serde(rename = "collaboration_mode")]
     collaboration_mode: Option<CodexCollaborationMode>,
 }
@@ -418,6 +423,7 @@ struct CodexPlanSnapshot {
     plan: Vec<CodexPlanStep>,
     model_label: Option<String>,
     plan_activity: DateTime<Local>,
+    terminal_activity: Option<DateTime<Local>>,
 }
 
 fn codex_session_id(path: &Path) -> String {
@@ -466,8 +472,13 @@ fn read_latest_codex_plan_snapshot(
     let mut latest: Option<Vec<CodexPlanStep>> = None;
     let mut model_label: Option<String> = None;
     let mut plan_activity: Option<DateTime<Local>> = None;
+    let mut terminal_activity: Option<DateTime<Local>> = None;
     for line in text.lines() {
-        if !line.contains("\"update_plan\"") && !line.contains("\"turn_context\"") {
+        if !line.contains("\"update_plan\"")
+            && !line.contains("\"turn_context\"")
+            && !line.contains("\"task_complete\"")
+            && !line.contains("\"final_answer\"")
+        {
             continue;
         }
         let Ok(parsed) = serde_json::from_str::<CodexLine>(line) else {
@@ -476,6 +487,19 @@ fn read_latest_codex_plan_snapshot(
         let Some(payload) = parsed.payload else {
             continue;
         };
+        if payload.ty.as_deref() == Some("task_complete")
+            || payload.phase.as_deref() == Some("final_answer")
+        {
+            if let Some(timestamp) = parse_codex_timestamp(parsed.timestamp.as_deref()) {
+                if terminal_activity
+                    .as_ref()
+                    .map(|current| timestamp > current.clone())
+                    .unwrap_or(true)
+                {
+                    terminal_activity = Some(timestamp);
+                }
+            }
+        }
         if parsed.ty.as_deref() == Some("turn_context") {
             let candidate = payload.model.as_deref().or_else(|| {
                 payload
@@ -510,6 +534,7 @@ fn read_latest_codex_plan_snapshot(
         plan,
         model_label,
         plan_activity: plan_activity.unwrap_or(fallback_activity),
+        terminal_activity,
     })
 }
 
@@ -548,6 +573,14 @@ fn collect_codex_groups(root: &Path, cutoff: DateTime<Local>) -> Vec<LiveAgentTa
         if snapshot.plan.is_empty() || snapshot.plan_activity < cutoff {
             continue;
         }
+        if snapshot
+            .terminal_activity
+            .as_ref()
+            .map(|ended| ended >= &snapshot.plan_activity)
+            .unwrap_or(false)
+        {
+            continue;
+        }
         let model_label = snapshot.model_label.clone();
         let tasks: Vec<LiveAgentTask> = snapshot
             .plan
@@ -566,10 +599,7 @@ fn collect_codex_groups(root: &Path, cutoff: DateTime<Local>) -> Vec<LiveAgentTa
                 updated_at: snapshot.plan_activity.to_rfc3339(),
             })
             .collect();
-        if !tasks
-            .iter()
-            .any(|t| t.status == "pending" || t.status == "in_progress")
-        {
+        if !tasks.iter().any(|task| is_active_status(&task.status)) {
             continue;
         }
         let headline = tasks
@@ -724,5 +754,133 @@ fn delete_task_files_for(group: &LiveAgentTaskGroup) {
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
             let _ = fs::remove_file(path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::io::Write;
+
+    fn temp_root() -> PathBuf {
+        std::env::temp_dir().join(format!("loom-live-tasks-{}", uuid::Uuid::new_v4()))
+    }
+
+    fn write_task(dir: &Path, name: &str, status: &str) {
+        fs::create_dir_all(dir).unwrap();
+        let payload = json!({
+            "id": name,
+            "subject": name,
+            "status": status
+        });
+        fs::write(dir.join(format!("{name}.json")), payload.to_string()).unwrap();
+    }
+
+    fn write_rollout(root: &Path, lines: &[serde_json::Value]) -> PathBuf {
+        fs::create_dir_all(root).unwrap();
+        let path =
+            root.join("rollout-2026-05-24T10-00-00-019e5be6-566b-70f0-ab90-732f3bad7b9e.jsonl");
+        let mut file = fs::File::create(&path).unwrap();
+        for line in lines {
+            writeln!(file, "{line}").unwrap();
+        }
+        path
+    }
+
+    fn update_plan_line(timestamp: DateTime<Utc>, status: &str, step: &str) -> serde_json::Value {
+        let arguments = json!({
+            "plan": [
+                { "step": step, "status": status }
+            ]
+        })
+        .to_string();
+        json!({
+            "timestamp": timestamp.to_rfc3339(),
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "update_plan",
+                "arguments": arguments
+            }
+        })
+    }
+
+    fn task_complete_line(timestamp: DateTime<Utc>) -> serde_json::Value {
+        json!({
+            "timestamp": timestamp.to_rfc3339(),
+            "type": "event_msg",
+            "payload": {
+                "type": "task_complete"
+            }
+        })
+    }
+
+    #[test]
+    fn json_task_groups_require_pending_or_in_progress_tasks() {
+        let root = temp_root();
+        let session_dir = root.join("session-a");
+        write_task(&session_dir, "done", "completed");
+
+        let cutoff = Local::now() - chrono::Duration::hours(1);
+        assert!(collect_lmstudio_groups(&root, cutoff).is_empty());
+
+        write_task(&session_dir, "active", "pending");
+        let groups = collect_lmstudio_groups(&root, cutoff);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].session_id, "session-a");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn codex_task_complete_after_plan_hides_group() {
+        let root = temp_root();
+        let now = Utc::now();
+        write_rollout(
+            &root,
+            &[
+                update_plan_line(
+                    now - chrono::Duration::minutes(5),
+                    "in_progress",
+                    "Old work",
+                ),
+                task_complete_line(now - chrono::Duration::minutes(4)),
+            ],
+        );
+
+        let cutoff = Local::now() - chrono::Duration::hours(1);
+        assert!(collect_codex_groups(&root, cutoff).is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn codex_newer_plan_after_task_complete_reappears() {
+        let root = temp_root();
+        let now = Utc::now();
+        write_rollout(
+            &root,
+            &[
+                update_plan_line(
+                    now - chrono::Duration::minutes(5),
+                    "in_progress",
+                    "Old work",
+                ),
+                task_complete_line(now - chrono::Duration::minutes(4)),
+                update_plan_line(
+                    now - chrono::Duration::minutes(3),
+                    "in_progress",
+                    "New work",
+                ),
+            ],
+        );
+
+        let cutoff = Local::now() - chrono::Duration::hours(1);
+        let groups = collect_codex_groups(&root, cutoff);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].tasks[0].subject, "New work");
+
+        let _ = fs::remove_dir_all(root);
     }
 }
