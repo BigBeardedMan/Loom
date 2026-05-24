@@ -4,8 +4,10 @@ xcuserdata/
 DerivedData/
 /build/
 .swiftpm/
+.loom/
 Loom.xcodeproj/
 LoomTestingEdition.xcodeproj/
+LoomTestingEdition [0-9]*.xcodeproj/
 *.xcworkspace/xcuserdata/
 site/
 
@@ -22,6 +24,7 @@ windows-tauri/node_modules/
 windows-tauri/dist/
 windows-tauri/src-tauri/target/
 windows-tauri/src-tauri/gen/schemas/
+windows-tauri/src-tauri/src/**/* [0-9].rs
 windows-tauri/.tauri/
 windows-tauri/release-artifacts/
 .xwin-cache/

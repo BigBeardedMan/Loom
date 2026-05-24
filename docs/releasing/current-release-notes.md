@@ -1,5 +1,10 @@
 ## Changes
 
+- Testing Edition version metadata now moves to 9.0.3 across macOS, Windows/Tauri, and the bundled LM Studio helper.
+- Testing release packaging now fails early if macOS and Windows Testing version sources drift apart.
+- Repository hygiene now ignores iCloud/Finder duplicate Testing project and Windows Rust shadow files before release.
+- Windows Testing usage analytics now use the cleaner token mix bar plus ranked model/project breakdowns already used on macOS.
+- LM Studio helper self-tests now cover slash-command palette completion, concise progress redraws, and repeated no-result tool-call blocking.
 - macOS Testing usage dashboards now replace the vertical pie charts with a cleaner token mix bar and ranked model/project breakdowns.
 - LM Studio terminal input now uses a stateful key decoder for CSI, SS3, 8-bit CSI, parameterized arrow keys, and delayed orphaned `[A`/`[B` payloads, preventing raw arrow codes from being inserted into the slash-command prompt.
 - LM Studio terminal input now reads raw key bytes directly from the PTY file descriptor so repeated arrow-key presses cannot leak out of Python's buffered stdin as literal `[A` or `[B` text.
@@ -19,7 +24,7 @@
 - macOS and Windows Testing now include LM Studio run profile controls for planner, coder, and reviewer models, with coder-model routing used for local agent runs when routing is enabled.
 - macOS Testing now adds LM Studio readiness and model-library cards to the Agent Workbench, including native v1 load/unload/download support and fallback `lms` loading when native management is unavailable.
 - Windows Testing now adds the matching LM Studio readiness, model-library, and run-profile surface in the Agent pane, backed by new Tauri commands for native v1 load, unload, download, and download-status calls.
-- macOS Testing version metadata now matches production main at 9.0.2 (92).
+- macOS Testing version metadata was aligned with production main at 9.0.2 (92) before the 9.0.3 Testing sweep.
 - Windows Testing now treats LM Studio as a first-class Agent Pane provider with saved LM Studio endpoints, native `/api/v0/models` discovery, loaded-model prioritization, server status, runtime prepare, auto-scale controls, and terminal launch shortcuts.
 - Windows Testing now restores the missing visible Settings button in the title bar, matching the macOS always-available settings entry point.
 - Windows Testing now moves the Settings close button to the top-right corner of the Settings panel for update-pill verification.

@@ -27,6 +27,7 @@ import argparse
 import difflib
 import fcntl
 import html
+import io
 import json
 import os
 import re
@@ -59,7 +60,7 @@ except ImportError:
 
 DEFAULT_BASE_URL = "http://localhost:1234/v1"
 DEFAULT_MAX_TURNS = 60
-CLI_VERSION = "8.2.88"
+CLI_VERSION = "9.0.3"
 TASK_ROOT = Path.home() / ".loom" / "tasks"
 SESSION_ROOT = Path.home() / ".loom" / "sessions"
 HISTORY_FILE = Path.home() / ".config" / "loom" / "lmstudio-history"
@@ -11358,6 +11359,77 @@ def run_key_decoder_self_test():
     return 0
 
 
+def run_regression_self_test():
+    failures = []
+
+    if run_key_decoder_self_test() != 0:
+        failures.append("key decoder")
+
+    class FakeState:
+        slash_command_files = {
+            "review": {"description": "workspace review command"},
+        }
+        mode_index = 0
+        mode = {"label": "Default", "color": "dim"}
+
+        def cycle_mode(self):
+            self.mode_index = (self.mode_index + 1) % 3
+
+    state = FakeState()
+    matches = slash_command_palette_matches(state, "/pro")
+    if not any(command == "/progress" for _, command, _ in matches):
+        failures.append("slash palette did not include /progress for /pro")
+
+    editor = BoxedLineEditor([], state=state)
+    editor._render = lambda: None
+    editor.line = "/pro"
+    editor.col = len(editor.line)
+    if not editor._complete_slash_selection(add_space=True):
+        failures.append("slash completion returned false")
+    elif editor.line != "/progress " or editor.col != len("/progress "):
+        failures.append(
+            f"slash completion inserted {editor.line!r} at col {editor.col}"
+        )
+
+    args = {"path": ".", "pattern": "needle"}
+    canonical = _canonical(args)
+    no_signal_history = [{
+        "name": "grep",
+        "args": canonical,
+        "error": False,
+        "no_signal": True,
+    }]
+    if not detect_repeat_no_signal(no_signal_history, "grep", canonical):
+        failures.append("repeated no-result call was not detected")
+    if not build_no_signal_intervention("grep", args).startswith(
+        "ORCHESTRATOR INTERVENTION:"
+    ):
+        failures.append("no-result intervention missing orchestrator header")
+
+    old_stdout = sys.stdout
+    capture = io.StringIO()
+    try:
+        sys.stdout = capture
+        progress = ConciseProgressLine(enabled=True)
+        progress.update_tool("grep", args)
+        progress.update_tool("read_file", {"path": "README.md"})
+        progress.clear()
+    finally:
+        sys.stdout = old_stdout
+    rendered = capture.getvalue()
+    if "\r\x1b[2K" not in rendered:
+        failures.append("concise progress did not use carriage-return clear")
+    if "2 actions" not in rendered:
+        failures.append("concise progress did not summarize action count")
+
+    if failures:
+        for failure in failures:
+            print(f"FAIL {failure}")
+        return 1
+    print("lmstudio regression self-test passed")
+    return 0
+
+
 def run_key_debug(duration=10.0):
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         print("--debug-keys requires an interactive terminal.", file=sys.stderr)
@@ -11414,6 +11486,8 @@ def main():
     parser.add_argument("--debug-keys", action="store_true",
         help="Print raw terminal key bytes and decoded events for 10 seconds.")
     parser.add_argument("--self-test-keys", action="store_true",
+        help=argparse.SUPPRESS)
+    parser.add_argument("--self-test-regressions", action="store_true",
         help=argparse.SUPPRESS)
     parser.add_argument("--base-url", default=os.environ.get("LMSTUDIO_BASE_URL", DEFAULT_BASE_URL))
     parser.add_argument("--model", default=os.environ.get("LMSTUDIO_MODEL", ""))
@@ -11585,6 +11659,8 @@ def main():
         return
     if args.self_test_keys:
         sys.exit(run_key_decoder_self_test())
+    if args.self_test_regressions:
+        sys.exit(run_regression_self_test())
     if args.debug_keys:
         sys.exit(run_key_debug())
 

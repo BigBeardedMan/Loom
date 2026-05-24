@@ -69,6 +69,36 @@ validate_testing_bundle_version() {
   echo "==> validated bundle version ${actual_version} (${actual_build:-unknown build})"
 }
 
+validate_version_source() {
+  local label="$1"
+  local actual="$2"
+  local expected="$3"
+
+  if [[ "$actual" != "$expected" ]]; then
+    echo "error: ${label} version '${actual}' does not match MARKETING_VERSION '${expected}'" >&2
+    exit 1
+  fi
+}
+
+validate_testing_version_sources() {
+  local expected="$1"
+  local package_version
+  local cargo_version
+  local tauri_version
+  local helper_version
+
+  package_version=$(/usr/bin/python3 -c 'import json; print(json.load(open("windows-tauri/package.json", encoding="utf-8"))["version"])')
+  tauri_version=$(/usr/bin/python3 -c 'import json; print(json.load(open("windows-tauri/src-tauri/tauri.conf.json", encoding="utf-8"))["version"])')
+  cargo_version=$(awk -F'"' '/^version = "/{print $2; exit}' windows-tauri/src-tauri/Cargo.toml)
+  helper_version=$(awk -F'"' '/^CLI_VERSION = "/{print $2; exit}' bin/lmstudio)
+
+  validate_version_source "windows-tauri/package.json" "$package_version" "$expected"
+  validate_version_source "windows-tauri/src-tauri/tauri.conf.json" "$tauri_version" "$expected"
+  validate_version_source "windows-tauri/src-tauri/Cargo.toml" "$cargo_version" "$expected"
+  validate_version_source "bin/lmstudio" "$helper_version" "$expected"
+  echo "==> validated Testing Edition version sources (${expected})"
+}
+
 if [[ -z "$OPENSSL_BIN" ]]; then
   if [[ -x /opt/homebrew/opt/openssl@3/bin/openssl ]]; then
     OPENSSL_BIN=/opt/homebrew/opt/openssl@3/bin/openssl
@@ -138,6 +168,8 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "error: MARKETING_VERSION '$VERSION' is not MAJOR.MINOR.PATCH semver" >&2
   exit 1
 fi
+
+validate_testing_version_sources "$VERSION"
 
 echo "==> Loom Testing Edition ${VERSION} (tag ${TAG})"
 

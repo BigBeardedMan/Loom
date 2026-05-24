@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Icons } from "../../lib/icons";
 import {
   useUsage,
@@ -151,7 +151,7 @@ export function UsageView({ tool }: Props) {
                   <BucketBars buckets={data.chartBuckets} brand={brand} />
                 </Section>
               )}
-              <DonutsRow data={data} brand={brand} />
+              <AnalyticsBreakdown data={data} brand={brand} />
               <HourlyHeatmap hours={data.hourlyDistribution} brand={brand} />
               <PromptsAndTopics data={data} onPreview={setPreview} />
               <ProjectsList data={data} />
@@ -588,130 +588,265 @@ function BucketBars({
   );
 }
 
-function DonutsRow({
+type BreakdownSlice = { label: string; value: number; color: string };
+type BreakdownRow = { label: string; value: number; color: string };
+
+function AnalyticsBreakdown({
   data,
   brand,
 }: {
   data: UsageData;
   brand: string;
 }) {
+  const totalTokens = data.inputTokens + data.outputTokens + data.cachedTokens;
   const tokenMix = [
     { label: "Input", value: data.inputTokens, color: brand },
-    { label: "Output", value: data.outputTokens, color: "rgba(255,255,255,0.6)" },
-    { label: "Cached", value: data.cachedTokens, color: "rgba(255,255,255,0.25)" },
+    { label: "Output", value: data.outputTokens, color: alpha(brand, 0.58) },
+    { label: "Cached", value: data.cachedTokens, color: "rgb(46, 128, 245)" },
   ];
+  const modelRows = rankedBreakdownRows(
+    data.tokensByModel.map((m) => ({ label: shortModel(m.model), value: m.tokens })),
+    brand
+  );
+  const projectRows = rankedBreakdownRows(
+    data.tokensByProject.map((p) => ({ label: p.displayName, value: p.tokens })),
+    "rgb(46, 128, 245)"
+  );
+  const hasBreakdown = modelRows.length > 0 || projectRows.length > 0;
+  if (totalTokens <= 0 && !hasBreakdown && data.promptCount <= 0) return null;
+
   return (
-    <div className="grid grid-cols-3 gap-3" style={{ marginBottom: 18 }}>
-      <DonutCard title="Token mix" slices={tokenMix} />
-      <DonutCard
-        title="Models"
-        slices={data.tokensByModel.slice(0, 6).map((m, i) => ({
-          label: shortModel(m.model),
-          value: m.tokens,
-          color: palette(i),
-        }))}
-      />
-      <DonutCard
-        title="Projects"
-        slices={data.tokensByProject.slice(0, 6).map((p, i) => ({
-          label: p.displayName,
-          value: p.tokens,
-          color: palette(i),
-        }))}
-      />
+    <div className="flex flex-col gap-3" style={{ marginBottom: 18 }}>
+      {totalTokens > 0 && (
+        <TokenMixCard
+          title="Token mix"
+          slices={tokenMix}
+          totalLabel={fmt(totalTokens)}
+        />
+      )}
+      {hasBreakdown && (
+        <div
+          className={modelRows.length > 0 && projectRows.length > 0 ? "grid grid-cols-2 gap-3" : "grid gap-3"}
+        >
+          {modelRows.length > 0 && (
+            <RankedBreakdownCard
+              title="Models"
+              rows={modelRows}
+              emptyText="No model totals in this window."
+            />
+          )}
+          {projectRows.length > 0 && (
+            <RankedBreakdownCard
+              title="Project mix"
+              rows={projectRows}
+              emptyText="No project totals in this window."
+            />
+          )}
+        </div>
+      )}
+      {data.promptCount > 0 && (
+        <div className="flex items-center gap-1" style={{ fontSize: 11, color: "rgba(255,255,255,0.48)" }}>
+          <Icons.textCursor size={12} strokeWidth={2} />
+          <span>
+            {data.promptCount} prompt{data.promptCount === 1 ? "" : "s"} in window
+          </span>
+        </div>
+      )}
     </div>
   );
 }
 
-function DonutCard({
+function TokenMixCard({
   title,
   slices,
+  totalLabel,
 }: {
   title: string;
-  slices: { label: string; value: number; color: string }[];
+  slices: BreakdownSlice[];
+  totalLabel: string;
 }) {
-  const total = useMemo(() => slices.reduce((s, x) => s + x.value, 0), [slices]);
-  const arcs = useMemo(() => {
-    if (total <= 0) return [];
-    let acc = 0;
-    return slices.map((s) => {
-      const start = acc / total;
-      acc += s.value;
-      const end = acc / total;
-      return { ...s, start, end };
-    });
-  }, [slices, total]);
+  const total = slices.reduce((sum, slice) => sum + Math.max(0, slice.value), 0);
   return (
     <div
       style={{
-        padding: 12,
+        padding: 10,
         background: "rgba(255,255,255,0.04)",
         border: "1px solid rgba(255,255,255,0.06)",
         borderRadius: 10,
       }}
     >
-      <div style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", letterSpacing: 0.6, textTransform: "uppercase" }}>
-        {title}
+      <PanelHeader title={title} detail={totalLabel} />
+      <div
+        className="flex overflow-hidden"
+        style={{
+          height: 9,
+          marginTop: 7,
+          borderRadius: 999,
+          background: "rgba(255,255,255,0.07)",
+        }}
+      >
+        {slices
+          .filter((slice) => slice.value > 0)
+          .map((slice) => (
+            <div
+              key={slice.label}
+              title={`${slice.label} · ${fmt(slice.value)} (${formatShare(slice.value, total)})`}
+              style={{
+                width: `${Math.max(1, (slice.value / total) * 100)}%`,
+                background: slice.color,
+              }}
+            />
+          ))}
       </div>
-      <div className="flex items-center gap-3" style={{ marginTop: 8 }}>
-        <svg width={72} height={72} viewBox="0 0 72 72">
-          <circle cx={36} cy={36} r={28} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={10} />
-          {arcs.map((a, i) => (
-            <ArcPath key={i} start={a.start} end={a.end} color={a.color} />
-          ))}
-        </svg>
-        <div className="flex flex-1 flex-col gap-1" style={{ minWidth: 0 }}>
-          {slices.length === 0 && (
-            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>No data</span>
-          )}
-          {slices.slice(0, 4).map((s) => (
-            <div key={s.label} className="flex items-center gap-2" style={{ minWidth: 0 }}>
-              <span
-                style={{ width: 8, height: 8, borderRadius: 2, background: s.color, flex: "none" }}
-              />
-              <span
-                style={{
-                  fontSize: 11,
-                  color: "rgba(255,255,255,0.7)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  flex: 1,
-                }}
-              >
-                {s.label}
-              </span>
-              <span style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", fontFamily: "var(--font-mono)" }}>
-                {fmt(s.value)}
-              </span>
+      <div className="grid grid-cols-3 gap-2" style={{ marginTop: 8 }}>
+        {slices.map((slice) => (
+          <div key={slice.label} className="flex items-start gap-2" style={{ minWidth: 0 }}>
+            <span
+              style={{
+                width: 8,
+                height: 8,
+                marginTop: 2,
+                borderRadius: 2,
+                background: slice.value > 0 ? slice.color : "rgba(255,255,255,0.08)",
+                flex: "none",
+              }}
+            />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 9, fontWeight: 700, color: "rgba(255,255,255,0.45)", textTransform: "uppercase" }}>
+                {slice.label}
+              </div>
+              <div className="flex items-baseline gap-1">
+                <span style={{ fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.82)" }}>
+                  {fmt(slice.value)}
+                </span>
+                <span style={{ fontSize: 10, color: "rgba(255,255,255,0.42)", fontFamily: "var(--font-mono)" }}>
+                  {formatShare(slice.value, total)}
+                </span>
+              </div>
             </div>
-          ))}
-        </div>
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
-function ArcPath({ start, end, color }: { start: number; end: number; color: string }) {
-  const r = 28;
-  const cx = 36;
-  const cy = 36;
-  const a0 = start * Math.PI * 2 - Math.PI / 2;
-  const a1 = end * Math.PI * 2 - Math.PI / 2;
-  const x0 = cx + r * Math.cos(a0);
-  const y0 = cy + r * Math.sin(a0);
-  const x1 = cx + r * Math.cos(a1);
-  const y1 = cy + r * Math.sin(a1);
-  const large = end - start > 0.5 ? 1 : 0;
-  if (end - start < 0.001) return null;
+function RankedBreakdownCard({
+  title,
+  rows,
+  emptyText,
+}: {
+  title: string;
+  rows: BreakdownRow[];
+  emptyText: string;
+}) {
+  const total = rows.reduce((sum, row) => sum + Math.max(0, row.value), 0);
+  const peak = Math.max(1, ...rows.map((row) => row.value));
   return (
-    <path
-      d={`M ${x0} ${y0} A ${r} ${r} 0 ${large} 1 ${x1} ${y1}`}
-      stroke={color}
-      strokeWidth={10}
-      fill="none"
-    />
+    <div
+      style={{
+        padding: 10,
+        background: "rgba(255,255,255,0.04)",
+        border: "1px solid rgba(255,255,255,0.06)",
+        borderRadius: 10,
+      }}
+    >
+      <PanelHeader title={title} detail={total > 0 ? fmt(total) : undefined} />
+      {total === 0 ? (
+        <div style={{ marginTop: 8, fontSize: 11, color: "rgba(255,255,255,0.42)" }}>
+          {emptyText}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2" style={{ marginTop: 8 }}>
+          {rows.map((row) => (
+            <div key={row.label} style={{ minWidth: 0 }}>
+              <div className="flex items-center gap-2">
+                <span
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    fontSize: 11,
+                    fontWeight: 500,
+                    color: "rgba(255,255,255,0.78)",
+                  }}
+                  title={row.label}
+                >
+                  {row.label}
+                </span>
+                <span style={{ fontSize: 10, fontWeight: 600, color: "rgba(255,255,255,0.74)" }}>
+                  {fmt(row.value)}
+                </span>
+                <span style={{ width: 38, textAlign: "right", fontSize: 10, color: "rgba(255,255,255,0.42)", fontFamily: "var(--font-mono)" }}>
+                  {formatShare(row.value, total)}
+                </span>
+              </div>
+              <div
+                title={`${row.label} · ${fmt(row.value)} (${formatShare(row.value, total)})`}
+                style={{
+                  height: 5,
+                  marginTop: 4,
+                  borderRadius: 999,
+                  background: "rgba(255,255,255,0.07)",
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    width: `${Math.max(3, (row.value / peak) * 100)}%`,
+                    height: "100%",
+                    borderRadius: 999,
+                    background: row.color,
+                  }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
+}
+
+function PanelHeader({ title, detail }: { title: string; detail?: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <div style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,0.45)", letterSpacing: 0.6, textTransform: "uppercase" }}>
+        {title}
+      </div>
+      {detail && (
+        <div style={{ marginLeft: "auto", fontSize: 10, fontWeight: 600, color: "rgba(255,255,255,0.5)" }}>
+          {detail}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function rankedBreakdownRows(
+  entries: { label: string; value: number }[],
+  tint: string
+): BreakdownRow[] {
+  const cap = 5;
+  const rows = entries.slice(0, cap).map((entry, index) => ({
+    label: entry.label,
+    value: entry.value,
+    color: alpha(tint, Math.max(0.42, 0.9 - index * 0.11)),
+  }));
+  const rest = entries.slice(cap).reduce((sum, entry) => sum + entry.value, 0);
+  if (rest > 0) {
+    rows.push({ label: "Other", value: rest, color: "rgba(255,255,255,0.18)" });
+  }
+  return rows.filter((row) => row.value > 0);
+}
+
+function formatShare(value: number, total: number): string {
+  if (total <= 0 || value <= 0) return "0%";
+  const pct = (value / total) * 100;
+  if (pct < 0.5) return "<1%";
+  return `${Math.round(pct)}%`;
 }
 
 function HourlyHeatmap({ hours, brand }: { hours: number[]; brand: string }) {
@@ -1059,16 +1194,4 @@ function pad2(n: number): string {
 
 function shortModel(m: string): string {
   return m.replace(/^claude-/, "").replace(/-\d{8}$/, "");
-}
-
-function palette(i: number): string {
-  const colors = [
-    "rgb(242, 99, 46)",
-    "rgb(59, 219, 117)",
-    "rgb(46, 128, 245)",
-    "rgb(244, 179, 75)",
-    "rgb(202, 102, 245)",
-    "rgb(228, 80, 137)",
-  ];
-  return colors[i % colors.length];
 }
