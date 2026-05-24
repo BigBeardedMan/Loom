@@ -8608,9 +8608,11 @@ status.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>~/.codex/sessions/YYYY/MM/DD/rollout-&lt;ts&gt;-&lt;uuid&gt;.jsonl
 </span></code></pre></div>
 <p>Loom scans the rollout for <code>update_plan</code> function calls and surfaces the
-most recent plan from each rollout that's been touched inside the active
-window. Codex steps map onto the same statuses as Claude (<code>pending</code>,
-<code>in_progress</code>, <code>completed</code>).</p>
+most recent active plan from each rollout that's been touched inside the
+active window. A later Codex <code>task_complete</code> event or final-answer event
+hides that plan until a newer <code>update_plan</code> appears, so completed turns do
+not remain pinned as live work. Codex steps map onto the same statuses as
+Claude (<code>pending</code>, <code>in_progress</code>, <code>completed</code>).</p>
 <p><strong>Gemini CLI</strong> does not currently write plan state to disk in any format
 Loom can read. Gemini terminals show in the agent picker, but their
 in-flight plan won't appear in the Tasks pane until the CLI emits a
@@ -8659,7 +8661,8 @@ section above the kanban columns:</p>
 <li>Click a task to expand and read its full description and <code>activeForm</code>.</li>
 </ul>
 <p>When a session finishes, all tasks become terminal, or its session id rotates,
-the live block clears on the next 2 second poll.</p>
+the live block clears on the next 2 second poll. Completed and cancelled-only
+groups are not treated as live.</p>
 <h3 id="multiple-sessions">Multiple sessions<a class="headerlink" href="#multiple-sessions" title="Permanent link">&para;</a></h3>
 <p>If multiple CLI agents are running across multiple Terminal panes (or
 outside Loom), each appears with its own header. The active session count
@@ -8720,9 +8723,10 @@ separate privacy entitlement).</p>
 runs "Clear all". Claude Code and LM Studio task JSON files are deleted. Codex
 rollout files are left untouched because they hold conversation history; Loom
 records a dismissal timestamp keyed to the product/model/session and hides the
-group until a newer <code>update_plan</code> event advances past that mark. Active Codex
-sessions reappear after their next plan update; stuck or completed sessions
-stay cleared.</p>
+group until a newer <code>update_plan</code> event advances past that mark. Codex
+<code>task_complete</code> and final-answer events also suppress older plans until a
+newer plan appears. Active Codex sessions reappear after their next plan
+update; stuck or completed sessions stay cleared.</p>
 <hr />
 <h2 id="9-task-handoff">9. Task Handoff<a class="headerlink" href="#9-task-handoff" title="Permanent link">&para;</a></h2>
 <p>Kanban cards can carry the next action (a prompt or a shell command) and
