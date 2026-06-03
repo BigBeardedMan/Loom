@@ -16,7 +16,8 @@ const PANEL_META: Record<
 > = {
   terminal: { label: "Terminal", icon: "terminal", color: workspaceColorVar.green },
   editor: { label: "Editor", icon: "textCursor", color: workspaceColorVar.blue },
-  tasks: { label: "Tasks", icon: "checkCircle", color: workspaceColorVar.orange },
+  tasks: { label: "Runs", icon: "checkCircle", color: workspaceColorVar.orange },
+  chat: { label: "Chat", icon: "chat", color: workspaceColorVar.blue },
   agent: { label: "Agent", icon: "sparkles", color: workspaceColorVar.purple },
   notes: { label: "Notes", icon: "lightbulb", color: workspaceColorVar.yellow },
   preview: { label: "Preview", icon: "eye", color: workspaceColorVar.pink },
@@ -284,6 +285,8 @@ function panelsForKind(kind: string): PanelType[] {
     case "review":
     case "build":
       return ["preview", "agent"];
+    case "runs":
+      return ["tasks", "chat", "agent", "terminal", "commands"];
     default:
       return [];
   }

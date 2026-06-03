@@ -25,16 +25,22 @@ function matches(e: KeyboardEvent, combo: string): boolean {
   return true;
 }
 
-// Order matches macOS LoomApp.swift add-block menu — Cmd+Shift+1..7.
-const ADD_BLOCK_ORDER: Panel[] = [
-  "terminal",
-  "editor",
-  "tasks",
-  "agent",
-  "notes",
-  "preview",
-  "commands",
-];
+// Order matches macOS LoomApp.swift add-block menu for the current workspace.
+function addBlockOrderForKind(kind?: string): Panel[] {
+  switch (kind) {
+    case "code":
+      return ["terminal", "editor", "tasks", "agent", "commands"];
+    case "ideas":
+      return ["notes", "agent"];
+    case "review":
+    case "build":
+      return ["preview", "agent"];
+    case "runs":
+      return ["tasks", "chat", "agent", "terminal", "commands"];
+    default:
+      return ["terminal", "editor", "tasks", "chat", "agent", "notes", "preview", "commands"];
+  }
+}
 
 export function useGlobalKeymap() {
   const openPalette = useApp((s) => s.openPalette);
@@ -57,6 +63,7 @@ export function useGlobalKeymap() {
       // can still toggle full-row span without focus tracking.
       return layout?.blocks[0]?.id;
     })();
+    const selectedWorkspace = workspaces.find((w) => w.id === selectedWorkspaceId);
 
     const bindings: Binding[] = [
       {
@@ -135,8 +142,8 @@ export function useGlobalKeymap() {
       });
     }
 
-    // Ctrl+Shift+1..7 → add block of nth kind (matches macOS Cmd+Shift+N order).
-    ADD_BLOCK_ORDER.forEach((kind, i) => {
+    // Ctrl+Shift+1..9 → add block of nth kind for the active workspace.
+    addBlockOrderForKind(selectedWorkspace?.kindRaw).forEach((kind, i) => {
       bindings.push({
         combo: `ctrl+shift+${i + 1}`,
         description: `Add ${kind} block`,

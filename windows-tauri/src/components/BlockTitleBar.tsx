@@ -23,6 +23,7 @@ const PANEL_META: Record<
   terminal: { icon: "terminal", color: workspaceColorVar.green },
   editor: { icon: "textCursor", color: workspaceColorVar.blue },
   tasks: { icon: "checkCircle", color: workspaceColorVar.orange },
+  chat: { icon: "chat", color: workspaceColorVar.blue },
   agent: { icon: "sparkles", color: workspaceColorVar.purple },
   notes: { icon: "lightbulb", color: workspaceColorVar.yellow },
   preview: { icon: "eye", color: workspaceColorVar.pink },

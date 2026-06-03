@@ -71,7 +71,7 @@ export function SettingsModal() {
               ["providers", "AI Providers"],
               ["mcp", "MCP Servers"],
               ["shell", "Shell"],
-              ["tasks", "Tasks"],
+              ["tasks", "Runs"],
               ["advanced", "Advanced"],
               ["about", "About"],
             ] as [Tab, string][]
@@ -1233,10 +1233,10 @@ function TasksPanel() {
 
   return (
     <div>
-      <H2>Tasks</H2>
+      <H2>Runs</H2>
       <Hint>
         Hide live agent sessions whose task files haven't moved in this much time. Mirrors
-        macOS Settings → Tasks.
+        macOS Settings → Runs.
       </Hint>
       <label style={{ fontSize: 11, color: text.muted, display: "block", marginBottom: 6 }}>
         Stale window

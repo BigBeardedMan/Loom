@@ -8,7 +8,7 @@ struct SettingsView: View {
                 .padding(20)
 
             TasksSettings()
-                .tabItem { Label("Tasks", systemImage: "checklist") }
+                .tabItem { Label("Runs", systemImage: "rectangle.stack.fill") }
                 .padding(20)
 
             ProvidersSettings()
@@ -74,7 +74,7 @@ private struct TasksSettings: View {
 
     var body: some View {
         Form {
-            Section("Live Agent Tasks") {
+            Section("Live Agent Runs") {
                 Picker("Stale window", selection: $staleHours) {
                     Text("30 minutes").tag(0.5)
                     Text("1 hour").tag(1.0)
@@ -85,7 +85,7 @@ private struct TasksSettings: View {
                 }
                 .pickerStyle(.menu)
 
-                Text("CLI sessions untouched longer than this are treated as dead — their tasks won't appear in the pane.")
+                Text("CLI sessions untouched longer than this are treated as dead, so their runs won't appear in the pane.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

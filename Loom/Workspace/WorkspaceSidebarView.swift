@@ -275,7 +275,7 @@ struct WorkspaceSidebarView: View {
     @ViewBuilder
     private var sessionsSection: some View {
         switch selectedKind {
-        case .code:
+        case .code, .runs:
             terminalSessionsSection
         case .ideas:
             ideaSessionsSection
@@ -850,7 +850,8 @@ struct WorkspaceSidebarView: View {
         let seeds: [(String, WorkspaceColor, WorkspaceKind)] = [
             ("Prompt", .blue,   .code),
             ("Ideas",  .pink,   .ideas),
-            ("Review", .orange, .review)
+            ("Review", .orange, .review),
+            ("Runs",   .green,  .runs)
         ]
 
         for (name, color, kind) in seeds {

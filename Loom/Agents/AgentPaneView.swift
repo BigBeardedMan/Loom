@@ -11,6 +11,11 @@ struct AgentMessage: Identifiable, Hashable {
     enum Role { case user, assistant, system }
 }
 
+enum AgentPanePresentation: Hashable {
+    case agent
+    case chat
+}
+
 /// Chat-style Agent pane. Two provider paths share the UI:
 ///   - Claude / Codex / Gemini: `CLIAgentProvider` subprocess. Auth piggybacks
 ///     on the user's existing CLI OAuth login. Argv shape varies per vendor
@@ -80,10 +85,19 @@ struct AgentPaneView: View {
 
     private let cwd: URL?
     private let handlesExternalRuns: Bool
+    private let presentation: AgentPanePresentation
+    private let sessionNamespace: String?
 
-    init(cwd: URL? = nil, handlesExternalRuns: Bool = true) {
+    init(
+        cwd: URL? = nil,
+        handlesExternalRuns: Bool = true,
+        presentation: AgentPanePresentation = .agent,
+        sessionNamespace: String? = nil
+    ) {
         self.cwd = cwd
         self.handlesExternalRuns = handlesExternalRuns
+        self.presentation = presentation
+        self.sessionNamespace = sessionNamespace
     }
 
     private struct PendingURLRun: Identifiable {
@@ -103,7 +117,8 @@ struct AgentPaneView: View {
     }
 
     private var effectiveAgentMode: Bool {
-        selectedAgent.vendor == .lmstudio ? lmStudioAgentMode : agentMode
+        if presentation == .chat { return false }
+        return selectedAgent.vendor == .lmstudio ? lmStudioAgentMode : agentMode
     }
 
     private var permissionMode: AgentPermissionMode {
@@ -116,11 +131,13 @@ struct AgentPaneView: View {
     }
 
     private var sessionWorkspaceKey: String {
-        AgentSessionStore.workspaceKey(
+        let base = AgentSessionStore.workspaceKey(
             workspaceID: workspace.workspaceID,
             folderPath: sessionWorkspacePath ?? workspace.folderPath,
             workspaceName: workspace.workspaceName
         )
+        guard let sessionNamespace, !sessionNamespace.isEmpty else { return base }
+        return "\(base):\(sessionNamespace)"
     }
 
     private var sessionWorkspacePath: String? {
@@ -362,7 +379,7 @@ struct AgentPaneView: View {
                 RoundedRectangle(cornerRadius: 6)
                     .fill(LoomTheme.orange.opacity(0.16))
                     .frame(width: 28, height: 26)
-                Image(systemName: "sparkles")
+                Image(systemName: presentation == .chat ? "bubble.left.and.bubble.right" : "sparkles")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(LoomTheme.orange)
             }
@@ -380,7 +397,7 @@ struct AgentPaneView: View {
 
             Spacer()
 
-            if effectiveAgentMode {
+            if presentation != .chat && effectiveAgentMode {
                 LoomStatusPill(
                     title: selectedAgent.vendor == .lmstudio ? permissionMode.label : "Agent Mode",
                     systemImage: "wand.and.stars",
@@ -600,7 +617,7 @@ struct AgentPaneView: View {
 
     private var placeholder: some View {
         VStack(spacing: 10) {
-            Image(systemName: "sparkles")
+            Image(systemName: presentation == .chat ? "bubble.left.and.bubble.right" : "sparkles")
                 .font(.system(size: 28, weight: .light))
                 .foregroundStyle(Color(red: 0.95, green: 0.39, blue: 0.18).opacity(0.7))
             Text(placeholderText)
@@ -612,6 +629,12 @@ struct AgentPaneView: View {
     }
 
     private var placeholderText: String {
+        if presentation == .chat {
+            if !workspace.workspaceName.isEmpty {
+                return "Start a chat about \(workspace.workspaceName)."
+            }
+            return "Start a chat about this workspace."
+        }
         if workspace.supportsProposals && workspace.hasActiveTab {
             return "Ask for ideas — I can drop them straight into \u{201C}\(workspace.activeTabName)\u{201D}."
         }
@@ -745,7 +768,7 @@ struct AgentPaneView: View {
 
     private var inputBar: some View {
         HStack(alignment: .bottom, spacing: 9) {
-            if selectedAgent.vendor.isLocalHTTP {
+            if presentation != .chat && selectedAgent.vendor.isLocalHTTP {
                 Button {
                     toggleAgentMode()
                 } label: {
@@ -762,16 +785,14 @@ struct AgentPaneView: View {
                 .disabled(isWaiting)
             }
 
-            if selectedAgent.vendor == .lmstudio && effectiveAgentMode {
+            if presentation != .chat && selectedAgent.vendor == .lmstudio && effectiveAgentMode {
                 permissionModePicker
             }
 
             TextField(
                 "",
                 text: $draft,
-                prompt: Text(effectiveAgentMode && selectedAgent.vendor.isLocalHTTP
-                    ? "Tell the agent what to do…"
-                    : "Ask the agent…").foregroundColor(.white.opacity(0.4)),
+                prompt: Text(inputPlaceholder).foregroundColor(.white.opacity(0.4)),
                 axis: .vertical
             )
             .textFieldStyle(.plain)
@@ -802,6 +823,13 @@ struct AgentPaneView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .background(Color.black.opacity(0.30))
+    }
+
+    private var inputPlaceholder: String {
+        if presentation == .chat { return "Message this chat…" }
+        return effectiveAgentMode && selectedAgent.vendor.isLocalHTTP
+            ? "Tell the agent what to do…"
+            : "Ask the agent…"
     }
 
     private var lmStudioStatusLine: some View {

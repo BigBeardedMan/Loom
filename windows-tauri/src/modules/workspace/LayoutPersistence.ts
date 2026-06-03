@@ -32,6 +32,8 @@ export type Block = {
   terminalAxis?: "h" | "v";
   // Transient restore payload for a recently-closed transcript. Never persisted.
   restoredTranscript?: TerminalTranscriptRestore;
+  // Chat blocks only: stable display index, mirroring macOS autoChatIndex.
+  autoChatIndex?: number;
   // Preview blocks only: defaults the URL to localhost:300X where X is the
   // 0-based index among Preview blocks. Mirrors autoPreviewIndex on Mac.
   autoPreviewIndex?: number;
@@ -71,12 +73,21 @@ export function defaultLayout(kind: WorkspaceKind): Layout {
       case "review":
       case "build":
         return ["preview", "agent"];
+      case "runs":
+        return ["tasks", "chat"];
       default:
         return [];
     }
   })();
+  let chatIndex = 0;
   return {
-    blocks: kinds.map((k) => ({ id: uuid(), kind: k })),
+    blocks: kinds.map((k) => {
+      if (k === "chat") {
+        chatIndex += 1;
+        return { id: uuid(), kind: k, autoChatIndex: chatIndex };
+      }
+      return { id: uuid(), kind: k };
+    }),
   };
 }
 
@@ -95,6 +106,7 @@ function migrateLegacyBlock(raw: unknown): Block | null {
   if (typeof r.fullRowSpan === "boolean") block.fullRowSpan = r.fullRowSpan;
   if (typeof r.terminalCount === "number") block.terminalCount = r.terminalCount;
   if (r.terminalAxis === "h" || r.terminalAxis === "v") block.terminalAxis = r.terminalAxis;
+  if (typeof r.autoChatIndex === "number") block.autoChatIndex = r.autoChatIndex;
   if (typeof r.autoPreviewIndex === "number") block.autoPreviewIndex = r.autoPreviewIndex;
   if (typeof r.pin === "string") {
     const pin = r.pin as BlockPin;

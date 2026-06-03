@@ -5,6 +5,7 @@ enum PanelKind: String, CaseIterable, Identifiable, Codable, Hashable {
     case terminal
     case editor
     case tasks
+    case chat
     case agent
     case notes
     case preview
@@ -16,7 +17,8 @@ enum PanelKind: String, CaseIterable, Identifiable, Codable, Hashable {
         switch self {
         case .terminal: return "Terminal"
         case .editor:   return "Editor"
-        case .tasks:    return "Tasks"
+        case .tasks:    return "Runs"
+        case .chat:     return "Chat"
         case .agent:    return "Agent"
         case .notes:    return "Notes"
         case .preview:  return "Preview"
@@ -28,7 +30,8 @@ enum PanelKind: String, CaseIterable, Identifiable, Codable, Hashable {
         switch self {
         case .terminal: return "terminal"
         case .editor:   return "curlybraces"
-        case .tasks:    return "rectangle.split.3x1"
+        case .tasks:    return "rectangle.stack.fill"
+        case .chat:     return "bubble.left.and.bubble.right"
         case .agent:    return "sparkles"
         case .notes:    return "note.text"
         case .preview:  return "globe"
@@ -92,6 +95,7 @@ final class WorkspaceBlock: Identifiable {
     var widthFraction: Double
     var customTitle: String?
     var autoTerminalIndex: Int?
+    var autoChatIndex: Int?
     var autoPreviewIndex: Int?
     var previewURL: String?
 
@@ -129,6 +133,7 @@ final class WorkspaceBlock: Identifiable {
         self.widthFraction = 1.0
         self.customTitle = nil
         self.autoTerminalIndex = nil
+        self.autoChatIndex = nil
         self.autoPreviewIndex = nil
         self.previewURL = nil
         self.terminalSessions = []
@@ -159,6 +164,9 @@ final class WorkspaceBlock: Identifiable {
         }
         if kind == .terminal, let idx = autoTerminalIndex {
             return idx == 1 ? "Terminal" : "Terminal \(idx)"
+        }
+        if kind == .chat, let idx = autoChatIndex {
+            return idx == 1 ? "Chat" : "Chat \(idx)"
         }
         return kind.label
     }
@@ -279,6 +287,9 @@ final class WorkspaceLayout {
         if kind == .terminal {
             block.autoTerminalIndex = Self.nextTerminalIndex(in: current)
         }
+        if kind == .chat {
+            block.autoChatIndex = Self.nextChatIndex(in: current)
+        }
         if kind == .preview {
             block.autoPreviewIndex = nextPreviewIndex(considering: current)
         }
@@ -316,6 +327,13 @@ final class WorkspaceLayout {
 
     private static func nextTerminalIndex(in blocks: [WorkspaceBlock]) -> Int {
         let used = Set(blocks.compactMap { $0.kind == .terminal ? $0.autoTerminalIndex : nil })
+        var n = 1
+        while used.contains(n) { n += 1 }
+        return n
+    }
+
+    private static func nextChatIndex(in blocks: [WorkspaceBlock]) -> Int {
+        let used = Set(blocks.compactMap { $0.kind == .chat ? $0.autoChatIndex : nil })
         var n = 1
         while used.contains(n) { n += 1 }
         return n
@@ -540,6 +558,13 @@ final class WorkspaceLayout {
             return [
                 preview,
                 WorkspaceBlock(kind: .agent)
+            ]
+        case .runs:
+            let chat = WorkspaceBlock(kind: .chat, cwd: defaultCwd)
+            chat.autoChatIndex = 1
+            return [
+                WorkspaceBlock(kind: .tasks),
+                chat
             ]
         }
     }

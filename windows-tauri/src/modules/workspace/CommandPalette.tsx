@@ -152,7 +152,8 @@ export function CommandPalette() {
               [
                 ["terminal", Icons.terminal, "Terminal"],
                 ["editor", Icons.textCursor, "Editor"],
-                ["tasks", Icons.checkCircle, "Tasks"],
+                ["tasks", Icons.checkCircle, "Runs"],
+                ["chat", Icons.chat, "Chat"],
                 ["agent", Icons.sparkles, "Agent"],
                 ["notes", Icons.lightbulb, "Notes"],
                 ["preview", Icons.eye, "Preview"],

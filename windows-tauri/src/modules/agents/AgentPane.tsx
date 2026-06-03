@@ -60,11 +60,12 @@ const VENDORS: { value: Vendor; label: string }[] = [
 
 const LOCAL_HTTP_VENDORS = new Set<Vendor>(["ollama", "lmstudio", "openai-compat"]);
 
-type Props = { workspace: Workspace; blockId?: string };
+type Props = { workspace: Workspace; blockId?: string; presentation?: "agent" | "chat" };
 
 // Mirrors Loom/Agents/AgentPaneView.swift.
 // Vendor picker, model field, transcript, input bar. Block title bar lives in BlockTitleBar.
-export function AgentPane({ workspace, blockId }: Props) {
+export function AgentPane({ workspace, blockId, presentation = "agent" }: Props) {
+  const isChatPane = presentation === "chat";
   const setBlockStatus = useApp((s) => s.setBlockStatus);
   const [vendor, setVendor] = useState<Vendor>(
     () => (localStorage.getItem(`loom.agent.vendor.${workspace.id}`) as Vendor) || "claude"
@@ -992,7 +993,7 @@ export function AgentPane({ workspace, blockId }: Props) {
             className="flex h-full items-center justify-center"
             style={{ color: "rgba(255, 255, 255, 0.35)", fontSize: 12 }}
           >
-            Ask the agent anything about this workspace.
+            {isChatPane ? "Start a chat about this workspace." : "Ask the agent anything about this workspace."}
           </div>
         )}
         {turns.map((t, i) => (
@@ -1069,7 +1070,7 @@ export function AgentPane({ workspace, blockId }: Props) {
               submit();
             }
           }}
-          placeholder="Message the agent…"
+          placeholder={isChatPane ? "Message this chat…" : "Message the agent…"}
           className="scrollbar-thin flex-1 resize-none focus:outline-none"
           style={{
             background: "rgba(255, 255, 255, 0.06)",

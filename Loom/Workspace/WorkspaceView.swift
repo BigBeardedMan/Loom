@@ -673,6 +673,13 @@ struct WorkspaceView: View {
             EditorPaneView(rootURL: selectedWorkspace?.folderURL)
         case .tasks:
             KanbanPaneView()
+        case .chat:
+            AgentPaneView(
+                cwd: selectedWorkspace?.folderURL,
+                handlesExternalRuns: false,
+                presentation: .chat,
+                sessionNamespace: "chat:\(block.id.uuidString)"
+            )
         case .agent:
             AgentPaneView(
                 cwd: selectedWorkspace?.folderURL,
@@ -691,7 +698,7 @@ struct WorkspaceView: View {
         LoomEmptyState(
             systemImage: "rectangle.dashed",
             title: "Empty deck",
-            detail: "Add Terminal, Editor, Tasks, Agent, or Commands from the command bar.",
+            detail: "Add Terminal, Editor, Runs, Chat, Agent, or Commands from the command bar.",
             tint: selectedWorkspace?.color.color ?? LoomTheme.blue
         )
     }

@@ -23,6 +23,7 @@ enum WorkspaceKind: String, CaseIterable, Codable, Identifiable {
     case code
     case ideas
     case review
+    case runs
 
     var id: String { rawValue }
 
@@ -31,6 +32,7 @@ enum WorkspaceKind: String, CaseIterable, Codable, Identifiable {
         case .code:   return "Prompt"
         case .ideas:  return "Ideas"
         case .review: return "Review"
+        case .runs:   return "Runs"
         }
     }
 
@@ -39,6 +41,7 @@ enum WorkspaceKind: String, CaseIterable, Codable, Identifiable {
         case .code:   return "text.cursor"
         case .ideas:  return "lightbulb"
         case .review: return "magnifyingglass"
+        case .runs:   return "rectangle.stack.fill"
         }
     }
 
@@ -47,6 +50,7 @@ enum WorkspaceKind: String, CaseIterable, Codable, Identifiable {
         case .code:   return [.terminal, .editor, .tasks, .agent, .commands]
         case .ideas:  return [.notes, .agent]
         case .review: return [.preview, .agent]
+        case .runs:   return [.tasks, .chat, .agent, .terminal, .commands]
         }
     }
 }

@@ -21,6 +21,7 @@ enum LayoutPersistence {
         let kind: String
         var customTitle: String?
         var autoTerminalIndex: Int?
+        var autoChatIndex: Int?
         var autoPreviewIndex: Int?
         var previewURL: String?
         var pin: String?
@@ -124,6 +125,7 @@ private extension LayoutPersistence.StoredBlock {
         self.kind = block.kind.rawValue
         self.customTitle = block.customTitle
         self.autoTerminalIndex = block.autoTerminalIndex
+        self.autoChatIndex = block.autoChatIndex
         self.autoPreviewIndex = block.autoPreviewIndex
         self.previewURL = block.previewURL
         self.pin = block.pin?.rawValue
@@ -154,6 +156,7 @@ private extension LayoutPersistence.StoredBlock {
         let block = WorkspaceBlock(kind: kind, cwd: resolvedCwd)
         block.customTitle = customTitle
         block.autoTerminalIndex = autoTerminalIndex
+        block.autoChatIndex = autoChatIndex
         block.autoPreviewIndex = autoPreviewIndex
         block.previewURL = previewURL
         block.pin = pin.flatMap(BlockPin.init(rawValue:))

@@ -1,4 +1,5 @@
 pub mod anthropic;
+pub mod agent_graph;
 pub mod cli;
 pub mod live_tasks;
 pub mod lmstudio;

@@ -25,6 +25,7 @@ export type Panel =
   | "terminal"
   | "editor"
   | "tasks"
+  | "chat"
   | "agent"
   | "notes"
   | "preview"
@@ -94,6 +95,7 @@ const MAC_WORKSPACE_SEEDS: Array<{
   { name: "Prompt", colorName: "blue", kindRaw: "code" },
   { name: "Ideas", colorName: "pink", kindRaw: "ideas" },
   { name: "Review", colorName: "orange", kindRaw: "review" },
+  { name: "Runs", colorName: "green", kindRaw: "runs" },
 ];
 
 function matchesSeedKind(ws: Workspace, kind: Workspace["kindRaw"]) {
@@ -102,7 +104,7 @@ function matchesSeedKind(ws: Workspace, kind: Workspace["kindRaw"]) {
 }
 
 function canonicalWorkspaceList(list: Workspace[]): Workspace[] {
-  return MAC_WORKSPACE_SEEDS.flatMap((seed) => {
+  const seeded = MAC_WORKSPACE_SEEDS.flatMap((seed) => {
     const match = list.find((ws) => matchesSeedKind(ws, seed.kindRaw));
     if (!match) return [];
     return [
@@ -114,6 +116,9 @@ function canonicalWorkspaceList(list: Workspace[]): Workspace[] {
       },
     ];
   });
+  const seededIds = new Set(seeded.map((ws) => ws.id));
+  const extras = list.filter((ws) => !seededIds.has(ws.id));
+  return [...seeded, ...extras];
 }
 
 async function loadCanonicalWorkspaces(): Promise<Workspace[]> {
@@ -241,6 +246,17 @@ export const useApp = create<AppState>((set, get) => ({
     const block = newBlock(kind);
     if (kind === "preview") {
       block.autoPreviewIndex = current.blocks.filter((b) => b.kind === "preview").length;
+    }
+    if (kind === "chat") {
+      const used = new Set(
+        current.blocks
+          .filter((b) => b.kind === "chat")
+          .map((b) => b.autoChatIndex)
+          .filter((v): v is number => typeof v === "number")
+      );
+      let nextIndex = 1;
+      while (used.has(nextIndex)) nextIndex += 1;
+      block.autoChatIndex = nextIndex;
     }
     const next: Layout = { blocks: [...current.blocks, block] };
     set({ layout: next });
@@ -474,4 +490,5 @@ export const workspaceKindLabel: Record<Workspace["kindRaw"], string> = {
   ideas: "Ideas",
   review: "Review",
   build: "Review",
+  runs: "Runs",
 };

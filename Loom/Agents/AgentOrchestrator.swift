@@ -65,6 +65,7 @@ final class AgentOrchestrator {
     let sessionID: String = UUID().uuidString
     let source: AgentSource
     let modelLabel: String?
+    private let gitMetadata: [String: String]
 
     private(set) var tasks: [LiveAgentTask] = []
     private(set) var turns: [Turn] = []
@@ -105,6 +106,7 @@ final class AgentOrchestrator {
         self.toolRunner = toolRunner
         self.source = source
         self.modelLabel = LiveAgentTaskGroup.normalizedModelLabel(modelLabel)
+        self.gitMetadata = Self.captureGitMetadata(workspaceRoot: toolRunner.workspaceRoot)
     }
 
     func cancel() {
@@ -129,14 +131,43 @@ final class AgentOrchestrator {
         transcript = [LLMMessage(role: .user, content: prompt)]
         compactionCount = 0
         didSendMissingToolNudge = false
+        await recordGraphEvent(
+            .graphCreated,
+            title: limited(prompt, max: 80),
+            summary: limited(prompt, max: 240),
+            payload: [
+                "status": "running",
+                "prompt": limited(prompt, max: 500)
+            ]
+        )
+        await recordGraphEvent(
+            .runStarted,
+            title: "Run started",
+            summary: limited(prompt, max: 240),
+            payload: [
+                "status": "running",
+                "prompt": limited(prompt, max: 500)
+            ]
+        )
 
         let task = Task { @MainActor in
             do {
                 try await loop(system: system, onEvent: onEvent)
             } catch is CancellationError {
+                await recordGraphEvent(
+                    .runCancelled,
+                    title: "Agent run cancelled",
+                    payload: ["status": "cancelled"]
+                )
                 onEvent(.cancelled)
             } catch {
                 lastError = error.localizedDescription
+                await recordGraphEvent(
+                    .runFailed,
+                    title: "Agent run failed",
+                    summary: limited(error.localizedDescription, max: 240),
+                    payload: ["status": "failed"]
+                )
                 onEvent(.failed(error.localizedDescription))
                 orchestratorLog.error("Agent loop failed: \(error.localizedDescription, privacy: .public)")
             }
@@ -228,10 +259,30 @@ final class AgentOrchestrator {
                 let turn = Turn(index: turnIndex, assistantText: assistantText, toolCalls: [])
                 turns.append(turn)
                 onEvent(.turnFinished(turn))
+                var completionPayload = ["status": "completed"]
                 if postEditReviewEnabled,
                    let review = await AgentRunReview.build(workspaceRoot: toolRunner.workspaceRoot, turns: turns) {
+                    let preview = reviewPreview(review)
+                    completionPayload["review"] = review
+                    completionPayload["reviewSummary"] = preview
                     onEvent(.reviewReady(review))
+                    await recordGraphEvent(
+                        .handoffWritten,
+                        title: "Review changes",
+                        summary: preview,
+                        payload: [
+                            "status": "ready",
+                            "review": review,
+                            "reviewSummary": preview
+                        ]
+                    )
                 }
+                await recordGraphEvent(
+                    .runCompleted,
+                    title: "Agent run completed",
+                    summary: limited(assistantText, max: 240),
+                    payload: completionPayload
+                )
                 onEvent(.completed(finalText: assistantText))
                 markRemainingTasksComplete()
                 return
@@ -255,6 +306,12 @@ final class AgentOrchestrator {
 
                 let argsString = String(decoding: activeInput, as: UTF8.self)
                 onEvent(.toolStarted(name: call.name, arguments: argsString))
+                await recordGraphEvent(
+                    .toolStarted,
+                    title: call.name,
+                    summary: limited(SecretRedactor.redact(argsString), max: 240),
+                    payload: ["tool": call.name, "status": "running"]
+                )
                 let record: ToolCallRecord
                 if call.name == "update_tasks" {
                     do {
@@ -267,6 +324,7 @@ final class AgentOrchestrator {
                             succeeded: true
                         )
                         onEvent(.taskListUpdated(tasks))
+                        await recordTaskGraphEvents()
                     } catch {
                         record = ToolCallRecord(
                             name: call.name,
@@ -320,6 +378,15 @@ final class AgentOrchestrator {
                 }
                 records.append(record)
                 onEvent(.toolFinished(record))
+                await recordGraphEvent(
+                    .toolCompleted,
+                    title: record.name,
+                    summary: limited(SecretRedactor.redact(record.result), max: 240),
+                    payload: [
+                        "tool": record.name,
+                        "status": record.succeeded ? "completed" : "failed"
+                    ]
+                )
             }
 
             // Feed tool results back to the model as a synthetic user turn.
@@ -443,5 +510,121 @@ final class AgentOrchestrator {
                 return task
             }
         }
+    }
+
+    private func recordTaskGraphEvents() async {
+        for task in tasks {
+            await recordGraphEvent(
+                .taskUpdated,
+                title: task.subject,
+                summary: task.description,
+                payload: [
+                    "taskID": task.taskID,
+                    "subject": task.subject,
+                    "activeForm": task.activeForm,
+                    "status": task.status.rawValue
+                ]
+            )
+        }
+    }
+
+    private func recordGraphEvent(
+        _ type: AgentGraphEventType,
+        title: String? = nil,
+        summary: String? = nil,
+        payload: [String: String] = [:]
+    ) async {
+        let eventPayload = gitMetadata.merging(payload) { _, new in new }
+        let event = AgentGraphEvent(
+            type: type,
+            rootRunID: sessionID,
+            runID: sessionID,
+            source: source.rawValue,
+            workspacePath: toolRunner.workspaceRoot?.path,
+            modelLabel: modelLabel,
+            permissionMode: permissionModeSnapshot,
+            title: title,
+            summary: summary,
+            payload: sanitizedPayload(eventPayload)
+        )
+        try? await AgentGraphLedger.shared.append(event)
+    }
+
+    private func sanitizedPayload(_ payload: [String: String]) -> [String: String] {
+        var sanitized: [String: String] = [:]
+        for (key, value) in payload {
+            let maxLength = key == "review" ? 4_000 : 500
+            sanitized[key] = limited(SecretRedactor.redact(value), max: maxLength)
+        }
+        return sanitized
+    }
+
+    private var permissionModeSnapshot: String? {
+        toolRunner.permissionMode.rawValue
+    }
+
+    private func limited(_ text: String, max: Int) -> String {
+        guard text.count > max else { return text }
+        let end = text.index(text.startIndex, offsetBy: max)
+        return String(text[..<end])
+    }
+
+    private func reviewPreview(_ review: String) -> String {
+        let compact = review
+            .split(separator: "\n")
+            .map { line in
+                line
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .replacingOccurrences(of: "### ", with: "")
+            }
+            .filter { !$0.isEmpty && $0 != "```" }
+            .joined(separator: " · ")
+        return limited(compact, max: 240)
+    }
+
+    private static func captureGitMetadata(workspaceRoot: URL?) -> [String: String] {
+        guard let workspaceRoot else { return [:] }
+        let root = git(["rev-parse", "--show-toplevel"], cwd: workspaceRoot)
+        guard let root, !root.isEmpty else { return [:] }
+
+        var metadata: [String: String] = ["gitRoot": root]
+        if let branch = git(["branch", "--show-current"], cwd: workspaceRoot), !branch.isEmpty {
+            metadata["gitBranch"] = branch
+        } else if let branch = git(["rev-parse", "--abbrev-ref", "HEAD"], cwd: workspaceRoot), !branch.isEmpty {
+            metadata["gitBranch"] = branch
+        }
+        if let head = git(["rev-parse", "--short", "HEAD"], cwd: workspaceRoot), !head.isEmpty {
+            metadata["gitHead"] = head
+        }
+        if let status = git(["status", "--porcelain"], cwd: workspaceRoot) {
+            metadata["gitDirty"] = status.isEmpty ? "false" : "true"
+        }
+        return metadata
+    }
+
+    private static func git(_ arguments: [String], cwd: URL) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = arguments
+        process.currentDirectoryURL = cwd
+        var environment = ProcessInfo.processInfo.environment
+        environment["GIT_OPTIONAL_LOCKS"] = "0"
+        process.environment = environment
+
+        let output = Pipe()
+        let error = Pipe()
+        process.standardOutput = output
+        process.standardError = error
+
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

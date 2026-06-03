@@ -30,14 +30,15 @@ import {
 const PANEL_LABEL: Record<Panel, string> = {
   terminal: "Terminal",
   editor: "Editor",
-  tasks: "Tasks",
+  tasks: "Runs",
+  chat: "Chat",
   agent: "Agent",
   notes: "Notes",
   preview: "Preview",
   commands: "Commands",
 };
 
-const DARK_PANES: Panel[] = ["terminal", "agent", "preview", "notes"];
+const DARK_PANES: Panel[] = ["terminal", "chat", "agent", "preview", "notes"];
 
 // Mirrors Loom/Workspace/WorkspaceView.swift deck. Custom GeometryReader-style
 // layout: compute per-block frames via DeckMetrics, render absolutely
@@ -137,7 +138,7 @@ export function WorkspaceView() {
         className="flex h-full items-center justify-center"
         style={{ fontSize: 12, color: text.muted }}
       >
-        Select Prompt, Ideas, or Review to begin.
+        Select Prompt, Ideas, Review, or Runs to begin.
       </div>
     );
   }
@@ -312,7 +313,7 @@ function BlockShell({
   const status = useApp((s) => s.blockStatus[block.id] ?? "idle");
   const updateBlock = useApp((s) => s.updateBlock);
   const isDark = DARK_PANES.includes(block.kind);
-  const title = block.customTitle?.trim() || PANEL_LABEL[block.kind];
+  const title = block.customTitle?.trim() || defaultBlockTitle(block);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
   const startDrag = useCallback(
@@ -768,6 +769,8 @@ function BlockContent({
       return <EditorPane workspace={workspace} blockId={blockId} />;
     case "tasks":
       return <KanbanPane workspace={workspace} blockId={blockId} />;
+    case "chat":
+      return <AgentPane workspace={workspace} blockId={blockId} presentation="chat" />;
     case "agent":
       return <AgentPane workspace={workspace} blockId={blockId} />;
     case "notes":
@@ -779,6 +782,13 @@ function BlockContent({
     default:
       return null;
   }
+}
+
+function defaultBlockTitle(block: Block): string {
+  if (block.kind === "chat" && typeof block.autoChatIndex === "number") {
+    return block.autoChatIndex === 1 ? "Chat" : `Chat ${block.autoChatIndex}`;
+  }
+  return PANEL_LABEL[block.kind];
 }
 
 // Re-exports to avoid unused-import lint when tightening the file further.

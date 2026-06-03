@@ -135,7 +135,7 @@ export function WorkspaceSidebar() {
         <SectionHeader title="Workspaces" />
         <div className="flex flex-col gap-1">
           {workspaces.length === 0 ? (
-            <EmptyHint label="Preparing Prompt, Ideas, and Review." />
+              <EmptyHint label="Preparing Prompt, Ideas, Review, and Runs." />
           ) : (
             workspaces.map((ws) => (
               <WorkspaceRow
@@ -871,6 +871,8 @@ function kindIconFor(kind: IpcKind): typeof Icons.textCursor {
     case "review":
     case "build":
       return Icons.eye;
+    case "runs":
+      return Icons.checkCircle;
     case "code":
     default:
       return Icons.textCursor;
@@ -884,6 +886,8 @@ function workspaceKindFallback(kind: IpcKind): string {
     case "review":
     case "build":
       return "Review";
+    case "runs":
+      return "Runs";
     case "code":
     default:
       return "Prompt";

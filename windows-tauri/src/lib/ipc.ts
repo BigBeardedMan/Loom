@@ -36,7 +36,7 @@ export type WorkspaceColor =
   | "yellow"
   | "purple";
 
-export type WorkspaceKind = "code" | "ideas" | "review" | "build";
+export type WorkspaceKind = "code" | "ideas" | "review" | "build" | "runs";
 
 export type WorkspaceInput = {
   name: string;
@@ -363,6 +363,14 @@ export const ipc = {
       invoke<LiveAgentTaskGroup[]>("live_tasks_clear_all"),
   },
 
+  agentGraph: {
+    list: () => invoke<AgentGraphRunSummary[]>("agent_graph_list"),
+    read: (rootRunId: string) =>
+      invoke<AgentGraphEvent[]>("agent_graph_read", { rootRunId }),
+    reveal: (rootRunId: string) =>
+      invoke<void>("agent_graph_reveal", { rootRunId }),
+  },
+
   update: {
     getArch: () => invoke<string>("update_get_arch"),
     check: () => invoke<UpdateInfo | null>("update_check"),
@@ -601,6 +609,47 @@ export type LiveAgentTaskGroup = {
   lastActivity: string;
   headline: string | null;
   tasks: LiveAgentTask[];
+};
+
+export type AgentGraphEvent = {
+  schemaVersion: number;
+  eventId?: string;
+  eventID?: string;
+  type: string;
+  occurredAt: string;
+  rootRunId?: string;
+  rootRunID?: string;
+  runId?: string;
+  runID?: string;
+  parentRunId?: string | null;
+  parentRunID?: string | null;
+  source?: AgentSource | string | null;
+  workspacePath?: string | null;
+  modelLabel?: string | null;
+  permissionMode?: string | null;
+  title?: string | null;
+  summary?: string | null;
+  payload?: Record<string, string>;
+};
+
+export type AgentGraphRunSummary = {
+  id: string;
+  title: string;
+  status: string;
+  lastActivity: string;
+  startedAt?: string | null;
+  source?: AgentSource | string | null;
+  modelLabel?: string | null;
+  workspacePath?: string | null;
+  ledgerPath: string;
+  gitRoot?: string | null;
+  gitBranch?: string | null;
+  gitHead?: string | null;
+  gitDirty?: boolean | null;
+  eventCount?: number;
+  toolEventCount?: number;
+  taskCount?: number;
+  toolNames?: string[];
 };
 
 export type AgentSource =
