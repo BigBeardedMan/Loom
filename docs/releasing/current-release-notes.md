@@ -1,5 +1,10 @@
 ## Changes
 
+- Testing Edition version metadata now moves to 9.0.5 across macOS and Windows/Tauri for the Runs workspace release.
+- macOS and Windows now include a canonical Runs workspace for agent supervision, with addable Chat panels alongside Runs, Agent, Terminal, and Commands blocks.
+- Runs now records local agent graph events to `~/.loom/agent-runs/<rootRunId>/events.jsonl`, including run history, task updates, tool previews, review summaries, and git/worktree context.
+- Chat blocks reuse the existing Agent chat surface in chat-only mode, support multiple stable titles like Chat, Chat 2, and Chat 3, and avoid enabling tool-running agent mode by default.
+- Windows Testing now mirrors the Runs workspace seed, default layout, topbar add buttons, command palette, keymap, block rendering, and graph-ledger IPC used on macOS.
 - Testing Edition version metadata now moves to 9.0.4 across macOS, Windows/Tauri, and the bundled LM Studio helper.
 - LM Studio chat-mode runs now prefer native `/api/v1/chat`, capturing model-load progress, prompt-processing progress, reasoning state, token-speed stats, model-load timing, and stateful response IDs.
 - LM Studio Agent Mode keeps the OpenAI-compatible tool-calling path so Loom's workspace boundary checks and permission prompts still protect file, shell, git, test, preview, and task tools.
