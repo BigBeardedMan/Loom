@@ -175,21 +175,34 @@ final class CLIAgentProvider {
     /// terminationHandler so cancellation (which calls `process.terminate()`
     /// from the main actor) can actually unblock the awaiting caller — the
     /// previous `process.waitUntilExit()` form blocked indefinitely.
+    ///
+    /// Both pipes are drained **while the child runs**. Reading them only
+    /// after termination deadlocked once a CLI printed more than the ~64 KB
+    /// pipe buffer: the child blocked in write(2), never exited, and the
+    /// termination handler that would have done the reading never fired —
+    /// the chat turn hung forever.
     private static func runProcess(
         _ process: Process,
         outPipe: Pipe,
         errPipe: Pipe
     ) async throws -> (Int32, Data, Data) {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(Int32, Data, Data), Error>) in
+        let outDrain = CLIPipeDrain(outPipe)
+        let errDrain = CLIPipeDrain(errPipe)
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(Int32, Data, Data), Error>) in
             process.terminationHandler = { proc in
-                let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+                // Wait for both streams to hit EOF so a fast exit doesn't
+                // drop the tail of the output. EOF lands as soon as the
+                // child's last write end closes, which exit guarantees.
+                let outData = outDrain.drainedData()
+                let errData = errDrain.drainedData()
                 continuation.resume(returning: (proc.terminationStatus, outData, errData))
             }
             do {
                 try process.run()
             } catch {
                 process.terminationHandler = nil
+                outDrain.cancel()
+                errDrain.cancel()
                 continuation.resume(throwing: ProviderError.launchFailed(error.localizedDescription))
             }
         }
@@ -204,16 +217,27 @@ final class CLIAgentProvider {
             process.executableURL = URL(fileURLWithPath: "/bin/zsh")
             process.arguments = ["-lic", "echo $PATH"]
             let out = Pipe()
+            let err = Pipe()
             process.standardOutput = out
-            process.standardError = Pipe()
+            process.standardError = err
+            // Drain both pipes while the shell runs — a chatty zshrc that
+            // echoes more than the pipe buffer (to either stream) would
+            // otherwise block the shell and deadlock waitUntilExit. The
+            // stderr drain is discarded; it exists only to keep the pipe
+            // from filling.
+            let outDrain = CLIPipeDrain(out)
+            let errDrain = CLIPipeDrain(err)
             do {
                 try process.run()
             } catch {
+                outDrain.cancel()
+                errDrain.cancel()
                 cliLog.error("PATH probe failed to launch: \(error.localizedDescription, privacy: .public)")
                 return nil
             }
             process.waitUntilExit()
-            let data = out.fileHandleForReading.readDataToEndOfFile()
+            let data = outDrain.drainedData()
+            _ = errDrain.drainedData()
             let text = String(decoding: data, as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             return text.isEmpty ? nil : text
@@ -223,5 +247,54 @@ final class CLIAgentProvider {
             ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
         cachedPath = resolved
         return resolved
+    }
+}
+
+/// Accumulates one pipe's output via `readabilityHandler` while the child
+/// process runs, so the child can never block on a full pipe buffer no
+/// matter how much it prints.
+///
+/// The readability handler intentionally captures the drain strongly; the
+/// cycle (handle → handler → drain → handle) is broken when EOF arrives or
+/// `cancel()` runs, both of which clear the handler.
+private final class CLIPipeDrain: @unchecked Sendable {
+    private let handle: FileHandle
+    private let lock = NSLock()
+    private var buffer = Data()
+    private let eof = DispatchSemaphore(value: 0)
+
+    init(_ pipe: Pipe) {
+        handle = pipe.fileHandleForReading
+        handle.readabilityHandler = { [self] handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty {
+                // EOF — clear the handler so the FileHandle releases this
+                // closure (and the drain it captures).
+                handle.readabilityHandler = nil
+                eof.signal()
+            } else {
+                lock.lock()
+                buffer.append(chunk)
+                lock.unlock()
+            }
+        }
+    }
+
+    /// Blocks until EOF, then returns everything read. EOF lands as soon as
+    /// the child's last write end closes, so after termination this returns
+    /// promptly; the timeout is insurance against a write end leaking into
+    /// some grandchild that outlives the CLI.
+    func drainedData(timeout: TimeInterval = 5) -> Data {
+        _ = eof.wait(timeout: .now() + timeout)
+        lock.lock()
+        defer { lock.unlock() }
+        return buffer
+    }
+
+    /// Launch-failure path: nothing will ever write, so detach the handler
+    /// and unblock any waiter.
+    func cancel() {
+        handle.readabilityHandler = nil
+        eof.signal()
     }
 }
