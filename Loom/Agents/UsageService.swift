@@ -501,7 +501,11 @@ final class UsageService {
             let total = await Task.detached(priority: .utility) {
                 let cutoff = Date().addingTimeInterval(-live)
                 let claude = Self.countActiveJSONL(in: claudeRoot, cutoff: cutoff, recursive: false)
-                let codex  = Self.countActiveJSONL(in: codexRoot,  cutoff: cutoff, recursive: true)
+                // Codex: walk only the day directories that can hold
+                // recently-touched rollouts. This fires every 3 seconds;
+                // enumerating the full multi-year tree each tick burned
+                // CPU/I-O proportional to total history, not activity.
+                let codex = SessionLogScan.recentCodexRollouts(root: codexRoot, cutoff: cutoff).count
                 let lmStudio = Self.countActiveJSON(in: lmStudioRoot, cutoff: cutoff)
                 return claude + codex + lmStudio
             }.value
@@ -555,30 +559,42 @@ final class UsageService {
         return snapshots
     }
 
+    /// How far back the limit-warning sweep looks for rate-limit snapshots.
+    /// Limit data older than this is stale noise — warning on a week-old
+    /// "92% used" reading would mislead more than help.
+    private nonisolated static let limitScanWindow: TimeInterval = 7 * 24 * 3600
+    /// Most candidate rollouts the sweep will open, newest first.
+    private nonisolated static let limitScanMaxFiles = 12
+    /// Only the tail of each rollout is read; rate-limit snapshots ride on
+    /// `token_count` events, so the most recent one lives near EOF.
+    private nonisolated static let limitScanTailBytes = 1_048_576
+
+    /// This runs on launch, every 20 minutes, and on every app activation —
+    /// it must never read the whole session tree. The previous
+    /// implementation did exactly that (every byte of every rollout ever
+    /// written) and ballooned resident memory by gigabytes per sweep on
+    /// machines with long Codex histories.
     private nonisolated static func readLatestCodexLimitSnapshot(root: URL) -> UsageLimitSnapshot? {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: root.path),
-              let enumerator = fm.enumerator(
-                at: root,
-                includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
-                options: [.skipsHiddenFiles]
-              ) else {
-            return nil
-        }
+        guard FileManager.default.fileExists(atPath: root.path) else { return nil }
+        let cutoff = Date().addingTimeInterval(-limitScanWindow)
+        var candidates = SessionLogScan.recentCodexRollouts(root: root, cutoff: cutoff)
+        candidates.sort { $0.mtime > $1.mtime }
 
         var latest: UsageLimitSnapshot?
-        for case let url as URL in enumerator {
-            guard url.pathExtension == "jsonl" else { continue }
-            guard let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
-                .contentModificationDate else { continue }
-            guard let data = try? Data(contentsOf: url),
-                  let text = String(data: data, encoding: .utf8),
-                  let snapshot = parseCodexLatestLimitSnapshot(in: text, fallback: mtime) else {
-                continue
-            }
-            let observedAt = snapshot.observedAt ?? .distantPast
-            if latest?.observedAt.map({ observedAt > $0 }) ?? true {
-                latest = snapshot
+        for candidate in candidates.prefix(limitScanMaxFiles) {
+            // A file's content timestamps can't exceed its mtime, so once we
+            // hold a snapshot newer than the next candidate's mtime nothing
+            // further down the list can win.
+            if let observed = latest?.observedAt, observed >= candidate.mtime { break }
+            autoreleasepool {
+                guard let text = SessionLogScan.tailText(of: candidate.url, maxBytes: limitScanTailBytes),
+                      let snapshot = parseCodexLatestLimitSnapshot(in: text, fallback: candidate.mtime) else {
+                    return
+                }
+                let observedAt = snapshot.observedAt ?? .distantPast
+                if latest?.observedAt.map({ observedAt > $0 }) ?? true {
+                    latest = snapshot
+                }
             }
         }
         return latest
@@ -791,8 +807,17 @@ final class UsageService {
                     }
                 }
 
+                // A file last written before the window holds no in-window
+                // lines — every stat above came from metadata, so skip the
+                // content read entirely. 60s pad absorbs clock skew.
+                guard mtime >= windowStart.addingTimeInterval(-60) else { continue }
+
+                // Pool per file so autoreleased Data/JSON objects drain as we
+                // go instead of accumulating across the whole sweep.
+                autoreleasepool {
+
                 guard let data = try? Data(contentsOf: url),
-                      let text = String(data: data, encoding: .utf8) else { continue }
+                      let text = String(data: data, encoding: .utf8) else { return }
 
                 // Per-line scan: pulls out usage events (with their own
                 // timestamps + models) and user prompts. Lets us bucket by the
@@ -818,6 +843,8 @@ final class UsageService {
                     promptCount: &promptCount,
                     recentPrompts: &recentPrompts
                 )
+
+                } // autoreleasepool
             }
         }
 
@@ -1244,6 +1271,17 @@ final class UsageService {
             return .unavailable(.codex, timeframe: timeframe, referenceDate: windowEnd)
         }
 
+        // Files whose last write predates the window can't contribute any
+        // in-window lines — their content never needs to be read. The
+        // 7-day floor keeps the latest rate-limit snapshot discoverable
+        // even on a short timeframe; the 60s pad absorbs clock skew between
+        // event timestamps and file mtimes.
+        let contentCutoff = min(
+            windowStart.addingTimeInterval(-60),
+            startOfToday,
+            windowEnd.addingTimeInterval(-limitScanWindow)
+        )
+
         for case let url as URL in enumerator {
             guard url.pathExtension == "jsonl" else { continue }
             guard let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
@@ -1251,11 +1289,23 @@ final class UsageService {
             sessionsTotal += 1
             if mtime >= liveCutoff   { activeSessions += 1 }
 
+            guard mtime >= contentCutoff else {
+                if mtime >= startOfToday { sessionsToday += 1 }
+                if lastActivity == nil || mtime > lastActivity! { lastActivity = mtime }
+                continue
+            }
+
+            // Pool per file: Data(contentsOf:) and JSONSerialization produce
+            // autoreleased objects, and this whole sweep runs as one detached
+            // job — without a per-file pool nothing drains until every file
+            // has been read, so peak memory tracked the total bytes scanned.
+            autoreleasepool {
+
             guard let data = try? Data(contentsOf: url),
                   let text = String(data: data, encoding: .utf8) else {
                 if mtime >= startOfToday { sessionsToday += 1 }
                 if lastActivity == nil || mtime > lastActivity! { lastActivity = mtime }
-                continue
+                return
             }
 
             var sessionStartedAt = mtime
@@ -1349,6 +1399,8 @@ final class UsageService {
                     projectLastActivity[sessionProject] = sessionActivity
                 }
             }
+
+            } // autoreleasepool
         }
 
         let chartBuckets: [UsageBucket] = zip(boundaries, bucketTokens).map { boundary, tokens in

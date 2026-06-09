@@ -529,20 +529,40 @@ final class LiveAgentTasksService {
         return labels
     }
 
-    nonisolated private static func readLatestClaudeModelLabel(at url: URL) -> String? {
-        guard let data = try? Data(contentsOf: url),
-              let text = String(data: data, encoding: .utf8) else { return nil }
+    /// Session-model labels keyed by project JSONL path + stamp. During an
+    /// active Claude Code chat the session file flushes every few seconds;
+    /// between flushes the stamp matches and the poll skips the read. The
+    /// previous behavior re-read the whole session log (tens of megabytes
+    /// for a long conversation) every 2 seconds.
+    private nonisolated static let claudeModelLabelCache = StampedParseCache<String?>()
+    /// Model labels ride on every assistant message, so any active session
+    /// has one well inside this trailing chunk.
+    private nonisolated static let claudeModelTailBytes = 4 * 1_048_576
 
-        let decoder = JSONDecoder()
-        var latest: String?
-        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            guard line.contains("\"model\"") else { continue }
-            guard let lineData = String(line).data(using: .utf8),
-                  let parsed = try? decoder.decode(ClaudeProjectLine.self, from: lineData),
-                  let model = LiveAgentTaskGroup.normalizedModelLabel(parsed.message?.model) else { continue }
-            latest = model
+    nonisolated private static func readLatestClaudeModelLabel(at url: URL) -> String? {
+        let stamp = SessionLogScan.stamp(of: url)
+        if let stamp, let cached = claudeModelLabelCache.value(for: url.path, stamp: stamp) {
+            return cached
         }
-        return latest
+        let label: String? = autoreleasepool {
+            guard let text = SessionLogScan.tailText(of: url, maxBytes: claudeModelTailBytes) else {
+                return nil
+            }
+            let decoder = JSONDecoder()
+            var latest: String?
+            for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+                guard line.contains("\"model\"") else { continue }
+                guard let lineData = String(line).data(using: .utf8),
+                      let parsed = try? decoder.decode(ClaudeProjectLine.self, from: lineData),
+                      let model = LiveAgentTaskGroup.normalizedModelLabel(parsed.message?.model) else { continue }
+                latest = model
+            }
+            return latest
+        }
+        if let stamp {
+            claudeModelLabelCache.store(label, for: url.path, stamp: stamp)
+        }
+        return label
     }
 
     // MARK: - Codex
@@ -553,18 +573,15 @@ final class LiveAgentTasksService {
     nonisolated static func collectCodexGroups(root: URL, cutoff: Date) -> [LiveAgentTaskGroup] {
         let fm = FileManager.default
         guard fm.fileExists(atPath: root.path) else { return [] }
-        guard let enumerator = fm.enumerator(
-            at: root,
-            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else { return [] }
 
         var collected: [LiveAgentTaskGroup] = []
-        for case let url as URL in enumerator {
-            guard url.pathExtension == "jsonl" else { continue }
-            guard let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
-                .contentModificationDate else { continue }
-            guard mtime >= cutoff else { continue }
+        // Walk only the day directories that can hold rollouts inside the
+        // active window. This runs every 2 seconds; enumerating the entire
+        // dated tree each tick scaled with total Codex history (gigabytes
+        // for long-time users), not with current activity.
+        for rollout in SessionLogScan.recentCodexRollouts(root: root, cutoff: cutoff) {
+            let url = rollout.url
+            let mtime = rollout.mtime
 
             let sessionID = codexSessionID(from: url)
             guard let snapshot = readLatestCodexPlanSnapshot(at: url, fallbackActivity: mtime),
@@ -672,16 +689,44 @@ final class LiveAgentTasksService {
         }
     }
 
+    /// Parsed plan snapshots keyed by rollout path + (mtime, size). The
+    /// 2-second poll otherwise re-reads every active rollout end-to-end on
+    /// each tick — for a chatty Codex session that's a multi-megabyte file
+    /// re-parsed dozens of times a minute. Nil results are cached too, so
+    /// rollouts that never emit a plan aren't re-scanned every tick.
+    private nonisolated static let codexPlanCache = StampedParseCache<CodexPlanSnapshot?>()
+    /// Only the trailing chunk of a rollout is scanned. The pane shows the
+    /// *latest* plan, which lives near EOF; a plan whose most recent update
+    /// is buried more than 8 MB up an hour-active rollout is stale anyway.
+    private nonisolated static let codexPlanTailBytes = 8 * 1_048_576
+
     /// Scan a rollout JSONL for `function_call` lines whose `name` is
     /// `update_plan`. Returns the most recent plan, or nil if the rollout
-    /// never emitted one.
+    /// never emitted one. Cached by file stamp; reads at most the tail.
     nonisolated private static func readLatestCodexPlanSnapshot(
         at url: URL,
         fallbackActivity: Date
     ) -> CodexPlanSnapshot? {
-        guard let data = try? Data(contentsOf: url),
-              let text = String(data: data, encoding: .utf8) else { return nil }
+        let stamp = SessionLogScan.stamp(of: url)
+        if let stamp, let cached = codexPlanCache.value(for: url.path, stamp: stamp) {
+            return cached
+        }
+        let parsed: CodexPlanSnapshot? = autoreleasepool {
+            guard let text = SessionLogScan.tailText(of: url, maxBytes: codexPlanTailBytes) else {
+                return nil
+            }
+            return parseCodexPlanSnapshot(in: text, fallbackActivity: fallbackActivity)
+        }
+        if let stamp {
+            codexPlanCache.store(parsed, for: url.path, stamp: stamp)
+        }
+        return parsed
+    }
 
+    nonisolated private static func parseCodexPlanSnapshot(
+        in text: String,
+        fallbackActivity: Date
+    ) -> CodexPlanSnapshot? {
         let decoder = JSONDecoder()
         var latest: [CodexPlanStep]?
         var modelLabel: String?
