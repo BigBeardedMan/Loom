@@ -1,5 +1,8 @@
 ## Changes
 
+- Testing Edition version metadata now moves to 9.0.6 across macOS, Windows/Tauri, and the bundled LM Studio helper.
+- Fixed runaway memory consumption: the usage dashboard, rate-limit sweep, and live-task polls re-read the entire `~/.codex/sessions` and `~/.claude/projects` trees (gigabytes for long-time CLI users) on timers and on every app activation. Polls now walk only the day directories inside their activity window, read bounded file tails, and cache parse results by file stamp, so memory no longer climbs the longer Loom runs.
+- Fixed embedded CLI chat hanging forever when a turn printed more than 64KB: process output is now drained while the CLI runs instead of after it exits, so claude/codex/gemini turns can no longer deadlock on a full pipe.
 - Testing Edition version metadata now moves to 9.0.5 across macOS and Windows/Tauri for the Runs workspace release.
 - macOS and Windows now include a canonical Runs workspace for agent supervision, with addable Chat panels alongside Runs, Agent, Terminal, and Commands blocks.
 - Runs now records local agent graph events to `~/.loom/agent-runs/<rootRunId>/events.jsonl`, including run history, task updates, tool previews, review summaries, and git/worktree context.
