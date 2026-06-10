@@ -1,6 +1,6 @@
 [package]
 name = "loom"
-version = "9.0.7"
+version = "9.0.8"
 description = "Loom for Windows: integrated workspace cockpit with terminal, editor, AI agents, kanban, notes, and build preview."
 authors = ["BigBeardedMan"]
 edition = "2021"
