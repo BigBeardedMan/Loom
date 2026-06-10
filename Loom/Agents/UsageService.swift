@@ -1692,9 +1692,15 @@ final class UsageService {
         return candidates.compactMap { $0 }.first(where: hasCodexRateLimitFields)
     }
 
+    /// A rate-limit payload counts only when it carries at least one usable
+    /// field. JSONSerialization maps JSON `null` to NSNull, which is non-nil
+    /// — newer Codex CLIs emit `rate_limits` lines with every field null
+    /// (e.g. `limit_id: "premium"`), and treating those as real snapshots
+    /// let an empty line shadow the latest genuine percentages the moment
+    /// it was written.
     private nonisolated static func hasCodexRateLimitFields(_ value: [String: Any]) -> Bool {
-        value["primary"] != nil
-            || value["secondary"] != nil
+        value["primary"] as? [String: Any] != nil
+            || value["secondary"] as? [String: Any] != nil
             || doubleValue(value["credits"]) != nil
             || stringValue(value["plan_type"]) != nil
             || stringValue(value["rate_limit_reached_type"]) != nil
