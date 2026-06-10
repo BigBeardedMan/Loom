@@ -1,5 +1,7 @@
 ## Changes
 
+- Testing Edition version metadata now moves to 9.0.9 across macOS, Windows/Tauri, and the bundled LM Studio helper.
+- The Limits tab now opens instantly: it reads the dedicated fast limit sweep instead of waiting behind the full usage rebuild (which can take minutes on Year timeframes with large Codex histories), and it refreshes its meters the moment the tab opens.
 - Testing Edition version metadata now moves to 9.0.8 across macOS, Windows/Tauri, and the bundled LM Studio helper.
 - The Usage panel's Limits tab now works for Claude Code: a 5-hour rolling-block monitor estimated from local token logs (current block vs your largest recent block, with reset time), labeled as a local estimate since Claude Code does not log official percentages.
 - Testing Edition version metadata now moves to 9.0.7 across macOS, Windows/Tauri, and the bundled LM Studio helper.
