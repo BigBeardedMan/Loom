@@ -45,8 +45,12 @@ enum CLITool: String, CaseIterable, Identifiable, Hashable, Sendable {
 
     var supportsLimitSignals: Bool {
         switch self {
-        case .codex: return true
-        case .claude, .lmstudio: return false
+        // Codex logs official rate-limit percentages; Claude Code doesn't,
+        // so its panel is a local estimate reconstructed from per-turn token
+        // timestamps (5-hour rolling blocks, measured against the largest
+        // block observed recently).
+        case .codex, .claude: return true
+        case .lmstudio: return false
         }
     }
 }
@@ -522,11 +526,12 @@ final class UsageService {
         limitWarningRefreshTask?.cancel()
         limitWarningRefreshGeneration &+= 1
         let myGeneration = limitWarningRefreshGeneration
+        let claudeRoot = claudeProjectsRoot
         let codexRoot = codexSessionsRoot
 
         limitWarningRefreshTask = Task { [weak self] in
             let snapshots = await Task.detached(priority: .utility) {
-                Self.computeLimitSnapshots(codexRoot: codexRoot)
+                Self.computeLimitSnapshots(claudeRoot: claudeRoot, codexRoot: codexRoot)
             }.value
             guard let self, myGeneration == self.limitWarningRefreshGeneration else { return }
             self.applyLimitSnapshots(snapshots)
@@ -550,13 +555,132 @@ final class UsageService {
     }
 
     private nonisolated static func computeLimitSnapshots(
+        claudeRoot: URL,
         codexRoot: URL
     ) -> [CLITool: UsageLimitSnapshot] {
         var snapshots: [CLITool: UsageLimitSnapshot] = [:]
+        if let claude = readClaudeLimitEstimate(root: claudeRoot) {
+            snapshots[.claude] = claude
+        }
         if let codex = readLatestCodexLimitSnapshot(root: codexRoot) {
             snapshots[.codex] = codex
         }
         return snapshots
+    }
+
+    // MARK: - Claude limit estimate
+
+    /// Claude Code's plans meter usage in 5-hour rolling blocks, but the CLI
+    /// doesn't log official percentages locally. It does log every assistant
+    /// turn's token usage with a timestamp, which is enough to reconstruct
+    /// the blocks the same way community usage monitors do: a block anchors
+    /// at the first turn (floored to the hour) and spans five hours; the
+    /// next turn after a block ends starts a new one.
+    private nonisolated static let claudeBlockSpan: TimeInterval = 5 * 3600
+    /// How far back the estimator reads. Eight days covers the current
+    /// block plus enough completed blocks to establish a personal ceiling.
+    private nonisolated static let claudeEstimateLookback: TimeInterval = 8 * 24 * 3600
+
+    /// Builds a `UsageLimitSnapshot` for Claude from local logs. The meter
+    /// reads "current block tokens as a share of the largest completed block
+    /// in the lookback" — a personal-ceiling estimate, labeled as such, not
+    /// an official quota. Returns nil when there's no recent activity.
+    private nonisolated static func readClaudeLimitEstimate(
+        root: URL,
+        now: Date = Date()
+    ) -> UsageLimitSnapshot? {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: root.path) else { return nil }
+        let cutoff = now.addingTimeInterval(-claudeEstimateLookback)
+        guard let usageRegex = claudeUsageRegex else { return nil }
+
+        var events: [(ts: Date, tokens: Int)] = []
+        let projectDirs = (try? fm.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        for projectDir in projectDirs {
+            let inner = (try? fm.contentsOfDirectory(
+                at: projectDir,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            )) ?? []
+            for url in inner where url.pathExtension == "jsonl" {
+                guard let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                    .contentModificationDate, mtime >= cutoff else { continue }
+                autoreleasepool {
+                    guard let data = try? Data(contentsOf: url),
+                          let text = String(data: data, encoding: .utf8) else { return }
+                    for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+                        guard line.contains("\"usage\":{") else { continue }
+                        let lineString = String(line)
+                        let nsLine = lineString as NSString
+                        let range = NSRange(location: 0, length: nsLine.length)
+                        guard let match = usageRegex.firstMatch(in: lineString, options: [], range: range),
+                              match.numberOfRanges >= 5 else { continue }
+                        let total = parseInt(nsLine, range: match.range(at: 1))
+                            + parseInt(nsLine, range: match.range(at: 2))
+                            + parseInt(nsLine, range: match.range(at: 3))
+                            + parseInt(nsLine, range: match.range(at: 4))
+                        guard total > 0 else { continue }
+                        let ts = parseClaudeTimestamp(line: lineString, fallback: mtime)
+                        guard ts >= cutoff, ts <= now.addingTimeInterval(300) else { continue }
+                        events.append((ts: ts, tokens: total))
+                    }
+                }
+            }
+        }
+        guard !events.isEmpty else { return nil }
+        events.sort { $0.ts < $1.ts }
+
+        // Fold events into 5-hour blocks, hour-anchored like the plan's own
+        // accounting.
+        var blockStarts: [Date] = []
+        var blockTokens: [Int] = []
+        for event in events {
+            if let start = blockStarts.last,
+               event.ts < start.addingTimeInterval(claudeBlockSpan) {
+                blockTokens[blockTokens.count - 1] += event.tokens
+            } else {
+                let anchor = Date(
+                    timeIntervalSinceReferenceDate:
+                        (event.ts.timeIntervalSinceReferenceDate / 3600).rounded(.down) * 3600
+                )
+                blockStarts.append(anchor)
+                blockTokens.append(event.tokens)
+            }
+        }
+
+        let currentStart = blockStarts[blockStarts.count - 1]
+        let currentEnd = currentStart.addingTimeInterval(claudeBlockSpan)
+        let blockIsLive = now < currentEnd
+        let completedTokens = blockIsLive ? blockTokens.dropLast() : blockTokens[...]
+        let peak = completedTokens.max()
+
+        let usedPercent: Double?
+        if !blockIsLive {
+            // Between blocks: the next turn starts a fresh window.
+            usedPercent = 0
+        } else if let peak, peak > 0 {
+            usedPercent = min(100, Double(blockTokens[blockTokens.count - 1]) / Double(peak) * 100)
+        } else {
+            // First-ever block in the lookback — no ceiling to compare against.
+            usedPercent = nil
+        }
+
+        return UsageLimitSnapshot(
+            primaryUsedPercent: usedPercent,
+            primaryWindowMinutes: Int(claudeBlockSpan / 60),
+            primaryResetsAt: blockIsLive ? currentEnd : nil,
+            secondaryUsedPercent: nil,
+            secondaryWindowMinutes: nil,
+            secondaryResetsAt: nil,
+            planType: "local estimate",
+            credits: nil,
+            reachedType: nil,
+            observedAt: events.last?.ts
+        )
     }
 
     /// How far back the limit-warning sweep looks for rate-limit snapshots.
@@ -915,7 +1039,7 @@ final class UsageService {
             recentPrompts: trimmedRecent,
             hourlyDistribution: hourlyDistribution,
             promptCount: promptCount,
-            limitSnapshot: nil
+            limitSnapshot: readClaudeLimitEstimate(root: root, now: windowEnd)
         )
     }
 
