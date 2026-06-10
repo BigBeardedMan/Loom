@@ -1,5 +1,7 @@
 ## Changes
 
+- Testing Edition version metadata now moves to 9.0.8 across macOS, Windows/Tauri, and the bundled LM Studio helper.
+- The Usage panel's Limits tab now works for Claude Code: a 5-hour rolling-block monitor estimated from local token logs (current block vs your largest recent block, with reset time), labeled as a local estimate since Claude Code does not log official percentages.
 - Testing Edition version metadata now moves to 9.0.7 across macOS, Windows/Tauri, and the bundled LM Studio helper.
 - Fixed the Codex Limits panel going blank: newer Codex CLIs write `rate_limits` lines with every field null, and the newest empty line shadowed the latest real percentages. All-null lines are now ignored, so the panel shows the most recent meaningful snapshot (with its observed date) again.
 - Testing Edition version metadata now moves to 9.0.6 across macOS, Windows/Tauri, and the bundled LM Studio helper.
