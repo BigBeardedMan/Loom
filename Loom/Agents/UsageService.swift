@@ -355,6 +355,13 @@ final class UsageService {
     /// snapshot crosses the threshold again.
     var limitWarnings: [CLITool: UsageLimitWarning] = [:]
 
+    /// Latest limit snapshot per tool from the *dedicated* limit sweep,
+    /// which reads bounded tails and finishes in about a second. The Limits
+    /// tab renders from this so it never waits on the full analytics
+    /// snapshot — a Year-range rebuild can take minutes on a large Codex
+    /// history, and limits shouldn't be hostage to token charts.
+    var limitSnapshots: [CLITool: UsageLimitSnapshot] = [:]
+
     var limitWarningThresholdPercent: Double { Self.limitWarningThresholdPercent }
 
     /// Active = log file touched in the last 5 minutes. CLIs flush to disk on
@@ -466,11 +473,15 @@ final class UsageService {
             guard myGeneration == self.refreshGeneration else { return }
             self.tools = snapshot
             self.activeSessionCount = snapshot.reduce(0) { $0 + $1.activeSessions }
-            self.applyLimitSnapshots(snapshot.reduce(into: [CLITool: UsageLimitSnapshot]()) { partial, tool in
+            let snapshotsByTool = snapshot.reduce(into: [CLITool: UsageLimitSnapshot]()) { partial, tool in
                 if let limitSnapshot = tool.limitSnapshot {
                     partial[tool.tool] = limitSnapshot
                 }
-            })
+            }
+            for (tool, snap) in snapshotsByTool {
+                self.limitSnapshots[tool] = snap
+            }
+            self.applyLimitSnapshots(snapshotsByTool)
             self.lastRefreshedAt = .now
             self.isRefreshing = false
         }
@@ -534,6 +545,9 @@ final class UsageService {
                 Self.computeLimitSnapshots(claudeRoot: claudeRoot, codexRoot: codexRoot)
             }.value
             guard let self, myGeneration == self.limitWarningRefreshGeneration else { return }
+            for (tool, snap) in snapshots {
+                self.limitSnapshots[tool] = snap
+            }
             self.applyLimitSnapshots(snapshots)
         }
     }

@@ -39,12 +39,16 @@ struct UsageView: View {
             Divider().overlay(LoomTheme.hairline)
 
             ZStack {
-                if usage.tools.isEmpty {
+                // Limits render from the dedicated fast sweep, so they show
+                // immediately and never dim behind the analytics rebuild —
+                // a Year-range snapshot can take minutes on a big history.
+                let showingLimits = mode == .limits && canShowLimits
+                if usage.tools.isEmpty && !showingLimits {
                     placeholder
                 } else {
                     ScrollView {
                         VStack(spacing: 14) {
-                            if mode == .limits && canShowLimits {
+                            if showingLimits {
                                 limitsDashboard
                             } else {
                                 toolDashboard
@@ -52,14 +56,15 @@ struct UsageView: View {
                         }
                         .padding(16)
                     }
-                    .opacity(usage.isRefreshing ? 0.25 : 1)
-                    .allowsHitTesting(!usage.isRefreshing)
+                    .opacity(usage.isRefreshing && !showingLimits ? 0.25 : 1)
+                    .allowsHitTesting(!(usage.isRefreshing && !showingLimits))
                 }
 
                 // Sits above existing data while a snapshot rebuilds — Year
                 // refreshes can take ~minute and the unannotated wait left
-                // the dashboard looking frozen.
-                if usage.isRefreshing && !usage.tools.isEmpty {
+                // the dashboard looking frozen. Never over the Limits tab,
+                // which has its own fast data path.
+                if usage.isRefreshing && !usage.tools.isEmpty && !showingLimits {
                     refreshingOverlay
                 }
             }
@@ -296,13 +301,23 @@ struct UsageView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
+    /// Prefer the dedicated fast-sweep snapshot; fall back to whatever the
+    /// full analytics snapshot carried. Keeps the Limits tab live even while
+    /// (or before) a long Year-range rebuild runs.
+    private func resolvedLimitSnapshot(_ tool: CLIToolUsage) -> UsageLimitSnapshot? {
+        usage.limitSnapshots[tool.tool] ?? tool.limitSnapshot
+    }
+
     @ViewBuilder
     private func limitBody(_ tool: CLIToolUsage) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            if tool.isInstalled {
+            // A fast-sweep snapshot means the tool's logs exist and parse,
+            // even if the analytics snapshot hasn't landed yet (its
+            // placeholder reports isInstalled = false until then).
+            if tool.isInstalled || resolvedLimitSnapshot(tool) != nil {
                 limitHero(tool)
 
-                if let snapshot = tool.limitSnapshot, hasLimitData(snapshot) {
+                if let snapshot = resolvedLimitSnapshot(tool), hasLimitData(snapshot) {
                     let rows = limitRows(snapshot)
                     if !rows.isEmpty {
                         LazyVGrid(
@@ -531,6 +546,9 @@ struct UsageView: View {
                     usageModeButton(title: "Limits", isActive: mode == .limits) {
                         mode = .limits
                         usage.acknowledgeLimitWarning(for: tool)
+                        // Cheap dedicated sweep (bounded tail reads) so the
+                        // meters are current the moment the tab opens.
+                        usage.requestLimitWarningRefresh()
                     }
                     .overlay(alignment: .topLeading) {
                         if usage.hasUnacknowledgedLimitWarning(for: tool) {
@@ -869,7 +887,7 @@ struct UsageView: View {
     }
 
     private func limitPressure(for tool: CLIToolUsage) -> LimitPressure {
-        guard let snapshot = tool.limitSnapshot, hasLimitData(snapshot) else {
+        guard let snapshot = resolvedLimitSnapshot(tool), hasLimitData(snapshot) else {
             return LimitPressure(
                 label: "No Signal",
                 detail: "Loom is watching local logs for limit snapshots.",
@@ -927,7 +945,7 @@ struct UsageView: View {
     }
 
     private func limitPressureRatio(for tool: CLIToolUsage) -> Double {
-        guard let snapshot = tool.limitSnapshot else { return 0.08 }
+        guard let snapshot = resolvedLimitSnapshot(tool) else { return 0.08 }
         if snapshot.reachedType != nil { return 1 }
         let peak = [
             snapshot.primaryUsedPercent,
