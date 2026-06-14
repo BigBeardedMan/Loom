@@ -52,7 +52,7 @@ struct KanbanPaneView: View {
             titleVisibility: .visible
         ) {
             Button("Clear all", role: .destructive) {
-                liveAgentTasks.clearAll()
+                liveAgentTasks.clear(groups: scopedLiveTaskGroups)
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -61,8 +61,13 @@ struct KanbanPaneView: View {
     }
 
     private var visibleTaskGroups: [LiveAgentTaskGroup] {
-        let liveIDs = Set(liveAgentTasks.groups.map(\.id))
-        return liveAgentTasks.groups + projectedRunGroups.filter { !liveIDs.contains($0.id) }
+        let liveIDs = Set(scopedLiveTaskGroups.map(\.id))
+        return scopedLiveTaskGroups + projectedRunGroups.filter { !liveIDs.contains($0.id) }
+    }
+
+    private var scopedLiveTaskGroups: [LiveAgentTaskGroup] {
+        guard let root = normalizedWorkspacePath else { return liveAgentTasks.groups }
+        return liveAgentTasks.groups.filter { liveGroupIsInScope($0, root: root) }
     }
 
     private var visibleTasks: [LiveAgentTask] {
@@ -70,7 +75,7 @@ struct KanbanPaneView: View {
     }
 
     private func isLiveGroup(_ group: LiveAgentTaskGroup) -> Bool {
-        liveAgentTasks.groups.contains { $0.id == group.id }
+        scopedLiveTaskGroups.contains { $0.id == group.id }
     }
 
     private func sessionHeader(_ group: LiveAgentTaskGroup, isHistorical: Bool = false) -> some View {
@@ -168,7 +173,7 @@ struct KanbanPaneView: View {
             .foregroundStyle(.secondary)
             .help("Refresh now")
 
-            if !liveAgentTasks.groups.isEmpty {
+            if !scopedLiveTaskGroups.isEmpty {
                 Button {
                     confirmClearAll = true
                 } label: {
@@ -409,7 +414,7 @@ struct KanbanPaneView: View {
     }
 
     private var clearAllMessage: String {
-        let labels = Array(Set(liveAgentTasks.groups.map(\.displayName))).sorted()
+        let labels = Array(Set(scopedLiveTaskGroups.map(\.displayName))).sorted()
         let labelText: String
         if labels.count <= 3 {
             labelText = labels.joined(separator: ", ")
@@ -682,6 +687,15 @@ struct KanbanPaneView: View {
             let candidate = URL(fileURLWithPath: workspacePath).standardizedFileURL.path
             return candidate == root || candidate.hasPrefix(root + "/")
         }
+    }
+
+    private func liveGroupIsInScope(_ group: LiveAgentTaskGroup, root: String) -> Bool {
+        guard let workspacePath = group.workspacePath,
+              !workspacePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+        let candidate = URL(fileURLWithPath: workspacePath).standardizedFileURL.path
+        return candidate == root || candidate.hasPrefix(root + "/")
     }
 
     private var emptyState: some View {

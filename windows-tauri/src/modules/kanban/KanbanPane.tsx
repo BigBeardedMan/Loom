@@ -67,6 +67,18 @@ function filterRunsForWorkspace(
   });
 }
 
+function filterLiveGroupsForWorkspace(
+  liveGroups: LiveAgentTaskGroup[],
+  workspacePath?: string | null
+): LiveAgentTaskGroup[] {
+  const root = normalizedPath(workspacePath);
+  if (!root) return liveGroups;
+  return liveGroups.filter((group) => {
+    const candidate = normalizedPath(group.workspacePath);
+    return Boolean(candidate && (candidate === root || candidate.startsWith(`${root}/`) || candidate.startsWith(`${root}\\`)));
+  });
+}
+
 function normalizedPath(path?: string | null): string | null {
   const value = path?.trim();
   if (!value) return null;
@@ -81,6 +93,22 @@ function workspaceScopeName(path?: string | null): string | null {
 }
 
 function projectTaskGroupsFromEvents(events: AgentGraphEvent[]): LiveAgentTaskGroup[] {
+  const workspacePathBySession = new Map<string, string>();
+  for (const event of events) {
+    if (
+      event.type !== "task.created" &&
+      event.type !== "task.updated" &&
+      event.type !== "task.statusChanged"
+    ) {
+      continue;
+    }
+    const sessionId = event.runId ?? event.runID ?? event.rootRunId ?? event.rootRunID;
+    const workspacePath = event.workspacePath?.trim();
+    if (sessionId && workspacePath) {
+      workspacePathBySession.set(sessionId, workspacePath);
+    }
+  }
+
   const tasks = events
     .filter((event) =>
       event.type === "task.created" ||
@@ -139,6 +167,7 @@ function projectTaskGroupsFromEvents(events: AgentGraphEvent[]): LiveAgentTaskGr
         sessionId,
         source: first.source,
         modelLabel: first.modelLabel,
+        workspacePath: workspacePathBySession.get(sessionId) ?? null,
         lastActivity: sorted.reduce(
           (latest, task) => (task.updatedAt > latest ? task.updatedAt : latest),
           sorted[0]?.updatedAt ?? new Date(0).toISOString()
@@ -196,7 +225,8 @@ export function KanbanPane({ workspace, blockId }: Props) {
   const [runSummaries, setRunSummaries] = useState<AgentGraphRunSummary[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
 
-  const visibleGroups = useMemo(() => mergeTaskGroups(groups, projectedGroups), [groups, projectedGroups]);
+  const scopedGroups = useMemo(() => filterLiveGroupsForWorkspace(groups, workspace.folderPath), [groups, workspace.folderPath]);
+  const visibleGroups = useMemo(() => mergeTaskGroups(scopedGroups, projectedGroups), [scopedGroups, projectedGroups]);
   const tasks = useMemo(() => visibleGroups.flatMap((g) => g.tasks), [visibleGroups]);
 
   const refresh = async () => {
@@ -237,11 +267,11 @@ export function KanbanPane({ workspace, blockId }: Props) {
 
   useEffect(() => {
     if (!blockId) return;
-    const inFlight = groups.some((g) =>
+    const inFlight = scopedGroups.some((g) =>
       g.tasks.some((t) => t.status === "in_progress" || t.status === "pending")
     );
     setBlockStatus(blockId, inFlight ? "active" : "idle");
-  }, [groups, blockId, setBlockStatus]);
+  }, [scopedGroups, blockId, setBlockStatus]);
 
   const clearGroup = async (group: LiveAgentTaskGroup) => {
     setBusy(group.id);
@@ -253,10 +283,14 @@ export function KanbanPane({ workspace, blockId }: Props) {
   };
 
   const clearAll = async () => {
-    if (!window.confirm(clearAllMessage(groups))) return;
+    if (!window.confirm(clearAllMessage(scopedGroups))) return;
     setBusy("all");
     try {
-      setGroups(await ipc.liveTasks.clearAll());
+      let nextGroups = groups;
+      for (const group of scopedGroups) {
+        nextGroups = await ipc.liveTasks.clearGroup(group.id);
+      }
+      setGroups(nextGroups);
     } finally {
       setBusy(null);
     }
@@ -268,7 +302,7 @@ export function KanbanPane({ workspace, blockId }: Props) {
         sessionCount={visibleGroups.length}
         taskCount={tasks.length}
         busy={busy}
-        canClearAll={groups.length > 0}
+        canClearAll={scopedGroups.length > 0}
         workspaceScope={workspaceScopeName(workspace.folderPath)}
         onRefresh={() => void refresh()}
         onClearAll={() => void clearAll()}
@@ -278,7 +312,7 @@ export function KanbanPane({ workspace, blockId }: Props) {
       ) : (
         <div className="scrollbar-thin flex-1 overflow-y-auto" style={{ padding: "4px 0" }}>
           {visibleGroups.map((group) => {
-            const historical = !groups.some((live) => live.id === group.id);
+            const historical = !scopedGroups.some((live) => live.id === group.id);
             return (
               <GroupBlock
                 key={group.id}

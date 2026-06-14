@@ -606,6 +606,7 @@ export type LiveAgentTaskGroup = {
   sessionId: string;
   source: AgentSource;
   modelLabel: string | null;
+  workspacePath: string | null;
   lastActivity: string;
   headline: string | null;
   tasks: LiveAgentTask[];

@@ -35,6 +35,7 @@ pub struct LiveAgentTaskGroup {
     pub session_id: String,
     pub source: String,
     pub model_label: Option<String>,
+    pub workspace_path: Option<String>,
     pub last_activity: String,
     pub headline: Option<String>,
     pub tasks: Vec<LiveAgentTask>,
@@ -296,6 +297,7 @@ fn collect_claude_groups(
             session_id: session.id,
             source: "claude".to_string(),
             model_label,
+            workspace_path: None,
             last_activity: session.most_recent.to_rfc3339(),
             headline,
             tasks,
@@ -366,6 +368,7 @@ fn collect_lmstudio_groups(root: &Path, cutoff: DateTime<Local>) -> Vec<LiveAgen
             session_id: session.id,
             source: "lmstudio".to_string(),
             model_label: None,
+            workspace_path: None,
             last_activity: session.most_recent.to_rfc3339(),
             headline,
             tasks,
@@ -381,6 +384,16 @@ struct CodexLinePayload {
     name: Option<String>,
     arguments: Option<String>,
     model: Option<String>,
+    cwd: Option<String>,
+    #[serde(rename = "current_dir")]
+    current_dir: Option<String>,
+    #[serde(rename = "current_working_directory")]
+    current_working_directory: Option<String>,
+    workdir: Option<String>,
+    #[serde(rename = "workspace_path")]
+    workspace_path: Option<String>,
+    #[serde(rename = "workspace_roots")]
+    workspace_roots: Option<Vec<String>>,
     #[serde(rename = "collaboration_mode")]
     collaboration_mode: Option<CodexCollaborationMode>,
 }
@@ -417,6 +430,7 @@ struct CodexPlanStep {
 struct CodexPlanSnapshot {
     plan: Vec<CodexPlanStep>,
     model_label: Option<String>,
+    workspace_path: Option<String>,
     plan_activity: DateTime<Local>,
 }
 
@@ -458,6 +472,42 @@ fn parse_codex_timestamp(raw: Option<&str>) -> Option<DateTime<Local>> {
         .map(|d| d.with_timezone(&Local))
 }
 
+fn normalized_codex_workspace_path(payload: &CodexLinePayload) -> Option<String> {
+    let candidates = [
+        payload.workspace_path.as_deref(),
+        payload.cwd.as_deref(),
+        payload.current_dir.as_deref(),
+        payload.current_working_directory.as_deref(),
+        payload.workdir.as_deref(),
+        payload
+            .workspace_roots
+            .as_ref()
+            .and_then(|roots| roots.first())
+            .map(String::as_str),
+    ];
+    for candidate in candidates.into_iter().flatten() {
+        let trimmed = candidate.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let expanded = if trimmed == "~" {
+            home()
+        } else if let Some(rest) = trimmed.strip_prefix("~/") {
+            home().join(rest)
+        } else {
+            PathBuf::from(trimmed)
+        };
+        let mut normalized = expanded.to_string_lossy().to_string();
+        while normalized.ends_with('/') || normalized.ends_with('\\') {
+            normalized.pop();
+        }
+        if !normalized.is_empty() {
+            return Some(normalized);
+        }
+    }
+    None
+}
+
 fn read_latest_codex_plan_snapshot(
     path: &Path,
     fallback_activity: DateTime<Local>,
@@ -465,9 +515,13 @@ fn read_latest_codex_plan_snapshot(
     let text = read_text(path)?;
     let mut latest: Option<Vec<CodexPlanStep>> = None;
     let mut model_label: Option<String> = None;
+    let mut workspace_path: Option<String> = None;
     let mut plan_activity: Option<DateTime<Local>> = None;
     for line in text.lines() {
-        if !line.contains("\"update_plan\"") && !line.contains("\"turn_context\"") {
+        if !line.contains("\"update_plan\"")
+            && !line.contains("\"turn_context\"")
+            && !line.contains("\"session_meta\"")
+        {
             continue;
         }
         let Ok(parsed) = serde_json::from_str::<CodexLine>(line) else {
@@ -476,7 +530,9 @@ fn read_latest_codex_plan_snapshot(
         let Some(payload) = parsed.payload else {
             continue;
         };
-        if parsed.ty.as_deref() == Some("turn_context") {
+        if parsed.ty.as_deref() == Some("turn_context")
+            || parsed.ty.as_deref() == Some("session_meta")
+        {
             let candidate = payload.model.as_deref().or_else(|| {
                 payload
                     .collaboration_mode
@@ -486,6 +542,9 @@ fn read_latest_codex_plan_snapshot(
             });
             if let Some(model) = normalized_model_label(candidate.map(str::to_string)) {
                 model_label = Some(model);
+            }
+            if let Some(path) = normalized_codex_workspace_path(&payload) {
+                workspace_path = Some(path);
             }
         }
         if !line.contains("\"update_plan\"") {
@@ -509,6 +568,7 @@ fn read_latest_codex_plan_snapshot(
     latest.map(|plan| CodexPlanSnapshot {
         plan,
         model_label,
+        workspace_path,
         plan_activity: plan_activity.unwrap_or(fallback_activity),
     })
 }
@@ -582,6 +642,7 @@ fn collect_codex_groups(root: &Path, cutoff: DateTime<Local>) -> Vec<LiveAgentTa
             session_id: session_id.clone(),
             source: "codex".to_string(),
             model_label,
+            workspace_path: snapshot.workspace_path.clone(),
             last_activity: snapshot.plan_activity.to_rfc3339(),
             headline,
             tasks,

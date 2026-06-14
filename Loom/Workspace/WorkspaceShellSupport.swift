@@ -218,6 +218,21 @@ struct WorkspaceRightRailView: View {
         }
     }
 
+    private var scopedLiveAgentGroups: [LiveAgentTaskGroup] {
+        guard let folderPath = workspace?.folderPath, !folderPath.isEmpty else {
+            return liveAgentTasks.groups
+        }
+        let root = normalizedPath(folderPath)
+        return liveAgentTasks.groups.filter { group in
+            guard let workspacePath = group.workspacePath,
+                  !workspacePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return false
+            }
+            let candidate = normalizedPath(workspacePath)
+            return candidate == root || candidate.hasPrefix(root + "/")
+        }
+    }
+
     private var reviewableRunSummaries: [AgentGraphRunSummary] {
         scopedRunSummaries.filter(isReviewable)
     }
@@ -336,10 +351,10 @@ struct WorkspaceRightRailView: View {
     private var timelineContent: some View {
         VStack(alignment: .leading, spacing: 8) {
             railSectionTitle("Live Runs")
-            if liveAgentTasks.groups.isEmpty {
+            if scopedLiveAgentGroups.isEmpty {
                 railMuted("No live agent task groups are active.")
             } else {
-                ForEach(liveAgentTasks.groups.prefix(5)) { group in
+                ForEach(scopedLiveAgentGroups.prefix(5)) { group in
                     railRow(
                         icon: group.source.systemImage,
                         tint: group.source.brandColor,
@@ -1175,7 +1190,7 @@ struct WorkspaceRightRailView: View {
     private var workflowSignals: WorkspaceWorkflowSignals {
         let runs = scopedRunSummaries
         let hasRunningRun = runs.contains { isRunningStatus($0.status) }
-        let hasActiveAgents = !liveAgentTasks.groups.isEmpty || hasRunningRun
+        let hasActiveAgents = !scopedLiveAgentGroups.isEmpty || hasRunningRun
         let hasCheckSignals = runs.contains { $0.toolEventCount > 0 || !$0.toolNames.isEmpty }
         let hasAttention = runs.contains { summary in
             isAttentionStatus(summary.status) || summary.gitDirty == true
@@ -1304,9 +1319,9 @@ struct WorkspaceStatusBar: View {
 
             statusSegment(
                 icon: "point.3.connected.trianglepath.dotted",
-                title: "\(liveAgentTasks.groups.count) live runs",
+                title: "\(scopedLiveAgentGroups.count) live runs",
                 detail: liveRunDetail,
-                tint: liveAgentTasks.groups.isEmpty ? LoomTheme.mutedText : LoomTheme.green
+                tint: scopedLiveAgentGroups.isEmpty ? LoomTheme.mutedText : LoomTheme.green
             )
 
             statusSegment(
@@ -1348,11 +1363,30 @@ struct WorkspaceStatusBar: View {
     }
 
     private var liveRunDetail: String? {
-        guard let group = liveAgentTasks.groups.first else { return nil }
+        guard let group = scopedLiveAgentGroups.first else { return nil }
         if let headline = group.headline, !headline.isEmpty {
             return "\(group.displayName) · \(headline)"
         }
         return group.displayName
+    }
+
+    private var scopedLiveAgentGroups: [LiveAgentTaskGroup] {
+        guard let folderPath = workspace?.folderPath, !folderPath.isEmpty else {
+            return liveAgentTasks.groups
+        }
+        let root = normalizedPath(folderPath)
+        return liveAgentTasks.groups.filter { group in
+            guard let workspacePath = group.workspacePath,
+                  !workspacePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return false
+            }
+            let candidate = normalizedPath(workspacePath)
+            return candidate == root || candidate.hasPrefix(root + "/")
+        }
+    }
+
+    private func normalizedPath(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.path
     }
 
     private var modelDetail: String? {

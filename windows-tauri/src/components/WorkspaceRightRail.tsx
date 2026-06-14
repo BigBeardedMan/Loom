@@ -34,6 +34,7 @@ export function WorkspaceRightRail() {
   const [endpoints, setEndpoints] = useState<LocalEndpoint[]>([]);
 
   const scopedRuns = useMemo(() => filterRunsForWorkspace(runs, workspace), [runs, workspace?.folderPath]);
+  const scopedLiveGroups = useMemo(() => filterLiveGroupsForWorkspace(liveGroups, workspace), [liveGroups, workspace?.folderPath]);
   const reviewableRuns = useMemo(() => scopedRuns.filter(isReviewableRun), [scopedRuns]);
   const reviewableRunKey = reviewableRuns.slice(0, 6).map((run) => run.id).join("|");
   const railTabs = useMemo(
@@ -165,11 +166,11 @@ export function WorkspaceRightRail() {
       </div>
 
       <main className="scrollbar-thin min-h-0 flex-1 overflow-y-auto" style={{ padding: 12 }}>
-        <WorkflowMap workspace={workspace} runs={scopedRuns} liveGroups={liveGroups} />
+        <WorkflowMap workspace={workspace} runs={scopedRuns} liveGroups={scopedLiveGroups} />
         {effectiveTab === "timeline" && (
           <TimelineContent
             runs={scopedRuns}
-            liveGroups={liveGroups}
+            liveGroups={scopedLiveGroups}
             expandedRunId={expandedRunId}
             loadingRunId={loadingRunId}
             eventsByRun={eventsByRun}
@@ -192,7 +193,7 @@ export function WorkspaceRightRail() {
         {effectiveTab === "files" && <FilesContent workspace={workspace} memoryFiles={memoryFiles} />}
         {effectiveTab === "preview" && <PreviewContent workspace={workspace} blocks={layout?.blocks ?? []} />}
         {effectiveTab === "tools" && <ToolsContent blocks={layout?.blocks ?? []} agents={agents} endpoints={endpoints} />}
-        {effectiveTab === "diff" && <DiffContent runs={scopedRuns} liveGroups={liveGroups} workspace={workspace} blocks={layout?.blocks ?? []} eventsByRun={eventsByRun} />}
+        {effectiveTab === "diff" && <DiffContent runs={scopedRuns} liveGroups={scopedLiveGroups} workspace={workspace} blocks={layout?.blocks ?? []} eventsByRun={eventsByRun} />}
         {effectiveTab === "memory" && <MemoryContent memoryFiles={memoryFiles} runs={scopedRuns} />}
         {effectiveTab === "details" && <DetailsContent workspace={workspace} block={activeBlock} blocks={layout?.blocks ?? []} />}
       </main>
@@ -1093,8 +1094,18 @@ function filterRunsForWorkspace(runs: AgentGraphRunSummary[], workspace: Workspa
   });
 }
 
+function filterLiveGroupsForWorkspace(liveGroups: LiveAgentTaskGroup[], workspace: Workspace | null): LiveAgentTaskGroup[] {
+  if (!workspace?.folderPath) return liveGroups;
+  const root = normalizedPath(workspace.folderPath);
+  return liveGroups.filter((group) => {
+    if (!group.workspacePath) return false;
+    const candidate = normalizedPath(group.workspacePath);
+    return candidate === root || candidate.startsWith(`${root}/`) || candidate.startsWith(`${root}\\`);
+  });
+}
+
 function normalizedPath(path: string): string {
-  return path.replace(/[\\/]+$/, "");
+  return path.trim().replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
 function liveGroupTitle(group: LiveAgentTaskGroup): string {

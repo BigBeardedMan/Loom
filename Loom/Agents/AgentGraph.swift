@@ -249,6 +249,11 @@ enum AgentGraphProjection {
         let latestTasks = Dictionary(grouping: tasks, by: \.id).compactMap { _, snapshots in
             snapshots.max { $0.updatedAt < $1.updatedAt }
         }
+        let workspacePathsBySession = Dictionary(grouping: taskEvents, by: \.runID).compactMapValues { events in
+            events.sorted { $0.occurredAt > $1.occurredAt }
+                .compactMap(\.workspacePath)
+                .first { !$0.isEmpty }
+        }
 
         let grouped = Dictionary(grouping: latestTasks, by: \.sessionID)
         return grouped.map { sessionID, tasks in
@@ -258,6 +263,7 @@ enum AgentGraphProjection {
                 sessionID: sessionID,
                 source: source,
                 modelLabel: modelLabel,
+                workspacePath: workspacePathsBySession[sessionID],
                 lastActivity: tasks.map(\.updatedAt).max() ?? Date(),
                 tasks: tasks.sorted {
                     if $0.status.sortPriority != $1.status.sortPriority {

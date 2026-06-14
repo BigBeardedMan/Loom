@@ -97,6 +97,7 @@ struct LiveAgentTaskGroup: Identifiable, Hashable {
     let sessionID: String
     let source: AgentSource
     let modelLabel: String?
+    let workspacePath: String?
     let lastActivity: Date
     let tasks: [LiveAgentTask]
 
@@ -268,6 +269,15 @@ final class LiveAgentTasksService {
         refresh()
     }
 
+    /// Clear a caller-scoped subset without treating every live group as visible.
+    func clear(groups targetGroups: [LiveAgentTaskGroup]) {
+        for group in targetGroups {
+            dismiss(group: group)
+        }
+        saveDismissed()
+        refresh()
+    }
+
     private func dismiss(group: LiveAgentTaskGroup) {
         deleteTaskFiles(for: group)
         dismissedSessions[group.id] = group.lastActivity
@@ -337,6 +347,7 @@ final class LiveAgentTasksService {
                 sessionID: session.id,
                 source: .lmstudio,
                 modelLabel: nil,
+                workspacePath: nil,
                 lastActivity: session.mostRecentMtime,
                 tasks: tasks
             ))
@@ -402,6 +413,7 @@ final class LiveAgentTasksService {
                 sessionID: session.id,
                 source: .claude,
                 modelLabel: modelLabel,
+                workspacePath: nil,
                 lastActivity: session.mostRecentMtime,
                 tasks: tasks
             ))
@@ -607,6 +619,7 @@ final class LiveAgentTasksService {
                 sessionID: sessionID,
                 source: .codex,
                 modelLabel: modelLabel,
+                workspacePath: snapshot.workspacePath,
                 lastActivity: snapshot.planActivity,
                 tasks: tasks
             ))
@@ -646,6 +659,12 @@ final class LiveAgentTasksService {
             let name: String?
             let arguments: String?
             let model: String?
+            let cwd: String?
+            let currentDir: String?
+            let currentWorkingDirectory: String?
+            let workdir: String?
+            let workspacePath: String?
+            let workspaceRoots: [String]?
             let collaborationMode: CollaborationMode?
 
             enum CodingKeys: String, CodingKey {
@@ -653,6 +672,12 @@ final class LiveAgentTasksService {
                 case name
                 case arguments
                 case model
+                case cwd
+                case currentDir = "current_dir"
+                case currentWorkingDirectory = "current_working_directory"
+                case workdir
+                case workspacePath = "workspace_path"
+                case workspaceRoots = "workspace_roots"
                 case collaborationMode = "collaboration_mode"
             }
         }
@@ -673,6 +698,7 @@ final class LiveAgentTasksService {
     private struct CodexPlanSnapshot {
         let plan: [CodexPlanStep]
         let modelLabel: String?
+        let workspacePath: String?
         let planActivity: Date
     }
 
@@ -717,15 +743,19 @@ final class LiveAgentTasksService {
         let decoder = JSONDecoder()
         var latest: [CodexPlanStep]?
         var modelLabel: String?
+        var workspacePath: String?
         var planActivity: Date?
         for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            guard line.contains("\"update_plan\"") || line.contains("\"turn_context\"") else { continue }
+            guard line.contains("\"update_plan\"")
+                    || line.contains("\"turn_context\"")
+                    || line.contains("\"session_meta\"") else { continue }
             guard let lineData = String(line).data(using: .utf8) else { continue }
             guard let parsed = try? decoder.decode(CodexPlanLine.self, from: lineData) else { continue }
-            if parsed.type == "turn_context" {
+            if parsed.type == "turn_context" || parsed.type == "session_meta" {
                 modelLabel = LiveAgentTaskGroup.normalizedModelLabel(
                     parsed.payload?.model ?? parsed.payload?.collaborationMode?.settings?.model
                 ) ?? modelLabel
+                workspacePath = normalizedCodexWorkspacePath(from: parsed.payload) ?? workspacePath
             }
 
             // Cheap byte-level filter so 99% of lines never touch the JSON
@@ -744,8 +774,28 @@ final class LiveAgentTasksService {
         return CodexPlanSnapshot(
             plan: latest,
             modelLabel: modelLabel,
+            workspacePath: workspacePath,
             planActivity: planActivity ?? fallbackActivity
         )
+    }
+
+    nonisolated private static func normalizedCodexWorkspacePath(from payload: CodexPlanLine.Payload?) -> String? {
+        guard let payload else { return nil }
+        let candidates = [
+            payload.workspacePath,
+            payload.cwd,
+            payload.currentDir,
+            payload.currentWorkingDirectory,
+            payload.workdir,
+            payload.workspaceRoots?.first
+        ]
+        for candidate in candidates {
+            guard let raw = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !raw.isEmpty else { continue }
+            let expanded = (raw as NSString).expandingTildeInPath
+            return URL(fileURLWithPath: expanded).standardizedFileURL.path
+        }
+        return nil
     }
 
     nonisolated private static func parseCodexTimestamp(_ raw: String?) -> Date? {

@@ -21,6 +21,7 @@ export function WorkspaceStatusBar() {
   const [endpoints, setEndpoints] = useState<LocalEndpoint[]>([]);
   const updateSegment = updateStatusSegment(updateStatus, updatePill);
   const effectiveRightRailTab = effectiveRailTab(rightRailTab, { workspace, blocks: layout?.blocks ?? [] });
+  const scopedLiveGroups = filterLiveGroupsForWorkspace(liveGroups, workspace?.folderPath);
 
   useEffect(() => {
     const tick = () => ipc.liveTasks.list().then(setLiveGroups).catch(() => {});
@@ -47,7 +48,7 @@ export function WorkspaceStatusBar() {
     >
       <StatusSegment icon="layers" color={workspace ? workspaceColorVar[workspace.colorName] : workspaceColorVar.blue} label={workspace?.name ?? "No workspace"} detail={workspace?.folderPath || workspace?.kindRaw} />
       <StatusSegment icon="panelRight" color={workspaceColorVar.blue} label={`${layout?.blocks.length ?? 0} panes`} detail={activeBlock ? blockTitle(activeBlock) : "No selection"} />
-      <StatusSegment icon="workflow" color={liveGroups.length ? workspaceColorVar.green : text.tertiary} label={`${liveGroups.length} live runs`} detail={liveRunDetail(liveGroups)} />
+      <StatusSegment icon="workflow" color={scopedLiveGroups.length ? workspaceColorVar.green : text.tertiary} label={`${scopedLiveGroups.length} live runs`} detail={liveRunDetail(scopedLiveGroups)} />
       <StatusSegment icon="server" color={endpoints.length ? workspaceColorVar.purple : text.tertiary} label={agents[0]?.name || "Default agent"} detail={agents[0]?.model || `${endpoints.length} local endpoints`} />
       <div className="flex-1" />
       <StatusSegment icon={updateSegment.icon} color={updateSegment.color} label={updateSegment.label} detail={updateSegment.detail} />
@@ -88,6 +89,24 @@ function liveRunDetail(groups: LiveAgentTaskGroup[]): string | undefined {
   if (!group) return undefined;
   if (group.headline) return `${group.modelLabel || group.source} - ${group.headline}`;
   return group.modelLabel || group.source;
+}
+
+function filterLiveGroupsForWorkspace(
+  liveGroups: LiveAgentTaskGroup[],
+  workspacePath?: string | null
+): LiveAgentTaskGroup[] {
+  const root = normalizedPath(workspacePath);
+  if (!root) return liveGroups;
+  return liveGroups.filter((group) => {
+    const candidate = normalizedPath(group.workspacePath);
+    return Boolean(candidate && (candidate === root || candidate.startsWith(`${root}/`) || candidate.startsWith(`${root}\\`)));
+  });
+}
+
+function normalizedPath(path?: string | null): string | null {
+  const value = path?.trim();
+  if (!value) return null;
+  return value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
 function StatusSegment({
