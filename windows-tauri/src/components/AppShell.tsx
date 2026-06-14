@@ -37,7 +37,7 @@ export function AppShell() {
         color: "var(--color-loom-text)",
         padding: cockpit.outerPadding,
         gap: 8,
-        ["--loom-inspector-width" as string]: `${cockpit.inspectorWidth}px`,
+        ["--loom-inspector-width" as string]: `clamp(276px, 24vw, ${cockpit.inspectorWidth}px)`,
       }}
     >
       <Titlebar />

@@ -161,7 +161,7 @@ button:not(:disabled) {
 
 .loom-shell-sidebar-panel {
   flex: none;
-  width: 248px;
+  width: clamp(214px, 18vw, 248px);
 }
 
 .loom-right-rail-scrim {
