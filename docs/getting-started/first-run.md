@@ -1,19 +1,20 @@
 # First run
 
-When Loom opens for the first time it shows an empty workspace sidebar. Build a workspace in 30 seconds:
+When Loom opens for the first time it seeds four rooms in the left rail: **Prompt**, **Ideas**, **Review**, and **Runs**. You can start in one of those or create another workspace:
 
 1. Click **+** in the top-left of the sidebar (or press ⌘N).
-2. Pick a **kind** — Prompt, Ideas, or Review. The kind determines which panes can be added later.
+2. Pick a **kind** - Prompt, Ideas, Review, or Runs. The kind determines which panes can be added later.
 3. Name the workspace and confirm.
-4. Add panes via the **Add Block** menu (or ⌘⇧1, ⌘⇧2, ⌘⇧3, ⌘⇧4 — keys map to the available panels for the current kind).
+4. Add panes via the top-right add strip, the **Add Block** menu, or ⌘⇧1 through ⌘⇧5. Keys map to the available panels for the current room.
 
 ## Pick the right workspace kind
 
 | Kind | Available panes | Use it for |
 | ---- | --------------- | ---------- |
-| **Prompt** | Terminal, Editor, Tasks, Agent | Active build / debug sessions. The cockpit. |
+| **Prompt** | Terminal, Editor, Runs, Agent, Commands | Active build / debug sessions. The cockpit. |
 | **Ideas** | Notes, Agent | Drafting, idea capture, low-stakes brainstorming with a model. |
 | **Review** | Preview, Agent | Looking at a localhost preview or rendered output side-by-side with an agent. |
+| **Runs** | Runs, Chat, Agent, Terminal, Commands | Supervising agent graphs, history, chats, handoffs, and review evidence. |
 
 Switch between kinds freely — each kind remembers its own layout and pane order.
 
@@ -30,7 +31,7 @@ To swap providers (built-in agents, local LLMs), see [Agents → Overview](../ag
 
 ## Pin a pane to the side
 
-The default layout is a tile grid. Use **Layout → Pin Left/Right/Top/Bottom** (⌘⌥ + arrow) to dock the focused pane to an edge — useful for keeping the terminal full-height while the editor and tasks float to the right.
+The default layout is a tile grid. Use **Layout -> Pin Left/Right/Top/Bottom** (⌘⌥ + arrow) to dock the focused pane to an edge - useful for keeping the terminal full-height while the editor and Runs pane float to the right.
 
 ## Open the command palette
 

@@ -21,14 +21,15 @@ Loom is a personal, single-user tool. No subscription model, hosted control plan
 
 | Area | Summary |
 | ---- | ------- |
-| [Workspaces](workspaces/overview.md) | Four rooms — Prompt, Ideas, Review, Runs — each with its own pane lineup. |
+| [Workspaces](workspaces/overview.md) | Four rooms - Prompt, Ideas, Review, Runs - each with its own pane lineup. |
+| [Runs room](workspaces/runs.md) | Agent supervision room with run history, addable chats, terminals, commands, and review evidence. |
 | [Agents](agents/overview.md) | Claude Code via OAuth subprocess, optional Anthropic API key, plus local LLMs over HTTP. |
-| [Tasks](tasks/overview.md) | SwiftData kanban with task → agent and task → terminal handoff. |
+| [Runs pane](tasks/overview.md) | SwiftData kanban, live CLI task mirrors, run history, and task-to-agent / task-to-terminal handoff. |
 | [Terminal](terminal/overview.md) | SwiftTerm-backed pane with CLI agent auto-detection, local transcripts, and recovery. |
 | [Editor](editor/overview.md) | File tree with breadcrumb. CodeEdit integration is on the roadmap. |
 | [Settings](settings/appearance.md) | Theme, stale-task window, providers, MCP, Shell history, and Anthropic key. |
 | [Updates](updates/auto-update.md) | Polls Testing Edition releases on a 60s interval; the Update Available pill installs the new build. |
-| [Releasing](releasing/cutting-a-release.md) | `bin/release.sh` ships a signed-ish DMG and tags the commit. |
+| [Releasing](releasing/cutting-a-release.md) | `bin/release-testing.sh` ships the Testing Edition prerelease, DMG, checksum, and signature. |
 
 ## Product principles
 

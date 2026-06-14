@@ -1,6 +1,8 @@
-# Tasks
+# Runs Pane
 
-The Tasks pane is a SwiftData-backed kanban. Available in **Prompt** workspaces.
+The Runs pane is the visible home for task state, live CLI session mirrors, and graph-ledger run history. Its raw layout value is still `tasks` for compatibility with older saved workspaces.
+
+It is available in **Prompt** and **Runs** rooms. Prompt uses it as part of the build cockpit; Runs uses it as the supervision surface next to addable chat panes.
 
 ## Columns
 
@@ -38,4 +40,4 @@ Cards live in SwiftData under `KanbanCard`. The default container is on disk (no
 
 ## Live agent tasks
 
-When a CLI agent (`claude`, `codex`, `gemini`) is running in the workspace's Terminal pane, the Tasks pane mirrors its in-progress task list — see [Live agent tasks](live-agent-tasks.md).
+When a CLI agent (`claude`, `codex`, `gemini`, or `lmstudio`) is running in a Terminal pane, the Runs pane mirrors its in-progress task list and refreshes graph-ledger summaries — see [Live agent tasks](live-agent-tasks.md).

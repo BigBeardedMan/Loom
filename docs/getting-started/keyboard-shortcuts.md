@@ -32,7 +32,7 @@ Image-only clipboard pastes in the Terminal pane become editable Codex image arg
 
 ## Adding panes
 
-The number maps to the panel order for the current workspace kind. In a **Prompt** workspace the order is Terminal, Editor, Tasks, Agent — so ⌘⇧1 adds a terminal, ⌘⇧4 adds an agent. In an **Ideas** workspace ⌘⇧1 adds Notes, ⌘⇧2 adds Agent.
+The number maps to the panel order for the current workspace kind. In a **Prompt** workspace the order is Terminal, Editor, Runs, Agent, Commands, so ⌘⇧1 adds a terminal and ⌘⇧4 adds an agent. In a **Runs** workspace the order is Runs, Chat, Agent, Terminal, Commands.
 
 | Shortcut | Action |
 | -------- | ------ |
@@ -40,6 +40,9 @@ The number maps to the panel order for the current workspace kind. In a **Prompt
 | ⌘⇧2 | Add the second |
 | ⌘⇧3 | Add the third |
 | ⌘⇧4 | Add the fourth |
+| ⌘⇧5 | Add the fifth, when the room exposes one |
+
+The same actions are available from the top-right add strip and the ⌘K command palette.
 
 ## Layout
 

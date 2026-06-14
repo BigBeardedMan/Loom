@@ -1,8 +1,17 @@
 # Layouts
 
-Every pane in a workspace can be **pinned** to an edge or **spanned** across a full row. The layout is per-workspace and persists across launches.
+Every pane in a workspace can be **pinned** to an edge, **spanned** across a full row, resized, and reordered. The deck layout is per-room and persists across launches; shell state such as the right rail's selected tab is stored separately.
 
-## Default layout
+## Default layouts
+
+Canonical rooms seed with these layouts:
+
+| Room | Default panes |
+| ---- | ------------- |
+| Prompt | Terminal, Runs, Agent |
+| Ideas | Notes, Agent |
+| Review | Preview, Agent |
+| Runs | Runs, Chat |
 
 When you add a pane, it joins the current row. Two panes in a row split horizontally; three panes split into thirds; etc. Adding a fourth wraps to a new row.
 
@@ -34,7 +43,7 @@ Drag the pane title bar to reorder. The kanban-style pane menu (top-right of eac
 
 ## Closing
 
-Click the **×** in a pane's title bar to remove it from the workspace. Re-add via **Add Block** (or ⌘⇧N).
+Click the **x** in a pane's title bar to remove it from the workspace. Re-add from the top-right add strip or the command palette.
 
 ## Persistence
 

@@ -67,6 +67,7 @@ nav:
       - workspaces/prompt.md
       - workspaces/ideas.md
       - workspaces/review.md
+      - workspaces/runs.md
       - workspaces/layouts.md
   - Agents:
       - agents/overview.md
@@ -75,7 +76,7 @@ nav:
       - agents/local-llms.md
       - agents/lmstudio-cli.md
       - agents/custom-providers.md
-  - Tasks:
+  - Runs Pane:
       - tasks/overview.md
       - tasks/handoff.md
       - tasks/live-agent-tasks.md

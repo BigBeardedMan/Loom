@@ -1,5 +1,6 @@
 ## Changes
 
+- Workspace docs now describe the four-room Testing Edition shell, including the Runs workspace, chat-only panes, adaptive right rail, and the visible Runs pane naming.
 - The macOS and Windows top-bar update pill now says **Update Available**, matching the status bar and the Testing Edition updater docs.
 - Read-only project memory now includes shallow workspace docs on macOS and Windows, so files like `docs/GUIDE.md` or package-level `README.md` can appear in the Memory rail and agent context without scanning dependency folders.
 - Testing release hygiene now sweeps Finder/iCloud duplicate Xcode project bundles at the repo root before Testing Edition release packaging.
@@ -67,7 +68,7 @@
 - Windows in-app updates no longer fall back to opening GitHub from the pill; the helper uses Tauri's NSIS updater arguments and a legacy silent fallback.
 - Windows releases now publish legacy installer aliases so older installed builds can see and install the next Testing Edition update.
 - Windows Testing now matches the macOS terminal history workflow with saved transcripts, Recently Closed restore, Recently Deleted recovery, bounded previews, pruning, and history-folder reveal.
-- Windows Testing now mirrors the macOS Tasks pane with Claude, Codex, and LM Studio sessions, model labels, live plan activity, clear-one, and clear-all behavior.
+- Windows Testing now mirrors the macOS Runs pane with Claude, Codex, and LM Studio sessions, model labels, live plan activity, clear-one, and clear-all behavior.
 - Windows terminal command cards now support per-session history, captured-output expansion, copy, and capture-aware reruns.
 - Windows terminal image handoff now saves pasted or dropped images locally and inserts editable `--image '<path>'` prompt text while preserving text paste priority.
 - Windows Code workspaces now use the macOS default terminal, tasks, and agent layout, and the sidebar exposes terminal block rename, close, restore, delete, and preview workflows.

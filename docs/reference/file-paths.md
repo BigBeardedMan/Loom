@@ -6,7 +6,8 @@ Where Loom (and the things Loom reads from) keeps state on disk.
 
 | Path | Purpose |
 | ---- | ------- |
-| `~/Library/Application Support/Loom Testing Edition/staging/Loom Testing Edition.app` | Newly downloaded Testing Edition build, waiting for the Update pill click. |
+| `~/Library/Application Support/Loom Testing Edition/staging/Loom Testing Edition.app` | Newly downloaded Testing Edition build, waiting for the Update Available pill click. |
+| `~/.loom/agent-runs/<rootRunId>/events.jsonl` | Agent graph ledger events used by the Runs room timeline, memory, and review rail. |
 | `~/Library/Application Support/Loom Testing Edition/staging/manifest.json` | `{ version, build, stagedAt }` for the staged build. |
 | `~/Library/Application Support/Loom Testing Edition/layout.json` | Workspace pane layout, custom titles, terminal cwd, and split state. |
 | `~/Library/Application Support/Loom Testing Edition/shell/.zshrc` | zsh command-history shim sourced via `ZDOTDIR`. |
@@ -24,6 +25,8 @@ Where Loom (and the things Loom reads from) keeps state on disk.
 | Path | Why Loom reads it |
 | ---- | ----------------- |
 | `~/.claude/tasks/<session-id>/<task-id>.json` | Live agent tasks polling. See [Live agent tasks](../tasks/live-agent-tasks.md). |
+| `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` | Codex plan updates mirrored into Runs. |
+| `~/.loom/tasks/<session-id>/<task-id>.json` | Bundled `lmstudio` agent tasks mirrored into Runs. |
 | `~/.claude/credentials.json` | Indirectly — `claude` CLI uses it; Loom shells out to `claude`. |
 | The workspace's folder URL | Editor file tree root, terminal `cwd`, agent `cwd`. |
 

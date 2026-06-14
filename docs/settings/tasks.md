@@ -1,10 +1,10 @@
 # Settings → Tasks
 
-Controls the [live agent tasks](../tasks/live-agent-tasks.md) pane.
+Controls the live-session window inside the [Runs pane](../tasks/live-agent-tasks.md).
 
 ## Stale window
 
-How long an idle CLI session stays visible in the Tasks pane:
+How long an idle CLI session stays visible in the Runs pane:
 
 | Option | Hides sessions whose last task update is older than |
 | ------ | --------------------------------------------------- |
@@ -21,7 +21,7 @@ Stored in `UserDefaults` under key `loom.tasks.staleHours` (Double, in hours).
 
 - The polling cadence — Loom always polls `~/.claude/tasks/` every 2 seconds while a workspace is open.
 - Already-finished sessions vs idle sessions — both count as "stale" once their last update is older than the window.
-- Persistent kanban cards in the Tasks pane (those don't expire).
+- Persistent kanban cards in the Runs pane (those don't expire).
 
 ## When to lower it
 

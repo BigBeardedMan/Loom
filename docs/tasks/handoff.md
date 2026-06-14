@@ -1,6 +1,6 @@
 # Task → Agent / Terminal handoff
 
-Kanban cards can carry the next action — a prompt or a shell command — and dispatch it to the right pane in one click.
+Kanban cards in the Runs pane can carry the next action - a prompt or a shell command - and dispatch it to the right pane in one click.
 
 ## Two handoff fields
 
