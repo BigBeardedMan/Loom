@@ -386,7 +386,7 @@ struct WorkspaceView: View {
                 Image(systemName: updates.isApplying ? "arrow.triangle.2.circlepath" : "arrow.down.circle.fill")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(.white)
-                Text(updates.isApplying ? "Restarting…" : "Update")
+                Text(updates.isApplying ? "Restarting…" : "Update Available")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.white)
                 if let label = updates.available?.displayLabel, !updates.isApplying {
@@ -404,7 +404,7 @@ struct WorkspaceView: View {
         .buttonStyle(.plain)
         .pointingHandCursor()
         .disabled(updates.isApplying)
-        .help("Restart Loom with the staged build")
+        .help("Install the staged update and relaunch Loom")
     }
 
     private var dictationButton: some View {

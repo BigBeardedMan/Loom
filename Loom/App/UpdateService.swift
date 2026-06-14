@@ -9,9 +9,9 @@ private let updateLog = Logger(subsystem: "com.chasesims.LoomTestingEdition", ca
 /// `Loom Testing Edition.app` sits at
 /// `~/Library/Application Support/Loom Testing Edition/staging/`, with a
 /// sibling `manifest.json` describing it. The running app polls the manifest;
-/// when its build code differs from the running bundle's, the in-app "Update"
-/// button lights up. Clicking it spawns a detached helper that waits for this
-/// process to quit, swaps the staged bundle into
+/// when its build code differs from the running bundle's, the in-app
+/// "Update Available" pill lights up. Clicking it spawns a detached helper
+/// that waits for this process to quit, swaps the staged bundle into
 /// `/Applications/Loom Testing Edition.app`, and relaunches.
 ///
 /// The whole point is to never `cp` over a live installed bundle. macOS
@@ -140,7 +140,7 @@ final class UpdateService {
         let alert = NSAlert()
         if let staged = available {
             alert.messageText = "Update available"
-            alert.informativeText = "Loom Testing Edition \(staged.displayLabel) is ready. Click Update in the top bar to install and relaunch."
+            alert.informativeText = "Loom Testing Edition \(staged.displayLabel) is ready. Click Update Available in the top bar to install and relaunch."
             alert.alertStyle = .informational
         } else if let err = lastRemoteError {
             alert.messageText = "Update check failed"
@@ -159,7 +159,7 @@ final class UpdateService {
     /// Hits GitHub Releases. If the latest tag is newer than the running app
     /// AND we haven't already fetched it, downloads the .dmg, mounts it, and
     /// copies Loom.app into the local staging dir. The 4-second local poll
-    /// then surfaces the Update button via the existing path.
+    /// then surfaces the Update Available pill via the existing path.
     ///
     /// Pass `forceRestage: true` from a user-initiated check to bypass the
     /// in-memory `lastFetchedTag` short-circuit — that flag is meant to keep

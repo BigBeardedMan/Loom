@@ -7,7 +7,7 @@ import { UpdateModal } from "../modules/update/UpdateModal";
 type Props = { version: string };
 
 // Mirrors the green update pill in Loom/Workspace/WorkspaceView.swift.
-// Click opens a two-step modal: download → confirm → run NSIS installer.
+// Click opens the updater modal: download, stage, then run the NSIS helper.
 export function UpdatePill({ version }: Props) {
   const [checking, setChecking] = useState(false);
   const [info, setInfo] = useState<UpdateInfo | null>(null);
@@ -51,10 +51,10 @@ export function UpdatePill({ version }: Props) {
           fontWeight: 600,
           transition: "opacity 180ms ease-in-out",
         }}
-        title={notice ?? `Update available: Loom ${version}`}
+        title={notice ?? `Update available: Loom Testing Edition ${version}`}
       >
         <Icon className={checking ? "animate-spin" : ""} size={11} strokeWidth={2.5} />
-        <span>{checking ? "Checking…" : "Update"}</span>
+        <span>{checking ? "Checking..." : "Update Available"}</span>
         {!checking && (
           <span
             style={{
