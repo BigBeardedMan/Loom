@@ -72,16 +72,8 @@ pub async fn terminal_foreground_command(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<Option<String>, String> {
-    let Some(pid) = pty::pid(&state.terminals, &session_id) else {
-        return Ok(None);
-    };
-    #[cfg(target_os = "windows")]
-    {
-        Ok(super::windows_proc::active_descendant_command(pid))
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = pid;
-        Ok(None)
-    }
+    Ok(pty::observe_cli_agent_foreground(
+        &state.terminals,
+        &session_id,
+    ))
 }

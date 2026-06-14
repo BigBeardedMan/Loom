@@ -2,7 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
@@ -80,49 +81,95 @@ fn events_path(root_run_id: &str) -> Result<PathBuf, String> {
     Ok(graph_root().join(root_run_id).join("events.jsonl"))
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn append_event(event: &AgentGraphEvent) -> Result<(), String> {
+    validate_root_run_id(&event.root_run_id)?;
+    let path = events_path(&event.root_run_id)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    // Emit the Swift/macOS spelling so the shared ~/.loom/agent-runs ledger
+    // remains readable from both editions.
+    let line = serde_json::json!({
+        "schemaVersion": event.schema_version,
+        "eventID": &event.event_id,
+        "type": &event.r#type,
+        "occurredAt": &event.occurred_at,
+        "rootRunID": &event.root_run_id,
+        "runID": &event.run_id,
+        "parentRunID": &event.parent_run_id,
+        "source": &event.source,
+        "workspacePath": &event.workspace_path,
+        "modelLabel": &event.model_label,
+        "permissionMode": &event.permission_mode,
+        "title": &event.title,
+        "summary": &event.summary,
+        "payload": &event.payload,
+    });
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    writeln!(file, "{line}").map_err(|e| e.to_string())
+}
+
 fn parse_event_line(line: &str) -> Option<AgentGraphEvent> {
-    serde_json::from_str::<AgentGraphEvent>(line).ok().or_else(|| {
-        let value = serde_json::from_str::<Value>(line).ok()?;
-        Some(AgentGraphEvent {
-            schema_version: value.get("schemaVersion")?.as_u64()? as u32,
-            event_id: value.get("eventID")?.as_str()?.to_string(),
-            r#type: value.get("type")?.as_str()?.to_string(),
-            occurred_at: value.get("occurredAt")?.as_str()?.to_string(),
-            root_run_id: value.get("rootRunID")?.as_str()?.to_string(),
-            run_id: value.get("runID")?.as_str()?.to_string(),
-            parent_run_id: value
-                .get("parentRunID")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            source: value.get("source").and_then(Value::as_str).map(str::to_string),
-            workspace_path: value
-                .get("workspacePath")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            model_label: value
-                .get("modelLabel")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            permission_mode: value
-                .get("permissionMode")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            title: value.get("title").and_then(Value::as_str).map(str::to_string),
-            summary: value.get("summary").and_then(Value::as_str).map(str::to_string),
-            payload: value
-                .get("payload")
-                .and_then(Value::as_object)
-                .map(|object| {
-                    object
-                        .iter()
-                        .filter_map(|(key, value)| {
-                            value.as_str().map(|s| (key.clone(), s.to_string()))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
+    serde_json::from_str::<AgentGraphEvent>(line)
+        .ok()
+        .or_else(|| {
+            let value = serde_json::from_str::<Value>(line).ok()?;
+            Some(AgentGraphEvent {
+                schema_version: value.get("schemaVersion")?.as_u64()? as u32,
+                event_id: value.get("eventID")?.as_str()?.to_string(),
+                r#type: value.get("type")?.as_str()?.to_string(),
+                occurred_at: value.get("occurredAt")?.as_str()?.to_string(),
+                root_run_id: value.get("rootRunID")?.as_str()?.to_string(),
+                run_id: value.get("runID")?.as_str()?.to_string(),
+                parent_run_id: value
+                    .get("parentRunID")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                source: value
+                    .get("source")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                workspace_path: value
+                    .get("workspacePath")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                model_label: value
+                    .get("modelLabel")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                permission_mode: value
+                    .get("permissionMode")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                title: value
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                summary: value
+                    .get("summary")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                payload: value
+                    .get("payload")
+                    .and_then(Value::as_object)
+                    .map(|object| {
+                        object
+                            .iter()
+                            .filter_map(|(key, value)| {
+                                value.as_str().map(|s| (key.clone(), s.to_string()))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
         })
-    })
 }
 
 fn read_events(root_run_id: &str) -> Vec<AgentGraphEvent> {
@@ -143,7 +190,9 @@ fn parse_time(raw: &str) -> Option<DateTime<Utc>> {
 
 fn summary_title(anchor: Option<&AgentGraphEvent>, latest: &AgentGraphEvent) -> String {
     [
-        anchor.and_then(|event| event.payload.get("prompt")).cloned(),
+        anchor
+            .and_then(|event| event.payload.get("prompt"))
+            .cloned(),
         anchor.and_then(|event| event.summary.clone()),
         latest.payload.get("prompt").cloned(),
         latest.summary.clone(),
@@ -215,8 +264,8 @@ pub fn agent_graph_list() -> Result<Vec<AgentGraphRunSummary>, String> {
                 .filter_map(|event| event.payload.get("taskID").cloned())
                 .collect::<HashSet<_>>()
                 .len();
-            let git_dirty = summary_payload_value("gitDirty", anchor, latest)
-                .map(|value| value == "true");
+            let git_dirty =
+                summary_payload_value("gitDirty", anchor, latest).map(|value| value == "true");
             Some(AgentGraphRunSummary {
                 id: latest.root_run_id.clone(),
                 title: summary_title(anchor, latest),
@@ -240,7 +289,9 @@ pub fn agent_graph_list() -> Result<Vec<AgentGraphRunSummary>, String> {
                 event_count: events.len(),
                 tool_event_count: events
                     .iter()
-                    .filter(|event| event.r#type == "tool.started" || event.r#type == "tool.completed")
+                    .filter(|event| {
+                        event.r#type == "tool.started" || event.r#type == "tool.completed"
+                    })
                     .count(),
                 task_count,
                 tool_names,

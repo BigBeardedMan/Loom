@@ -42,6 +42,7 @@ export function TerminalPane({ workspace, blockId }: Props) {
   const hostsRef = useRef<Map<string, HTMLDivElement>>(new Map());
   const sessionsRef = useRef<Session[]>([]);
   sessionsRef.current = sessions;
+  const sessionKey = sessions.map((s) => s.id).join(":");
 
   // Reconcile session count with persisted target count.
   useEffect(() => {
@@ -85,19 +86,23 @@ export function TerminalPane({ workspace, blockId }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace.id]);
 
-  // Foreground-command polling on active session.
+  // Foreground-command polling across every visible split. The backend also
+  // uses this observer to record Terminal-launched CLI agent runs.
   useEffect(() => {
     if (!blockId) return;
-    if (!activeId) {
+    const sessionIds = sessionsRef.current.map((s) => s.id);
+    if (sessionIds.length === 0) {
       setBlockStatus(blockId, "idle");
       return;
     }
     let cancelled = false;
     const tick = async () => {
       try {
-        const cmd = await ipc.terminal.foregroundCommand(activeId);
+        const commands = await Promise.all(
+          sessionIds.map((id) => ipc.terminal.foregroundCommand(id).catch(() => null))
+        );
         if (cancelled) return;
-        setBlockStatus(blockId, cmd ? "active" : "idle");
+        setBlockStatus(blockId, commands.some(Boolean) ? "active" : "idle");
       } catch {}
     };
     tick();
@@ -106,7 +111,7 @@ export function TerminalPane({ workspace, blockId }: Props) {
       cancelled = true;
       clearInterval(id);
     };
-  }, [activeId, blockId, setBlockStatus]);
+  }, [blockId, sessionKey, setBlockStatus]);
 
   // Mount xterm into per-pane hosts and fit when sessions or layout change.
   useEffect(() => {

@@ -1,4 +1,6 @@
 use anyhow::{anyhow, Context, Result};
+#[cfg(target_os = "windows")]
+use chrono::{SecondsFormat, Utc};
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
@@ -9,6 +11,9 @@ use std::sync::Arc;
 use std::thread;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
+
+#[cfg(target_os = "windows")]
+use crate::agents::agent_graph::{append_event, AgentGraphEvent};
 
 use super::transcripts::TerminalTranscriptStore;
 
@@ -24,6 +29,8 @@ pub struct Session {
     pub shell: String,
     pub pid: u32,
     pub transcripts: Arc<TerminalTranscriptStore>,
+    #[cfg(target_os = "windows")]
+    tracked_cli_agent: Mutex<Option<TrackedCliAgentRun>>,
 }
 
 pub struct SessionRegistry {
@@ -100,6 +107,19 @@ pub struct SpawnOptions {
     #[serde(default)]
     pub env: Vec<(String, String)>,
 }
+
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone)]
+struct TrackedCliAgentRun {
+    root_run_id: String,
+    source: String,
+    command: String,
+    started_at: String,
+    last_heartbeat: chrono::DateTime<Utc>,
+}
+
+#[cfg(target_os = "windows")]
+const CLI_AGENT_HEARTBEAT_SECONDS: i64 = 30;
 
 fn default_shell() -> String {
     #[cfg(target_os = "windows")]
@@ -229,6 +249,8 @@ pub fn spawn(
         shell: shell_path,
         pid,
         transcripts: transcripts.clone(),
+        #[cfg(target_os = "windows")]
+        tracked_cli_agent: Mutex::new(None),
     });
     registry.insert(session.clone());
 
@@ -263,6 +285,8 @@ pub fn spawn(
             .ok()
             .map(|s| s.exit_code() as i32)
             .unwrap_or(-1);
+        #[cfg(target_os = "windows")]
+        session_wait.finish_tracked_cli_agent_run("cancelled", "run.cancelled");
         session_wait.transcripts.close(&id_wait);
         let _ = app_wait.emit(&format!("terminal://{id_wait}/exit"), exit_code);
     });
@@ -301,6 +325,8 @@ pub fn resize(registry: &SessionRegistry, id: &str, cols: u16, rows: u16) -> Res
 
 pub fn kill(registry: &SessionRegistry, id: &str) -> Result<()> {
     if let Some(session) = registry.remove(id) {
+        #[cfg(target_os = "windows")]
+        session.finish_tracked_cli_agent_run("cancelled", "run.cancelled");
         let _ = session.child.lock().kill();
         session.transcripts.close(id);
     }
@@ -343,6 +369,176 @@ pub fn update_metadata(
     Ok(())
 }
 
-pub fn pid(registry: &SessionRegistry, id: &str) -> Option<u32> {
-    registry.get(id).map(|s| s.pid)
+#[cfg(target_os = "windows")]
+pub fn observe_cli_agent_foreground(registry: &SessionRegistry, id: &str) -> Option<String> {
+    let session = registry.get(id)?;
+    let command = super::windows_proc::active_descendant_command(session.pid);
+    session.observe_cli_agent_command(command.as_deref());
+    command
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn observe_cli_agent_foreground(_registry: &SessionRegistry, _id: &str) -> Option<String> {
+    None
+}
+
+#[cfg(target_os = "windows")]
+impl Session {
+    fn observe_cli_agent_command(&self, command: Option<&str>) {
+        let Some(command) = command else {
+            self.finish_tracked_cli_agent_run("completed", "run.completed");
+            return;
+        };
+        let Some(source) = cli_agent_source(command) else {
+            self.finish_tracked_cli_agent_run("completed", "run.completed");
+            return;
+        };
+
+        let should_start = self
+            .tracked_cli_agent
+            .lock()
+            .as_ref()
+            .map(|run| run.source != source)
+            .unwrap_or(true);
+        if should_start {
+            self.finish_tracked_cli_agent_run("completed", "run.completed");
+            self.start_tracked_cli_agent_run(source, command);
+        } else {
+            self.record_cli_agent_heartbeat_if_needed(command);
+        }
+    }
+
+    fn start_tracked_cli_agent_run(&self, source: String, command: &str) {
+        let now = Utc::now();
+        let started_at = now.to_rfc3339_opts(SecondsFormat::Millis, true);
+        let run = TrackedCliAgentRun {
+            root_run_id: format!(
+                "terminal-{}",
+                Uuid::new_v4().to_string().to_ascii_lowercase()
+            ),
+            source,
+            command: command.to_string(),
+            started_at,
+            last_heartbeat: now,
+        };
+        *self.tracked_cli_agent.lock() = Some(run.clone());
+        self.append_cli_agent_event("graph.created", &run, now, "running");
+        self.append_cli_agent_event("run.started", &run, now, "running");
+    }
+
+    fn record_cli_agent_heartbeat_if_needed(&self, command: &str) {
+        let now = Utc::now();
+        let mut guard = self.tracked_cli_agent.lock();
+        let Some(run) = guard.as_mut() else { return };
+        if now.signed_duration_since(run.last_heartbeat).num_seconds() < CLI_AGENT_HEARTBEAT_SECONDS
+        {
+            return;
+        }
+        run.last_heartbeat = now;
+        run.command = command.to_string();
+        let snapshot = run.clone();
+        drop(guard);
+        self.append_cli_agent_event("run.heartbeat", &snapshot, now, "running");
+    }
+
+    fn finish_tracked_cli_agent_run(&self, status: &str, event_type: &str) {
+        let run = self.tracked_cli_agent.lock().take();
+        if let Some(run) = run {
+            self.append_cli_agent_event(event_type, &run, Utc::now(), status);
+        }
+    }
+
+    fn append_cli_agent_event(
+        &self,
+        event_type: &str,
+        run: &TrackedCliAgentRun,
+        occurred_at: chrono::DateTime<Utc>,
+        status: &str,
+    ) {
+        let cwd = self
+            .cwd
+            .lock()
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string());
+        let title = self.title.lock().clone();
+        let summary = cwd
+            .as_deref()
+            .map(|cwd| format!("{} in {}", run.command, display_path(cwd)))
+            .unwrap_or_else(|| run.command.clone());
+        let mut payload = HashMap::new();
+        payload.insert("status".to_string(), status.to_string());
+        payload.insert("command".to_string(), run.command.clone());
+        payload.insert("terminalSessionID".to_string(), self.id.clone());
+        payload.insert("startedAt".to_string(), run.started_at.clone());
+        if let Some(cwd) = cwd.clone() {
+            payload.insert("cwd".to_string(), cwd);
+        }
+
+        let event = AgentGraphEvent {
+            schema_version: 1,
+            event_id: Uuid::new_v4().to_string(),
+            r#type: event_type.to_string(),
+            occurred_at: occurred_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+            root_run_id: run.root_run_id.clone(),
+            run_id: run.root_run_id.clone(),
+            parent_run_id: None,
+            source: Some(run.source.clone()),
+            workspace_path: cwd,
+            model_label: None,
+            permission_mode: None,
+            title: Some(format!("{} terminal run", agent_source_label(&run.source))),
+            summary: Some(if title.trim().is_empty() {
+                summary
+            } else {
+                format!("{summary} · {title}")
+            }),
+            payload,
+        };
+        let _ = append_event(&event);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn cli_agent_source(command: &str) -> Option<String> {
+    let normalized = command
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or(command)
+        .trim()
+        .to_ascii_lowercase();
+    let stem = normalized
+        .strip_suffix(".exe")
+        .or_else(|| normalized.strip_suffix(".cmd"))
+        .or_else(|| normalized.strip_suffix(".bat"))
+        .unwrap_or(&normalized);
+    match stem {
+        "claude" => Some("claude".to_string()),
+        "codex" => Some("codex".to_string()),
+        "gemini" => Some("gemini".to_string()),
+        "lmstudio" | "lms" => Some("lmstudio".to_string()),
+        "ollama" => Some("ollama".to_string()),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn agent_source_label(source: &str) -> &'static str {
+    match source {
+        "claude" => "Claude Code",
+        "codex" => "Codex",
+        "gemini" => "Gemini",
+        "lmstudio" => "LM Studio",
+        "ollama" => "Ollama",
+        _ => "Agent",
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn display_path(path: &str) -> String {
+    dirs::home_dir()
+        .and_then(|home| {
+            let home = home.to_string_lossy().to_string();
+            path.strip_prefix(&home).map(|suffix| format!("~{suffix}"))
+        })
+        .unwrap_or_else(|| path.to_string())
 }
