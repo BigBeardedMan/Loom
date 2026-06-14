@@ -4,11 +4,9 @@
 // and returns the most recent commands as a struct list.
 
 use crate::security;
-use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
-use tauri::State;
+use std::path::{Path, PathBuf};
 
 const MAX_RECORDS: usize = 500;
 
@@ -46,6 +44,10 @@ fn history_path() -> Option<PathBuf> {
     dirs::data_local_dir().map(|d| d.join("Loom Testing Edition").join("history.jsonl"))
 }
 
+fn output_dir() -> Option<PathBuf> {
+    dirs::data_local_dir().map(|d| d.join("Loom Testing Edition").join("output"))
+}
+
 fn read_records(path: &PathBuf) -> Vec<CommandRecord> {
     let Ok(text) = fs::read_to_string(path) else {
         return Vec::new();
@@ -74,7 +76,9 @@ fn read_records(path: &PathBuf) -> Vec<CommandRecord> {
             started_at: started,
             ended_at: s.ended_at.unwrap_or(started),
             duration_ms: s.duration_ms.unwrap_or(0),
-            output_path: s.output_path,
+            output_path: validate_output_path(s.output_path.as_deref())
+                .ok()
+                .map(|path| path.to_string_lossy().to_string()),
         });
     }
     // newest first
@@ -107,12 +111,9 @@ pub fn command_history_list(workspace_path: Option<String>) -> Vec<CommandRecord
 }
 
 #[tauri::command]
-pub fn command_history_read_output(
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<String, String> {
+pub fn command_history_read_output(path: String) -> Result<String, String> {
     const MAX_BYTES: usize = 1_048_576;
-    let path = security::validate_app_data_path(&state, &path)?;
+    let path = validate_output_path(Some(&path))?;
     let bytes = fs::read(&path).map_err(|e| e.to_string())?;
     if bytes.len() <= MAX_BYTES {
         return Ok(security::redact_secrets(&String::from_utf8_lossy(&bytes)));
@@ -121,4 +122,32 @@ pub fn command_history_read_output(
     let dropped = bytes.len() - MAX_BYTES;
     let prefix = security::redact_secrets(&String::from_utf8_lossy(trimmed));
     Ok(format!("{prefix}\n\n... ({dropped} more bytes truncated)"))
+}
+
+fn validate_output_path(path: Option<&str>) -> Result<PathBuf, String> {
+    let path = path
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| "captured output path is missing".to_string())?;
+    let requested = Path::new(path);
+    let canonical = fs::canonicalize(requested)
+        .map_err(|e| format!("canonicalize {}: {e}", requested.display()))?;
+    if !canonical.is_file() {
+        return Err(format!(
+            "captured output is not a file: {}",
+            requested.display()
+        ));
+    }
+    let output_root =
+        output_dir().ok_or_else(|| "could not resolve command output directory".to_string())?;
+    let output_root = fs::canonicalize(&output_root)
+        .map_err(|e| format!("canonicalize {}: {e}", output_root.display()))?;
+    if security::path_is_within(&canonical, &output_root) {
+        Ok(canonical)
+    } else {
+        Err(format!(
+            "captured output path is outside command output directory: {}",
+            requested.display()
+        ))
+    }
 }
