@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { railTabsForContext } from "./commands";
 import { LOOM_REFRESH_RUNS } from "./events";
-import { ipc, type AgentGraphRunSummary, type Workspace } from "./ipc";
+import { ipc, type AgentGraphRunSummary, type LiveAgentTaskGroup, type Workspace } from "./ipc";
 import type { Block } from "../modules/workspace/LayoutPersistence";
 
 export type MemoryFile = {
@@ -14,10 +14,12 @@ export type MemoryFile = {
 
 export function useRightRailContext(workspace: Workspace | null, blocks: Pick<Block, "kind">[]) {
   const [runs, setRuns] = useState<AgentGraphRunSummary[]>([]);
+  const [liveGroups, setLiveGroups] = useState<LiveAgentTaskGroup[]>([]);
   const [memoryFiles, setMemoryFiles] = useState<MemoryFile[]>([]);
 
   const refreshRuns = useCallback(() => {
     ipc.agentGraph.list().then(setRuns).catch(() => setRuns([]));
+    ipc.liveTasks.list().then(setLiveGroups).catch(() => setLiveGroups([]));
   }, []);
 
   useEffect(() => {
@@ -37,12 +39,13 @@ export function useRightRailContext(workspace: Workspace | null, blocks: Pick<Bl
   }, [workspace?.id, workspace?.folderPath]);
 
   const scopedRuns = useMemo(() => filterRunsForWorkspace(runs, workspace), [runs, workspace?.folderPath]);
+  const scopedLiveGroups = useMemo(() => filterLiveGroupsForWorkspace(liveGroups, workspace), [liveGroups, workspace?.folderPath]);
   const railTabs = useMemo(
     () => railTabsForContext({ workspace, blocks, runs: scopedRuns, hasMemoryFiles: memoryFiles.length > 0 }),
     [workspace?.id, workspace?.folderPath, workspace?.kindRaw, blocks, scopedRuns, memoryFiles.length]
   );
 
-  return { runs, scopedRuns, memoryFiles, railTabs, refreshRuns };
+  return { runs, scopedRuns, liveGroups, scopedLiveGroups, memoryFiles, railTabs, refreshRuns };
 }
 
 export function filterRunsForWorkspace(runs: AgentGraphRunSummary[], workspace: Workspace | null): AgentGraphRunSummary[] {
@@ -51,6 +54,16 @@ export function filterRunsForWorkspace(runs: AgentGraphRunSummary[], workspace: 
   return runs.filter((run) => {
     if (!run.workspacePath) return false;
     const candidate = normalizedWorkspacePath(run.workspacePath);
+    return candidate === root || candidate.startsWith(`${root}/`) || candidate.startsWith(`${root}\\`);
+  });
+}
+
+export function filterLiveGroupsForWorkspace(liveGroups: LiveAgentTaskGroup[], workspace: Workspace | null): LiveAgentTaskGroup[] {
+  if (!workspace?.folderPath) return liveGroups;
+  const root = normalizedWorkspacePath(workspace.folderPath);
+  return liveGroups.filter((group) => {
+    const candidate = normalizedWorkspacePath(group.workspacePath);
+    if (!candidate) return true;
     return candidate === root || candidate.startsWith(`${root}/`) || candidate.startsWith(`${root}\\`);
   });
 }

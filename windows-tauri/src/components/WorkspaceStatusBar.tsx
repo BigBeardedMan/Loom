@@ -21,26 +21,22 @@ export function WorkspaceStatusBar() {
   const updateStatus = useApp((s) => s.updateStatus);
   const setUpdatePill = useApp((s) => s.setUpdatePill);
   const setUpdateStatus = useApp((s) => s.setUpdateStatus);
-  const [liveGroups, setLiveGroups] = useState<LiveAgentTaskGroup[]>([]);
   const [agents, setAgents] = useState<AgentDescriptor[]>([]);
   const [endpoints, setEndpoints] = useState<LocalEndpoint[]>([]);
   const updateSegment = updateStatusSegment(updateStatus, updatePill);
-  const { scopedRuns, memoryFiles } = useRightRailContext(workspace, layout?.blocks ?? []);
+  const { scopedRuns, scopedLiveGroups, memoryFiles, refreshRuns } = useRightRailContext(workspace, layout?.blocks ?? []);
   const effectiveRightRailTab = effectiveRailTab(rightRailTab, {
     workspace,
     blocks: layout?.blocks ?? [],
     runs: scopedRuns,
     hasMemoryFiles: memoryFiles.length > 0,
   });
-  const scopedLiveGroups = filterLiveGroupsForWorkspace(liveGroups, workspace?.folderPath);
   const runSegment = runHistorySegment(scopedRuns);
 
   useEffect(() => {
-    const tick = () => ipc.liveTasks.list().then(setLiveGroups).catch(() => {});
-    tick();
-    const id = setInterval(tick, 2500);
+    const id = setInterval(refreshRuns, 2500);
     return () => clearInterval(id);
-  }, []);
+  }, [refreshRuns]);
 
   const refreshProviders = () => {
     ipc.agents.refresh().then(setAgents).catch(() => setAgents([]));
@@ -124,7 +120,13 @@ function runHistorySegment(runs: AgentGraphRunSummary[]): {
     (run) =>
       isCompletedStatus(run.status) &&
       run.gitDirty !== true &&
-      ((run.toolEventCount ?? 0) > 0 || (run.taskCount ?? 0) > 0 || Boolean(run.gitHead) || Boolean(run.gitBranch))
+      ((run.toolEventCount ?? 0) > 0 ||
+        (run.taskCount ?? 0) > 0 ||
+        (run.toolNames?.length ?? 0) > 0 ||
+        (run.childRunCount ?? 0) > 0 ||
+        (run.lineageEventCount ?? 0) > 0 ||
+        Boolean(run.gitHead) ||
+        Boolean(run.gitBranch))
   ).length;
 
   if (attention > 0) {
@@ -207,25 +209,6 @@ function liveRunDetail(groups: LiveAgentTaskGroup[]): string | undefined {
   if (!group) return undefined;
   if (group.headline) return `${group.modelLabel || group.source} - ${group.headline}`;
   return group.modelLabel || group.source;
-}
-
-function filterLiveGroupsForWorkspace(
-  liveGroups: LiveAgentTaskGroup[],
-  workspacePath?: string | null
-): LiveAgentTaskGroup[] {
-  const root = normalizedPath(workspacePath);
-  if (!root) return liveGroups;
-  return liveGroups.filter((group) => {
-    const candidate = normalizedPath(group.workspacePath);
-    if (!candidate) return true;
-    return candidate === root || candidate.startsWith(`${root}/`) || candidate.startsWith(`${root}\\`);
-  });
-}
-
-function normalizedPath(path?: string | null): string | null {
-  const value = path?.trim();
-  if (!value) return null;
-  return value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
 function StatusSegment({

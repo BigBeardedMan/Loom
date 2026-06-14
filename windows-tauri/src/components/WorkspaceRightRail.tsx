@@ -19,23 +19,17 @@ export function WorkspaceRightRail() {
   const setSelectedTab = useApp((s) => s.setRightRailTab);
   const blocks = layout?.blocks ?? [];
   const activeBlock = layout?.blocks.find((b) => b.id === activeBlockId) ?? null;
-  const { scopedRuns, memoryFiles, railTabs, refreshRuns: refreshRunSummaries } = useRightRailContext(workspace, blocks);
-  const [liveGroups, setLiveGroups] = useState<LiveAgentTaskGroup[]>([]);
+  const { scopedRuns, scopedLiveGroups, memoryFiles, railTabs, refreshRuns } = useRightRailContext(workspace, blocks);
   const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
   const [loadingRunId, setLoadingRunId] = useState<string | null>(null);
   const [eventsByRun, setEventsByRun] = useState<Record<string, AgentGraphEvent[]>>({});
   const [agents, setAgents] = useState<AgentDescriptor[]>([]);
   const [endpoints, setEndpoints] = useState<LocalEndpoint[]>([]);
 
-  const scopedLiveGroups = useMemo(() => filterLiveGroupsForWorkspace(liveGroups, workspace), [liveGroups, workspace?.folderPath]);
   const reviewableRuns = useMemo(() => scopedRuns.filter(isReviewableRun), [scopedRuns]);
   const reviewableRunKey = reviewableRuns.slice(0, 6).map((run) => run.id).join("|");
   const effectiveTab = railTabs.some((tab) => tab.tab === selectedTab) ? selectedTab : railTabs[0]?.tab ?? "details";
 
-  const refreshRuns = () => {
-    refreshRunSummaries();
-    ipc.liveTasks.list().then(setLiveGroups).catch(() => setLiveGroups([]));
-  };
   const refreshProviders = () => {
     ipc.agents.refresh().then(setAgents).catch(() => setAgents([]));
     ipc.endpoints.list().then(setEndpoints).catch(() => setEndpoints([]));
@@ -1266,21 +1260,6 @@ function isAttentionStatus(status: string): boolean {
 function isRunningStatus(status: string): boolean {
   return ["running", "pending", "in_progress", "in-progress"].includes(status.toLowerCase());
 }
-
-function filterLiveGroupsForWorkspace(liveGroups: LiveAgentTaskGroup[], workspace: Workspace | null): LiveAgentTaskGroup[] {
-  if (!workspace?.folderPath) return liveGroups;
-  const root = normalizedPath(workspace.folderPath);
-  return liveGroups.filter((group) => {
-    const candidate = normalizedPath(group.workspacePath);
-    if (!candidate) return true;
-    return candidate === root || candidate.startsWith(`${root}/`) || candidate.startsWith(`${root}\\`);
-  });
-}
-
-function normalizedPath(path?: string | null): string {
-  return path?.trim().replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase() ?? "";
-}
-
 function liveGroupTitle(group: LiveAgentTaskGroup): string {
   const source = String(group.source || "agent");
   return group.modelLabel ? `${source} - ${group.modelLabel}` : source;
