@@ -179,6 +179,9 @@ struct WorkspaceRightRailView: View {
         .task(id: refreshKey) {
             await refreshRailData()
         }
+        .task(id: reviewEvidenceTaskKey) {
+            await prefetchReviewEvidenceIfNeeded()
+        }
     }
 
     private var refreshKey: String {
@@ -212,6 +215,15 @@ struct WorkspaceRightRailView: View {
             let candidate = normalizedPath(workspacePath)
             return candidate == root || candidate.hasPrefix(root + "/")
         }
+    }
+
+    private var reviewableRunSummaries: [AgentGraphRunSummary] {
+        scopedRunSummaries.filter(isReviewable)
+    }
+
+    private var reviewEvidenceTaskKey: String {
+        let ids = reviewableRunSummaries.prefix(6).map(\.id).joined(separator: ",")
+        return "\(effectiveTab.rawValue):\(ids)"
     }
 
     private var header: some View {
@@ -507,6 +519,21 @@ struct WorkspaceRightRailView: View {
     private var diffContent: some View {
         VStack(alignment: .leading, spacing: 8) {
             let decision = shipDecision
+            let packetRows = reviewPacketRows
+            railSectionTitle("Review Packet")
+            if packetRows.isEmpty {
+                railMuted("No run, check, worktree, or handoff evidence has been recorded yet.")
+            } else {
+                ForEach(packetRows) { row in
+                    railRow(
+                        icon: row.icon,
+                        tint: row.tint,
+                        title: row.title,
+                        detail: row.detail
+                    )
+                }
+            }
+
             railSectionTitle("Ship Decision")
             railRow(
                 icon: decision.icon,
@@ -516,7 +543,7 @@ struct WorkspaceRightRailView: View {
             )
 
             railSectionTitle("Review Signals")
-            let reviewable = scopedRunSummaries.filter { $0.gitBranch != nil || $0.gitDirty != nil || $0.toolEventCount > 0 }
+            let reviewable = reviewableRunSummaries
             if reviewable.isEmpty {
                 railMuted("No changed-file or check signals have been recorded yet.")
             } else {
@@ -626,6 +653,14 @@ struct WorkspaceRightRailView: View {
         memoryFiles = WorkspaceMemoryFile.load(from: workspace?.folderPath)
     }
 
+    private func prefetchReviewEvidenceIfNeeded() async {
+        guard effectiveTab == .diff else { return }
+        for summary in reviewableRunSummaries.prefix(6) where eventsByRunID[summary.id] == nil {
+            let events = (try? await AgentGraphLedger.shared.events(rootRunID: summary.id)) ?? []
+            eventsByRunID[summary.id] = events.sorted { $0.occurredAt < $1.occurredAt }
+        }
+    }
+
     private func toggleRunExpansion(_ summary: AgentGraphRunSummary) {
         if expandedRunID == summary.id {
             expandedRunID = nil
@@ -644,6 +679,105 @@ struct WorkspaceRightRailView: View {
         if loadingRunID == summary.id {
             loadingRunID = nil
         }
+    }
+
+    private var reviewPacketRows: [LedgerEvidence] {
+        let runs = reviewableRunSummaries
+        guard !runs.isEmpty else { return [] }
+
+        let loadedEvents = runs
+            .flatMap { eventsByRunID[$0.id] ?? [] }
+            .sorted { $0.occurredAt > $1.occurredAt }
+        let failedEvents = loadedEvents.filter { event in
+            event.type == .runFailed
+            || event.type == .spawnFailed
+            || event.type == .handoffRejected
+            || event.type == .attentionRequested
+            || event.type == .andonPaused
+            || (event.type == .toolCompleted && event.payload["status"] == "failed")
+        }
+        let handoffEvents = loadedEvents.filter { isHandoffEvent($0.type) }
+        let previewEvents = loadedEvents.filter { ($0.payload["tool"] ?? $0.title) == "preview_snapshot" }
+        let toolNames = Array(Set(runs.flatMap(\.toolNames) + loadedEvents.compactMap { $0.payload["tool"] })).sorted()
+        let toolEventCount = runs.reduce(0) { $0 + $1.toolEventCount }
+        let completed = runs.filter { $0.status == "completed" }.count
+        let failed = runs.filter { $0.status == "failed" || $0.status == "cancelled" }.count
+        let running = runs.count - completed - failed
+        let branches = Array(Set(runs.compactMap(\.gitBranch))).sorted()
+        let dirtyCount = runs.filter { $0.gitDirty == true }.count
+
+        var rows: [LedgerEvidence] = [
+            LedgerEvidence(
+                id: "coverage",
+                icon: "rectangle.stack",
+                tint: failed > 0 ? LoomTheme.orange : LoomTheme.green,
+                title: "Run coverage",
+                detail: "\(runs.count) runs · \(completed) complete · \(running) running · \(failed) blocked"
+            ),
+            LedgerEvidence(
+                id: "checks",
+                icon: "checklist",
+                tint: failedEvents.isEmpty ? LoomTheme.green : LoomTheme.orange,
+                title: "Checks",
+                detail: toolEventCount > 0
+                    ? "\(toolEventCount) tool events · \(limitedList(toolNames, empty: "tools recorded"))"
+                    : "No tool checks recorded yet."
+            )
+        ]
+
+        if let failedEvent = failedEvents.first {
+            rows.append(LedgerEvidence(
+                id: "failed-evidence",
+                icon: "exclamationmark.triangle.fill",
+                tint: LoomTheme.orange,
+                title: "\(failedEvents.count) attention signal\(failedEvents.count == 1 ? "" : "s")",
+                detail: compact(failedEvent.summary ?? failedEvent.title ?? failedEvent.payload["tool"] ?? failedEvent.type.rawValue)
+            ))
+        }
+
+        if !branches.isEmpty || runs.contains(where: { $0.gitDirty != nil }) {
+            let cleanliness = dirtyCount > 0 ? "\(dirtyCount) dirty" : "clean"
+            rows.append(LedgerEvidence(
+                id: "worktrees",
+                icon: "arrow.triangle.branch",
+                tint: dirtyCount > 0 ? LoomTheme.orange : LoomTheme.green,
+                title: "Worktrees",
+                detail: "\(limitedList(branches, empty: "no branch")) · \(cleanliness)"
+            ))
+        }
+
+        if let handoff = handoffEvents.first {
+            rows.append(LedgerEvidence(
+                id: "handoffs",
+                icon: "arrowshape.turn.up.right",
+                tint: eventTint(handoff.type),
+                title: "\(handoffEvents.count) handoff\(handoffEvents.count == 1 ? "" : "s")",
+                detail: compact(handoff.summary ?? handoff.payload["reviewSummary"] ?? handoff.title ?? handoffTitle(handoff.type))
+            ))
+        }
+
+        if let preview = previewEvents.first {
+            rows.append(LedgerEvidence(
+                id: "preview-evidence",
+                icon: "globe",
+                tint: LoomTheme.pink,
+                title: "Preview evidence",
+                detail: compact(preview.summary ?? preview.payload["status"] ?? "Preview snapshot recorded.")
+            ))
+        } else {
+            let previewCount = blocks.filter { $0.kind == .preview }.count
+            if previewCount > 0 {
+                rows.append(LedgerEvidence(
+                    id: "preview-panes",
+                    icon: "globe",
+                    tint: LoomTheme.pink,
+                    title: "Preview evidence",
+                    detail: "\(previewCount) Preview pane\(previewCount == 1 ? "" : "s") open for manual checks."
+                ))
+            }
+        }
+
+        return Array(rows.prefix(6))
     }
 
     private func normalizedPath(_ path: String) -> String {
@@ -950,6 +1084,25 @@ struct WorkspaceRightRailView: View {
         event.payload["gitBranch"] != nil
         || event.payload["gitHead"] != nil
         || event.payload["gitDirty"] != nil
+    }
+
+    private func isReviewable(_ summary: AgentGraphRunSummary) -> Bool {
+        summary.gitBranch != nil
+        || summary.gitDirty != nil
+        || summary.gitHead != nil
+        || summary.toolEventCount > 0
+        || summary.taskCount > 0
+        || !summary.toolNames.isEmpty
+    }
+
+    private func limitedList(_ values: [String], empty: String, limit: Int = 3) -> String {
+        let cleaned = values
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !cleaned.isEmpty else { return empty }
+        let visible = cleaned.prefix(limit).joined(separator: ", ")
+        let remaining = cleaned.count - min(cleaned.count, limit)
+        return remaining > 0 ? "\(visible) +\(remaining)" : visible
     }
 
     private func summaryChips(_ summary: AgentGraphRunSummary) -> [String] {

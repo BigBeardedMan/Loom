@@ -44,6 +44,8 @@ export function WorkspaceRightRail() {
   const [endpoints, setEndpoints] = useState<LocalEndpoint[]>([]);
 
   const scopedRuns = useMemo(() => filterRunsForWorkspace(runs, workspace), [runs, workspace?.folderPath]);
+  const reviewableRuns = useMemo(() => scopedRuns.filter(isReviewableRun), [scopedRuns]);
+  const reviewableRunKey = reviewableRuns.slice(0, 6).map((run) => run.id).join("|");
   const railTabs = useMemo(
     () => availableRailTabs(workspace, layout?.blocks ?? [], scopedRuns, memoryFiles),
     [workspace?.id, workspace?.folderPath, workspace?.kindRaw, layout?.blocks, scopedRuns, memoryFiles]
@@ -80,6 +82,35 @@ export function WorkspaceRightRail() {
       active = false;
     };
   }, [workspace?.id, workspace?.folderPath]);
+
+  useEffect(() => {
+    if (effectiveTab !== "diff" || reviewableRuns.length === 0) return;
+    const missing = reviewableRuns.slice(0, 6).filter((run) => !eventsByRun[run.id]);
+    if (missing.length === 0) return;
+
+    let active = true;
+    Promise.all(
+      missing.map((run) =>
+        ipc.agentGraph
+          .read(run.id)
+          .then((events) => [run.id, events] as const)
+          .catch(() => [run.id, [] as AgentGraphEvent[]] as const)
+      )
+    ).then((entries) => {
+      if (!active) return;
+      setEventsByRun((current) => {
+        const next = { ...current };
+        for (const [runId, events] of entries) {
+          if (!next[runId]) next[runId] = events;
+        }
+        return next;
+      });
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [effectiveTab, reviewableRunKey]);
 
   return (
     <aside
@@ -171,7 +202,7 @@ export function WorkspaceRightRail() {
         {effectiveTab === "files" && <FilesContent workspace={workspace} memoryFiles={memoryFiles} />}
         {effectiveTab === "preview" && <PreviewContent workspace={workspace} blocks={layout?.blocks ?? []} />}
         {effectiveTab === "tools" && <ToolsContent blocks={layout?.blocks ?? []} agents={agents} endpoints={endpoints} />}
-        {effectiveTab === "diff" && <DiffContent runs={scopedRuns} liveGroups={liveGroups} workspace={workspace} blocks={layout?.blocks ?? []} />}
+        {effectiveTab === "diff" && <DiffContent runs={scopedRuns} liveGroups={liveGroups} workspace={workspace} blocks={layout?.blocks ?? []} eventsByRun={eventsByRun} />}
         {effectiveTab === "memory" && <MemoryContent memoryFiles={memoryFiles} runs={scopedRuns} />}
         {effectiveTab === "details" && <DetailsContent workspace={workspace} block={activeBlock} blocks={layout?.blocks ?? []} />}
       </main>
@@ -415,17 +446,29 @@ function DiffContent({
   liveGroups,
   workspace,
   blocks,
+  eventsByRun,
 }: {
   runs: AgentGraphRunSummary[];
   liveGroups: LiveAgentTaskGroup[];
   workspace: Workspace | null;
   blocks: Block[];
+  eventsByRun: Record<string, AgentGraphEvent[]>;
 }) {
-  const reviewable = runs.filter((run) => run.gitBranch || run.gitDirty !== undefined || (run.toolEventCount ?? 0) > 0);
+  const reviewable = runs.filter(isReviewableRun);
   const previews = blocks.filter((block) => block.kind === "preview");
   const decision = shipDecision(runs, liveGroups);
+  const packet = reviewPacketRows(reviewable, eventsByRun, previews);
   return (
     <>
+      <RailSection title="Review Packet">
+        {packet.length === 0 ? (
+          <Muted>No run, check, worktree, or handoff evidence has been recorded yet.</Muted>
+        ) : (
+          packet.map((item) => (
+            <RailRow key={item.id} icon={item.icon} color={item.color} title={item.title} detail={item.detail} />
+          ))
+        )}
+      </RailSection>
       <RailSection title="Ship Decision">
         <RailRow icon={decision.icon} color={decision.color} title={decision.title} detail={decision.detail} />
       </RailSection>
@@ -735,6 +778,139 @@ function runEvidence(events: AgentGraphEvent[]): RunEvidence[] {
   }
 
   return evidence.slice(0, 5);
+}
+
+function reviewPacketRows(
+  runs: AgentGraphRunSummary[],
+  eventsByRun: Record<string, AgentGraphEvent[]>,
+  previews: Block[]
+): RunEvidence[] {
+  if (runs.length === 0) return [];
+
+  const loadedEvents = runs
+    .flatMap((run) => eventsByRun[run.id] ?? [])
+    .sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt));
+  const failedEvents = loadedEvents.filter(isAttentionEvent);
+  const handoffEvents = loadedEvents.filter((event) =>
+    ["handoff.written", "handoff.accepted", "handoff.rejected"].includes(event.type)
+  );
+  const previewEvents = loadedEvents.filter((event) => (event.payload?.tool || event.title) === "preview_snapshot");
+  const toolNames = uniqueSorted([
+    ...runs.flatMap((run) => run.toolNames ?? []),
+    ...loadedEvents.map((event) => event.payload?.tool).filter(Boolean),
+  ]);
+  const toolEventCount = runs.reduce((total, run) => total + (run.toolEventCount ?? 0), 0);
+  const completed = runs.filter((run) => run.status === "completed").length;
+  const failed = runs.filter((run) => run.status === "failed" || run.status === "cancelled").length;
+  const running = Math.max(0, runs.length - completed - failed);
+  const branches = uniqueSorted(runs.map((run) => run.gitBranch).filter(Boolean));
+  const dirtyCount = runs.filter((run) => run.gitDirty === true).length;
+
+  const rows: RunEvidence[] = [
+    {
+      id: "coverage",
+      icon: "layers",
+      color: failed > 0 ? workspaceColorVar.orange : workspaceColorVar.green,
+      title: "Run coverage",
+      detail: `${runs.length} runs - ${completed} complete - ${running} running - ${failed} blocked`,
+    },
+    {
+      id: "checks",
+      icon: "checkCircle",
+      color: failedEvents.length === 0 ? workspaceColorVar.green : workspaceColorVar.orange,
+      title: "Checks",
+      detail:
+        toolEventCount > 0
+          ? `${toolEventCount} tool events - ${limitedList(toolNames, "tools recorded")}`
+          : "No tool checks recorded yet.",
+    },
+  ];
+
+  const failedEvent = failedEvents[0];
+  if (failedEvent) {
+    rows.push({
+      id: "failed-evidence",
+      icon: "failedCircle",
+      color: workspaceColorVar.orange,
+      title: `${failedEvents.length} attention signal${failedEvents.length === 1 ? "" : "s"}`,
+      detail: compact(failedEvent.summary || failedEvent.title || failedEvent.payload?.tool || failedEvent.type),
+    });
+  }
+
+  if (branches.length > 0 || runs.some((run) => run.gitDirty !== undefined && run.gitDirty !== null)) {
+    rows.push({
+      id: "worktrees",
+      icon: "diff",
+      color: dirtyCount > 0 ? workspaceColorVar.orange : workspaceColorVar.green,
+      title: "Worktrees",
+      detail: `${limitedList(branches, "no branch")} - ${dirtyCount > 0 ? `${dirtyCount} dirty` : "clean"}`,
+    });
+  }
+
+  const handoff = handoffEvents[0];
+  if (handoff) {
+    rows.push({
+      id: "handoffs",
+      icon: "rerun",
+      color: eventColor(handoff),
+      title: `${handoffEvents.length} handoff${handoffEvents.length === 1 ? "" : "s"}`,
+      detail: compact(handoff.summary || handoff.payload?.reviewSummary || handoff.title || handoffTitle(handoff.type)),
+    });
+  }
+
+  const preview = previewEvents[0];
+  if (preview) {
+    rows.push({
+      id: "preview-evidence",
+      icon: "eye",
+      color: workspaceColorVar.pink,
+      title: "Preview evidence",
+      detail: compact(preview.summary || preview.payload?.status || "Preview snapshot recorded."),
+    });
+  } else if (previews.length > 0) {
+    rows.push({
+      id: "preview-panes",
+      icon: "eye",
+      color: workspaceColorVar.pink,
+      title: "Preview evidence",
+      detail: `${previews.length} Preview pane${previews.length === 1 ? "" : "s"} open for manual checks.`,
+    });
+  }
+
+  return rows.slice(0, 6);
+}
+
+function isReviewableRun(run: AgentGraphRunSummary): boolean {
+  return Boolean(
+    run.gitBranch ||
+      run.gitDirty !== undefined ||
+      run.gitHead ||
+      (run.toolEventCount ?? 0) > 0 ||
+      (run.taskCount ?? 0) > 0 ||
+      (run.toolNames?.length ?? 0) > 0
+  );
+}
+
+function isAttentionEvent(event: AgentGraphEvent): boolean {
+  return (
+    event.type === "run.failed" ||
+    event.type === "spawn.failed" ||
+    event.type === "handoff.rejected" ||
+    event.type === "attention.requested" ||
+    event.type === "andon.paused" ||
+    (event.type === "tool.completed" && event.payload?.status === "failed")
+  );
+}
+
+function uniqueSorted(values: (string | null | undefined)[]): string[] {
+  return Array.from(new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])).sort();
+}
+
+function limitedList(values: string[], empty: string, limit = 3): string {
+  if (values.length === 0) return empty;
+  const visible = values.slice(0, limit).join(", ");
+  const remaining = values.length - Math.min(values.length, limit);
+  return remaining > 0 ? `${visible} +${remaining}` : visible;
 }
 
 function payloadValue(event: AgentGraphEvent, keys: string[]): string | null {
