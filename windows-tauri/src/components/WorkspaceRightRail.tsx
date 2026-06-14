@@ -330,6 +330,7 @@ function FilesContent({ workspace, memoryFiles }: { workspace: Workspace | null;
       ) : (
         <>
           <CodeLine>{workspace.folderPath}</CodeLine>
+          <FolderActions path={workspace.folderPath} label={ROOM_META[workspace.kindRaw]?.label ?? workspace.name} />
           {memoryFiles.length === 0 ? (
             <Muted>No agent memory files found in this folder.</Muted>
           ) : (
@@ -583,6 +584,24 @@ function CodeLine({ children }: { children: ReactNode }) {
   return (
     <div className="truncate" style={{ padding: 8, borderRadius: radius.row, background: surface.inset, fontSize: 10, fontFamily: "var(--font-mono)", color: text.muted }}>
       {children}
+    </div>
+  );
+}
+
+function FolderActions({ path, label }: { path: string; label: string }) {
+  const copyPath = () => void navigator.clipboard?.writeText(path);
+  const revealPath = () => void ipc.fs.reveal(path);
+
+  return (
+    <div className="flex items-center gap-1.5" style={{ marginTop: 7 }}>
+      <RailActionButton title={`Copy ${label} folder path`} onClick={copyPath}>
+        <Icons.copy size={11} strokeWidth={2.2} />
+        Copy
+      </RailActionButton>
+      <RailActionButton title={`Reveal ${label} folder`} onClick={revealPath}>
+        <Icons.folderOpen size={11} strokeWidth={2.2} />
+        Reveal
+      </RailActionButton>
     </div>
   );
 }

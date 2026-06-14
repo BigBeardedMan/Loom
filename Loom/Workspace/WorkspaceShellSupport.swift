@@ -561,6 +561,7 @@ struct WorkspaceRightRailView: View {
             railSectionTitle("Project Folder")
             if let workspace, !workspace.folderPath.isEmpty {
                 railCode(workspace.displayFolderPath)
+                folderActions(path: workspace.folderPath, label: workspace.kind.label)
                 if memoryFiles.isEmpty {
                     railMuted("No agent memory files found in this folder.")
                 } else {
@@ -1029,6 +1030,17 @@ struct WorkspaceRightRailView: View {
             }
             railActionButton(title: "Reveal", systemImage: "folder", help: "Reveal \(file.name) in Finder") {
                 revealPath(file.path)
+            }
+        }
+    }
+
+    private func folderActions(path: String, label: String) -> some View {
+        HStack(spacing: 6) {
+            railActionButton(title: "Copy", systemImage: "doc.on.doc", help: "Copy \(label) folder path") {
+                copyPath(path)
+            }
+            railActionButton(title: "Reveal", systemImage: "folder", help: "Reveal \(label) folder in Finder") {
+                revealPath(path)
             }
         }
     }
