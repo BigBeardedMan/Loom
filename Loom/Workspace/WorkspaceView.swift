@@ -535,7 +535,9 @@ struct WorkspaceView: View {
         if selectedWorkspace?.kind == .review || selectedWorkspace?.kind == .runs {
             tabs.append(.diff)
         }
-        if selectedWorkspace?.folderPath.isEmpty == false { tabs.append(.memory) }
+        if selectedWorkspace?.folderPath.isEmpty == false || selectedWorkspace?.kind == .runs || selectedWorkspace?.kind == .review {
+            tabs.append(.memory)
+        }
         tabs.append(.details)
         return tabs
     }
