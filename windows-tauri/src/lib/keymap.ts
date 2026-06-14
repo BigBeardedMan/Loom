@@ -2,8 +2,8 @@
 // Single central place that the App-level keydown handler reads from.
 
 import { useEffect } from "react";
-import { useApp, type Panel } from "./store";
-import { ipc } from "./ipc";
+import { useApp, type Panel, type RightRailTab } from "./store";
+import { ipc, type WorkspaceKind } from "./ipc";
 import { ROOM_KINDS, ROOM_META, panelsForKind, workspaceMatchesKind } from "./commands";
 import { LOOM_REFRESH_RUNS } from "./events";
 
@@ -56,6 +56,12 @@ export function useGlobalKeymap() {
     })();
     const selectedWorkspace = workspaces.find((w) => w.id === selectedWorkspaceId);
     const canAddPane = !layout || paneCapacityLimit === null || layout.blocks.length < paneCapacityLimit;
+    const openWorkflow = (kind: WorkspaceKind, tab: RightRailTab) => {
+      const ws = workspaces.find((workspace) => workspaceMatchesKind(workspace, kind));
+      if (ws) selectWorkspace(ws.id);
+      setRightRailTab(tab);
+      window.dispatchEvent(new Event(LOOM_REFRESH_RUNS));
+    };
 
     const bindings: Binding[] = [
       {
@@ -136,6 +142,21 @@ export function useGlobalKeymap() {
           setRightRailTab("timeline");
           window.dispatchEvent(new Event(LOOM_REFRESH_RUNS));
         },
+      },
+      {
+        combo: "ctrl+alt+5",
+        description: "Open Runs timeline",
+        run: () => openWorkflow("runs", "timeline"),
+      },
+      {
+        combo: "ctrl+alt+6",
+        description: "Open Review queue",
+        run: () => openWorkflow("review", "diff"),
+      },
+      {
+        combo: "ctrl+alt+7",
+        description: "Open Project memory",
+        run: () => setRightRailTab("memory"),
       },
     ];
 

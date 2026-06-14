@@ -177,6 +177,20 @@ struct LoomApp: App {
                     .keyboardShortcut(roomShortcutKey(for: kind), modifiers: [.command, .option])
                 }
                 Divider()
+                Button("Open Runs Timeline") {
+                    openWorkflow(kind: .runs, tab: .timeline)
+                }
+                .keyboardShortcut("5", modifiers: [.command, .option])
+                Button("Open Review Queue") {
+                    openWorkflow(kind: .review, tab: .diff)
+                }
+                .keyboardShortcut("6", modifiers: [.command, .option])
+                Button("Open Project Memory") {
+                    NotificationCenter.default.post(name: .loomOpenInspectorTab, object: WorkspaceRightRailTab.memory.rawValue)
+                    NotificationCenter.default.post(name: .loomRefreshInspectorContext, object: nil)
+                }
+                .keyboardShortcut("7", modifiers: [.command, .option])
+                Divider()
                 ForEach(WorkspaceRightRailTab.allCases) { tab in
                     Button("Show \(tab.label) Inspector") {
                         NotificationCenter.default.post(name: .loomOpenInspectorTab, object: tab.rawValue)
@@ -274,6 +288,12 @@ struct LoomApp: App {
     private func quickFlipWorkspace() {
         guard let prev = layout.previousWorkspaceID else { return }
         layout.selectedWorkspaceID = prev
+    }
+
+    private func openWorkflow(kind: WorkspaceKind, tab: WorkspaceRightRailTab) {
+        NotificationCenter.default.post(name: .loomSwitchWorkspaceKind, object: kind.rawValue)
+        NotificationCenter.default.post(name: .loomOpenInspectorTab, object: tab.rawValue)
+        NotificationCenter.default.post(name: .loomRefreshInspectorContext, object: nil)
     }
 
     @MainActor
