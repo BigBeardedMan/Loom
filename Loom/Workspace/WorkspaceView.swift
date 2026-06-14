@@ -487,9 +487,11 @@ struct WorkspaceView: View {
             selectedWorkspaceID: $bindable.selectedWorkspaceID,
             selectedUsageTool: $selectedUsageTool,
             isRightRailVisible: isRightRailVisible,
+            activeInspectorTab: rightRailTab,
             toggleRightRail: {
                 toggleRightRail()
             },
+            openInspector: openInspector,
             openSettings: openSettings
         )
     }

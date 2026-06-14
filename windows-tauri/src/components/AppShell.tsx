@@ -7,7 +7,7 @@ import { WorkspaceView } from "../modules/workspace/WorkspaceView";
 import { WorkspaceRightRail } from "./WorkspaceRightRail";
 import { WorkspaceStatusBar } from "./WorkspaceStatusBar";
 import { on } from "../lib/ipc";
-import { useApp, workspaceKindLabel } from "../lib/store";
+import { useApp, workspaceKindLabel, type RightRailTab } from "../lib/store";
 import { cockpit, surface, text, workspaceColorVar } from "../lib/theme";
 
 export function AppShell() {
@@ -18,6 +18,8 @@ export function AppShell() {
   const setUsageTool = useApp((s) => s.setUsageTool);
   const isRightRailVisible = useApp((s) => s.isRightRailVisible);
   const toggleRightRail = useApp((s) => s.toggleRightRail);
+  const rightRailTab = useApp((s) => s.rightRailTab);
+  const setRightRailTab = useApp((s) => s.setRightRailTab);
   const openSettings = useApp((s) => s.openSettings);
 
   useEffect(() => {
@@ -47,7 +49,9 @@ export function AppShell() {
           selectedId={selectedId}
           selectWorkspace={selectWorkspace}
           isRightRailVisible={isRightRailVisible}
+          activeInspectorTab={rightRailTab}
           toggleRightRail={toggleRightRail}
+          openInspector={setRightRailTab}
           openSettings={openSettings}
         />
         <LoomPanel noShadow style={{ width: 248, flex: "none" }}>
@@ -68,18 +72,22 @@ function RoomRail({
   selectedId,
   selectedUsageTool,
   isRightRailVisible,
+  activeInspectorTab,
   selectWorkspace,
   onUsageToggle,
   toggleRightRail,
+  openInspector,
   openSettings,
 }: {
   workspaces: ReturnType<typeof useApp.getState>["workspaces"];
   selectedId: string | null;
   selectedUsageTool: ReturnType<typeof useApp.getState>["selectedUsageTool"];
   isRightRailVisible: boolean;
+  activeInspectorTab: RightRailTab;
   selectWorkspace: (id: string | null) => void;
   onUsageToggle: () => void;
   toggleRightRail: () => void;
+  openInspector: (tab: RightRailTab) => void;
   openSettings: () => void;
 }) {
   return (
@@ -136,6 +144,7 @@ function RoomRail({
       })}
       <div className="flex-1" />
       <RailUtilityButton icon="layers" active={!!selectedUsageTool} title="Usage dashboards" onClick={onUsageToggle} />
+      <RailUtilityButton icon="tools" active={isRightRailVisible && activeInspectorTab === "tools"} title="Open tools and models" onClick={() => openInspector("tools")} />
       <RailUtilityButton icon="panelRight" active={isRightRailVisible} title={isRightRailVisible ? "Hide inspector" : "Show inspector"} onClick={toggleRightRail} />
       <RailUtilityButton icon="settings" active={false} title="Open Settings" onClick={openSettings} />
     </nav>

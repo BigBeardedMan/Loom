@@ -41,7 +41,9 @@ struct WorkspaceRoomRailView: View {
     @Binding var selectedWorkspaceID: UUID?
     @Binding var selectedUsageTool: CLITool?
     let isRightRailVisible: Bool
+    let activeInspectorTab: WorkspaceRightRailTab
     let toggleRightRail: () -> Void
+    let openInspector: (WorkspaceRightRailTab) -> Void
     let openSettings: () -> Void
 
     var body: some View {
@@ -61,6 +63,13 @@ struct WorkspaceRoomRailView: View {
                 help: "Usage dashboards",
                 isActive: selectedUsageTool != nil,
                 action: { selectedUsageTool = selectedUsageTool == nil ? .claude : nil }
+            )
+
+            railUtilityButton(
+                systemImage: "wrench.and.screwdriver",
+                help: "Open tools and models",
+                isActive: isRightRailVisible && activeInspectorTab == .tools,
+                action: { openInspector(.tools) }
             )
 
             railUtilityButton(
