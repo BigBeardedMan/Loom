@@ -1,8 +1,21 @@
 import { Icons, type IconName } from "./icons";
 import { workspaceColorVar } from "./theme";
-import type { AgentGraphRunSummary, Workspace } from "./ipc";
+import type { AgentGraphRunSummary, Workspace, WorkspaceKind } from "./ipc";
 import type { Panel, RightRailTab } from "./store";
 import type { Block } from "../modules/workspace/LayoutPersistence";
+
+export const ROOM_KINDS: WorkspaceKind[] = ["code", "ideas", "review", "runs"];
+
+export const ROOM_META: Record<
+  WorkspaceKind,
+  { label: string; icon: IconName; color: string }
+> = {
+  code: { label: "Prompt", icon: "terminal", color: workspaceColorVar.blue },
+  ideas: { label: "Ideas", icon: "lightbulb", color: workspaceColorVar.pink },
+  review: { label: "Review", icon: "diff", color: workspaceColorVar.orange },
+  build: { label: "Review", icon: "diff", color: workspaceColorVar.orange },
+  runs: { label: "Runs", icon: "workflow", color: workspaceColorVar.green },
+};
 
 export const PANEL_META: Record<
   Panel,

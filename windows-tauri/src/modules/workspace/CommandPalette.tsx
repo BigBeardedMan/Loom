@@ -10,10 +10,10 @@ import {
 } from "../../lib/theme";
 import { Icons } from "../../lib/icons";
 import { useApp } from "../../lib/store";
-import { ipc, type CommandRecord, type SessionInfo } from "../../lib/ipc";
+import { ipc, type CommandRecord, type SessionInfo, type Workspace, type WorkspaceKind } from "../../lib/ipc";
 import { LOOM_REFRESH_RUNS } from "../../lib/events";
 import { useRightRailContext } from "../../lib/railContext";
-import { ADD_BLOCK_COMMANDS, PANEL_META, panelsForKind, railTabsForContext } from "../../lib/commands";
+import { ADD_BLOCK_COMMANDS, PANEL_META, ROOM_KINDS, ROOM_META, panelsForKind, railTabsForContext } from "../../lib/commands";
 
 // Mirrors Loom/Workspace/CommandPalette.swift.
 // 560x420 sheet, .regularMaterial backdrop, sectioned list with selection ring.
@@ -123,6 +123,48 @@ export function CommandPalette() {
           >
             Nothing matches.
           </Command.Empty>
+
+          <Command.Group
+            heading="Rooms"
+            className="section-header"
+            style={{ padding: "10px 14px 4px" }}
+          >
+            {ROOM_KINDS.map((kind) => {
+              const room = workspaces.find((ws) => workspaceMatchesKind(ws, kind));
+              const meta = ROOM_META[kind];
+              const Icon = Icons[meta.icon];
+              return (
+                <Command.Item
+                  key={kind}
+                  value={`room ${meta.label} ${room?.name ?? ""}`}
+                  disabled={!room}
+                  onSelect={() => {
+                    if (!room) return;
+                    selectWorkspace(room.id);
+                    closePalette();
+                  }}
+                  className="flex cursor-pointer items-center gap-2"
+                  style={{
+                    padding: "7px 14px",
+                    fontSize: 13,
+                    fontWeight: 500,
+                    color: room ? text.muted : text.tertiary,
+                    borderRadius: 6,
+                    opacity: room ? 1 : 0.5,
+                  }}
+                >
+                  <Icon size={12} strokeWidth={1.8} color={room ? meta.color : text.tertiary} />
+                  <span className="flex-1 truncate">Open {meta.label} Room</span>
+                  <span
+                    className="font-mono truncate"
+                    style={{ fontSize: 11, color: text.tertiary, maxWidth: 200 }}
+                  >
+                    {room?.folderPath || `No ${meta.label} room`}
+                  </span>
+                </Command.Item>
+              );
+            })}
+          </Command.Group>
 
           <Command.Group
             heading="Workspaces"
@@ -368,4 +410,9 @@ export function CommandPalette() {
       </Command>
     </div>
   );
+}
+
+function workspaceMatchesKind(workspace: Workspace, kind: WorkspaceKind): boolean {
+  if (kind === "review") return workspace.kindRaw === "review" || workspace.kindRaw === "build";
+  return workspace.kindRaw === kind;
 }
