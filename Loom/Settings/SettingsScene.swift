@@ -823,7 +823,7 @@ private struct ShellSettings: View {
             Section("Shell Integration") {
                 Toggle("Capture commands from Loom terminals", isOn: $integrationEnabled)
 
-                Text("Loom installs a small zsh shim that sources your normal config, then logs every command (start, end, exit, cwd) to a JSONL file the Commands panel reads. Turn this off to launch terminals with stock `$ZDOTDIR`; existing entries in the log stay put either way.")
+                Text("Loom installs small zsh and bash shims that source your normal config, then log commands to a JSONL file the Commands panel reads. Turn this off to launch new terminals without Loom shell startup files; existing entries in the log stay put either way.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -877,8 +877,15 @@ private struct ShellSettings: View {
             }
 
             Section("Files") {
-                LabeledContent("Shim") {
-                    Text(ShellIntegration.shimURL.path)
+                LabeledContent("zsh shim") {
+                    Text(ShellIntegration.zshShimURL.path)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                LabeledContent("bash shim") {
+                    Text(ShellIntegration.bashShimURL.path)
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -893,7 +900,8 @@ private struct ShellSettings: View {
                 }
                 Button("Reveal in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting([
-                        ShellIntegration.shimURL,
+                        ShellIntegration.zshShimURL,
+                        ShellIntegration.bashShimURL,
                         ShellIntegration.historyLogURL
                     ])
                 }

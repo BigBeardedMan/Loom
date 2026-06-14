@@ -119,9 +119,9 @@ Loom 2.x extends the cockpit. Highlights:
 - **Settings → MCP**: a first-class management surface for Claude Code's
   MCP server registry. Loom shells out to `claude mcp` for every read and
   write so Claude Code stays the source of truth.
-- **Command history**: a Loom-managed zsh shim (sourced via `ZDOTDIR`)
-  appends a JSON record per command to `history.jsonl`. The new Commands
-  panel renders the last 500, newest first.
+- **Command history**: Loom-managed zsh and bash shims append JSON records
+  to `history.jsonl`. The new Commands panel renders the last 500, newest
+  first.
 - **Settings → Shell**: a toggle to opt out of the shell integration
   without uninstalling the shim.
 - **⌘K command palette**: workspace switcher, recent-command rerun, and
@@ -461,9 +461,10 @@ they do in iTerm.
 
 #### What it ships with
 
-- Login shell. Defaults to `/bin/zsh -l`; respects `$SHELL` if set. The
-  argv 0 is set to `-zsh` so the shell treats itself as a login shell and
-  runs `zprofile` / `zshrc` (where Homebrew's `PATH` lives).
+- Login shell. Defaults to `/bin/zsh -l`; respects `$SHELL` if set. zsh and
+  unsupported shells launch as login shells. When shell capture is enabled
+  for bash, Loom launches bash through its managed rcfile and that rcfile
+  sources the user's normal profile/bashrc files.
 - TTY allocation. `top`, `bat`, and friends get a real width.
 - Working directory seeded from the workspace folder.
 - Standard ANSI color and 256-color support; truecolor via SwiftTerm.
@@ -485,18 +486,18 @@ flow into every subprocess you run:
 - Suffix matches: any variable ending in `_API_KEY`, `_SECRET_KEY`,
   `_ACCESS_TOKEN`, or `_AUTH_TOKEN`.
 
-#### Claude click-to-edit
+#### Terminal click-to-edit
 
-When Claude Code (`claude`) is the foreground process, single-clicking inside
-its active prompt sends arrow-key sequences to walk the cursor to the clicked
-column and row. That makes it possible to click into already-typed Claude
-prompt text and edit from that point without manually arrowing around.
+When Claude Code (`claude`), Codex (`codex`), Gemini (`gemini`), or a known
+plain shell prompt is the foreground process, single-clicking inside its active
+prompt sends arrow-key sequences to walk the cursor to the clicked column and
+row. That makes it possible to click into already-typed prompt text and edit
+from that point without manually arrowing around.
 
-The behavior is intentionally Claude-only. Sending arrows into zsh, Codex,
-Gemini, or an arbitrary TUI can trigger command history or tool-specific
-shortcuts instead of moving text insertion. Cross-row clicks are bounded to a
-10-row radius from the cursor so accidental scrollback clicks do not blast a
-hundred arrow sequences into the foreground.
+The behavior is intentionally disabled for common TUIs and remote/session
+tools such as vim, nano, tmux, ssh, top, and htop. Cross-row clicks are
+bounded to a 10-row radius from the cursor so accidental scrollback clicks do
+not blast a hundred arrow sequences into the foreground.
 
 Single clicks with any modifier (Shift, Command, Option, Control) are
 ignored so SwiftTerm's native selection and word-lookup gestures keep
@@ -631,7 +632,7 @@ flipping back is free.
 #### Roadmap items
 
 - Inline cards rendered *alongside* scrollback rather than replacing it.
-- bash and fish shim variants so non-zsh users get parity.
+- fish shell shim support.
 - CodeEdit integration as a richer editor surface.
 
 ### 6.2. Editor
@@ -1711,14 +1712,14 @@ standard locations (`/usr/local/bin/claude`, `/opt/homebrew/bin/claude`,
 
 ### 11.6. Shell
 
-Toggles Loom's zsh shell integration on or off. The integration shim
-lives at `~/Library/Application Support/Loom Testing Edition/shell/.zshrc` in
-Testing Edition and is sourced via `ZDOTDIR` when each terminal session
-spawns.
+Toggles Loom's zsh/bash shell integration on or off. The integration shims
+live under `~/Library/Application Support/Loom Testing Edition/shell/` in
+Testing Edition. zsh is sourced via `ZDOTDIR`; bash is launched with the
+managed `.bashrc` via `--rcfile`.
 
 | Field | Storage | Purpose |
 | ----- | ------- | ------- |
-| Capture commands from Loom terminals | UserDefaults `loom.shellIntegration` | Default true. When false, terminals launch with the user's normal `$ZDOTDIR` and no command logging happens. |
+| Capture commands from Loom terminals | UserDefaults `loom.shellIntegration` | Default true. When false, terminals launch without Loom shell startup files and no command logging happens. |
 | Save terminal transcripts locally | UserDefaults `loom.terminalHistory.enabled` | Default true. When false, Loom stops appending PTY output to transcript files |
 | Storage limit | UserDefaults `loom.terminalHistory.maxBytes` | Default 1 GB. Choices: 250 MB, 500 MB, 1 GB, 2 GB, 5 GB, 10 GB |
 | Always paste as plain text | UserDefaults `loom.terminal.pasteAsPlainText` | Sends clipboard text directly to the PTY instead of SwiftTerm bracketed paste |
@@ -1727,7 +1728,7 @@ The Terminal History section shows the currently saved byte count, a **Prune
 Terminal History** action, and **Reveal History Folder**. Pruning clears saved
 transcripts while active terminal panes keep running.
 
-The tab also shows the on-disk paths to the shim and the history JSONL log,
+The tab also shows the on-disk paths to the shims and the history JSONL log,
 plus a **Reveal in Finder** button.
 
 Toggling applies to terminals opened *after* the change. Currently
@@ -2094,28 +2095,29 @@ warrant it.
 
 ### 14.4. Shell Integration
 
-Loom captures shell-command metadata by sourcing a small zsh shim into
-every Loom-spawned terminal session, then writing one JSON line per
-command to `history.jsonl`.
+Loom captures shell-command metadata by sourcing managed shell shims into
+supported Loom-spawned terminal sessions, then writing one JSON line per
+command to `history.jsonl`. zsh and bash are supported in this path.
 
 #### Layout on disk
 
 ```
 ~/Library/Application Support/Loom Testing Edition/shell/
-├── .zshrc           # the shim, written on every Loom launch
+├── .zshrc           # zsh shim, written on every Loom launch
+├── .bashrc          # bash shim, written on every Loom launch
 └── history.jsonl    # append-only command log, one record per line
 ```
 
 `ShellIntegration.install()` runs at app launch (after a single
-idempotency check on the file's contents) and ensures `.zshrc` matches
-the current canonical payload.
+idempotency check on the file contents) and ensures `.zshrc` and `.bashrc`
+match the current canonical payloads.
 
 #### How it gets sourced
 
-`TerminalSession.makeEnvironment()` exports `ZDOTDIR=<shell-support-dir>`
-and `LOOM_SESSION_ID=<uuid>` when the user has not opted out (Settings →
-Shell). zsh sees `ZDOTDIR` and reads `<dir>/.zshrc` instead of
-`~/.zshrc`. The shim's first job is to source the user's normal config
+`TerminalSession.makeEnvironment(for:)` exports `LOOM_SESSION_ID=<uuid>` for
+supported shells when the user has not opted out (Settings → Shell). zsh also
+gets `ZDOTDIR=<shell-support-dir>`, then reads `<dir>/.zshrc` instead of
+`~/.zshrc`. The zsh shim's first job is to source the user's normal config
 files in order:
 
 1. `~/.zshenv`
@@ -2123,9 +2125,16 @@ files in order:
 3. `~/.zshrc`
 4. `~/.zlogin`
 
-so behavior matches a stock login shell. Then it registers `preexec`
-and `precmd` hooks that capture the timing and exit code of each
-command.
+so behavior matches a stock login shell. Then it registers `preexec` and
+`precmd` hooks that capture the timing and exit code of each command.
+
+Bash ignores `--rcfile` for login shells, so when bash capture is enabled
+Loom launches bash as an interactive shell with the managed `.bashrc`. That
+shim sources `~/.bash_profile`, `~/.bash_login`, or `~/.profile`, then
+`~/.bashrc`, before installing its history recorder. Hand-typed bash commands
+currently record zero duration because bash lacks zsh-style hooks; bash
+commands submitted through Loom's capture path record measured start/end
+timestamps.
 
 #### Record format
 
@@ -2145,12 +2154,11 @@ command.
 
 #### Output capture
 
-`__loom_capture <cmd>` is a zsh function the shim defines globally. It
-tees `<cmd>`'s combined stdout+stderr into
-`output/cap-<stamp>-<pid>-<rand>.out` and records the path in a global
-`__loom_last_capture_path` variable that `__loom_precmd` reads when
-emitting the JSONL record. Exit code is preserved through the pipe via
-`setopt local_options pipefail` plus `${pipestatus[1]}`.
+`__loom_capture <cmd>` is defined by the zsh and bash shims. It tees
+`<cmd>`'s combined stdout+stderr into `output/cap-<stamp>-<pid>-<rand>.out`
+and records the path in the JSONL record. Exit code is preserved through the
+pipe via zsh's `setopt local_options pipefail` plus `${pipestatus[1]}`, or
+bash's `set -o pipefail` plus `${PIPESTATUS[0]}`.
 
 Loom's `TerminalSession.submit(_:capture:)` wraps any
 programmatically-submitted command in `__loom_capture '...'` (with
@@ -2179,10 +2187,10 @@ History.
 #### Opting out
 
 `Settings → Shell` flips `loom.shellIntegration` in UserDefaults to
-`false`. Subsequent terminals launch without the `ZDOTDIR` override and
-nothing is logged. Currently running terminals keep their existing
-mode. The shim file stays on disk; delete it manually if you want it
-removed entirely.
+`false`. Subsequent terminals launch without Loom shell startup files and
+nothing is logged. Currently running terminals keep their existing mode. The
+shim files stay on disk; delete them manually if you want them removed
+entirely.
 
 ### 14.5. Terminal Transcript History
 
@@ -2289,6 +2297,7 @@ Adjacent precautions:
 | `~/Library/Application Support/Loom Testing Edition/staging/last-apply.log` | Helper-script log from the last apply |
 | `~/Library/Application Support/Loom Testing Edition/layout.json` | Per-kind block list (custom titles, pins, span flags, terminal cwds, multi-pane split axis) |
 | `~/Library/Application Support/Loom Testing Edition/shell/.zshrc` | Shell-integration shim sourced via `ZDOTDIR` |
+| `~/Library/Application Support/Loom Testing Edition/shell/.bashrc` | Shell-integration shim launched via `--rcfile` |
 | `~/Library/Application Support/Loom Testing Edition/shell/history.jsonl` | Append-only command-log written by the shim |
 | `~/Library/Application Support/Loom Testing Edition/shell/output/cap-*.out` | Captured stdout+stderr for commands wrapped via `__loom_capture` |
 | `~/Library/Application Support/Loom Testing Edition/Terminal History/sessions.json` | Terminal transcript metadata and active/closed/deleted state |
@@ -2383,7 +2392,7 @@ security dump-keychain | awk -F\" '/svce.*com.chasesims.Loom/{getline; print $4}
 | `loom.agent.allowBash` | Bool | Enables the local-agent `run_bash` tool |
 | `loom.agent.lmstudioMode` | Bool | Keeps LM Studio Agent Mode on by default in the Agent pane |
 | `loom.agent.permissionMode` | String | In-app local-agent permission mode |
-| `loom.shellIntegration` | Bool | Settings → Shell toggle. Default true; false skips the `ZDOTDIR` override and command logging |
+| `loom.shellIntegration` | Bool | Settings → Shell toggle. Default true; false skips Loom shell startup files and command logging |
 | `loom.terminal.pasteAsPlainText` | Bool | Settings -> Shell paste toggle |
 | `loom.terminalHistory.enabled` | Bool | Settings -> Shell transcript persistence toggle |
 | `loom.terminalHistory.maxBytes` | Double | Settings -> Shell transcript storage cap in bytes. Default 1 GB |

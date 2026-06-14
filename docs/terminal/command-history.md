@@ -6,12 +6,14 @@ It's available as a panel kind in any **Prompt** workspace. Add it the same way 
 
 ## How it works
 
-Loom installs a small zsh shim at `~/Library/Application Support/Loom Testing Edition/shell/.zshrc` in the Testing Edition build. When a Loom terminal pane spawns its login shell, the env it passes through includes:
+Loom installs small zsh and bash shims under `~/Library/Application Support/Loom Testing Edition/shell/` in the Testing Edition build. When a Loom terminal pane spawns zsh, the env it passes through includes:
 
 - `ZDOTDIR=~/Library/Application Support/Loom Testing Edition/shell` — points zsh at the shim directory.
 - `LOOM_SESSION_ID=<uuid>` — identifies which Loom terminal session ran the command.
 
-The shim's first job is to source your real config (`~/.zshenv`, `~/.zprofile`, `~/.zshrc`, `~/.zlogin`) so nothing about your existing setup changes. After that, it registers `preexec` and `precmd` hooks that write a single JSON line per command to `~/Library/Application Support/Loom Testing Edition/shell/history.jsonl`:
+For bash, Loom launches the shell with its managed `.bashrc` via `--rcfile` and passes `LOOM_SESSION_ID=<uuid>`. The bash shim sources your normal profile/bashrc files itself because bash ignores `--rcfile` for login shells.
+
+The shim's first job is to source your real config (`~/.zshenv`, `~/.zprofile`, `~/.zshrc`, `~/.zlogin` for zsh; `~/.bash_profile`, `~/.bash_login`, `~/.profile`, and `~/.bashrc` for bash) so nothing about your existing setup changes. After that, it writes command records to `~/Library/Application Support/Loom Testing Edition/shell/history.jsonl`:
 
 ```json
 {"started":1778302670,"ended":1778302675,"exit":0,"cwd":"/Users/me/code/foo","command":"git pull","session":"7E3..."}
@@ -36,12 +38,13 @@ Hand-typed commands skip this wrapping entirely so interactive TUIs (vim, top, s
 
 Cards in both the Commands panel and the inline-card terminal view show a chevron when their record has captured output. Click to expand an inline reader (capped at 1 MB, with a truncation notice if exceeded; selectable text for copy-paste).
 
-Exit codes are preserved across the `tee` pipeline via zsh's `pipefail` and `${pipestatus[1]}`.
+Exit codes are preserved across the `tee` pipeline via zsh's `pipefail`/`${pipestatus[1]}` and bash's `pipefail`/`${PIPESTATUS[0]}`.
 
 ## What's not captured (yet)
 
 - **Output for hand-typed commands** stays uncaptured by design (TUIs would break). Prefix manually with `__loom_capture '...'` if you want it.
-- **Non-zsh shells** are not supported. The shim is zsh-specific. If your `$SHELL` is `bash` or `fish`, the shell still runs normally; nothing breaks, but no commands appear in the panel.
+- **Fish and other non-zsh/non-bash shells** are not supported yet. The shell still runs normally; Loom just does not wrap UI-submitted commands for output capture or write command cards for that shell.
+- **Hand-typed bash command duration** is currently recorded as zero because bash does not expose zsh-style `preexec`/`precmd` hooks. Bash commands submitted through Loom's capture path still carry measured start/end timestamps.
 - **Commands run before Loom started writing the shim** (i.e. older zsh sessions or terminals from outside Loom) are not in the log.
 
 ## Command history vs. terminal transcripts
@@ -59,7 +62,8 @@ The history file lives entirely on disk inside Application Support. Nothing leav
 
 Use Settings -> Shell and turn off **Capture commands from Loom terminals**.
 The change applies to new terminal panes. To remove the existing files, delete
-`~/Library/Application Support/Loom Testing Edition/shell/.zshrc` and
+`~/Library/Application Support/Loom Testing Edition/shell/.zshrc`,
+`~/Library/Application Support/Loom Testing Edition/shell/.bashrc`, and
 `~/Library/Application Support/Loom Testing Edition/shell/history.jsonl`.
 Loom recreates the shim on launch, but it is not sourced when the setting is
 off.

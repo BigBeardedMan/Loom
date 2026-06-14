@@ -10,6 +10,7 @@ Where Loom (and the things Loom reads from) keeps state on disk.
 | `~/Library/Application Support/Loom Testing Edition/staging/manifest.json` | `{ version, build, stagedAt }` for the staged build. |
 | `~/Library/Application Support/Loom Testing Edition/layout.json` | Workspace pane layout, custom titles, terminal cwd, and split state. |
 | `~/Library/Application Support/Loom Testing Edition/shell/.zshrc` | zsh command-history shim sourced via `ZDOTDIR`. |
+| `~/Library/Application Support/Loom Testing Edition/shell/.bashrc` | bash command-history shim launched via `--rcfile`. |
 | `~/Library/Application Support/Loom Testing Edition/shell/history.jsonl` | Append-only structured command log. |
 | `~/Library/Application Support/Loom Testing Edition/shell/output/cap-*.out` | Captured stdout/stderr for Loom-submitted commands. |
 | `~/Library/Application Support/Loom Testing Edition/Terminal History/sessions.json` | Terminal transcript metadata and active/closed/deleted state. |

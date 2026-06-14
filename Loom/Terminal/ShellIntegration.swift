@@ -1,10 +1,9 @@
 import Foundation
 
-/// Loom's zsh shell integration. We drop a stub `.zshrc` into a Loom-owned
-/// directory, then point the terminal session at that directory via
-/// `ZDOTDIR` so zsh sources our shim *first*. The shim sources the user's
-/// real config (so nothing they had stops working) and then registers
-/// `precmd` / `preexec` hooks that append a JSONL record per command.
+/// Loom's shell integration. We drop managed shell startup files into a
+/// Loom-owned directory, then launch supported shells through those shims.
+/// Each shim sources the user's real config (so nothing they had stops
+/// working) and then appends a JSONL record per command.
 ///
 /// The result: every shell command run inside a Loom terminal turns into
 /// a structured record on disk (no scrollback parsing required), which the
@@ -12,6 +11,19 @@ import Foundation
 /// a future expansion that needs a `script`-style PTY tee, which can break
 /// interactive TUIs.
 enum ShellIntegration {
+    enum ShellKind {
+        case zsh
+        case bash
+        case unsupported
+    }
+
+    struct LaunchConfiguration {
+        let executable: String
+        let args: [String]
+        let execName: String
+        let kind: ShellKind
+    }
+
     /// Top-level integration directory. Lives inside Application Support so
     /// it survives the app sandbox lifecycle and never touches iCloud.
     static let supportDirectory: URL = {
@@ -25,8 +37,17 @@ enum ShellIntegration {
 
     /// Where the shim zshrc lives. Filename has to be `.zshrc` so zsh
     /// picks it up automatically when `ZDOTDIR` points at this dir.
-    static var shimURL: URL {
+    static var zshShimURL: URL {
         supportDirectory.appendingPathComponent(".zshrc", isDirectory: false)
+    }
+
+    /// Backwards-compatible name used by Settings and older docs.
+    static var shimURL: URL { zshShimURL }
+
+    /// Bash reads this through `--rcfile` for Loom terminals whose `$SHELL`
+    /// points at bash.
+    static var bashShimURL: URL {
+        supportDirectory.appendingPathComponent(".bashrc", isDirectory: false)
     }
 
     /// JSONL log every command appends to. Each line is one record:
@@ -47,11 +68,53 @@ enum ShellIntegration {
     static func install() {
         let fm = FileManager.default
         try? fm.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
-        if let existing = try? String(contentsOf: shimURL, encoding: .utf8),
-           existing == zshShim {
-            return
+        if (try? String(contentsOf: zshShimURL, encoding: .utf8)) != zshShim {
+            try? zshShim.write(to: zshShimURL, atomically: true, encoding: .utf8)
         }
-        try? zshShim.write(to: shimURL, atomically: true, encoding: .utf8)
+        if (try? String(contentsOf: bashShimURL, encoding: .utf8)) != bashShim {
+            try? bashShim.write(to: bashShimURL, atomically: true, encoding: .utf8)
+        }
+    }
+
+    static func kind(for shellPath: String) -> ShellKind {
+        switch (shellPath as NSString).lastPathComponent.lowercased() {
+        case "zsh":
+            return .zsh
+        case "bash":
+            return .bash
+        default:
+            return .unsupported
+        }
+    }
+
+    static func supportsCapture(for shellPath: String) -> Bool {
+        switch kind(for: shellPath) {
+        case .zsh, .bash:
+            return true
+        case .unsupported:
+            return false
+        }
+    }
+
+    static func launchConfiguration(for shellPath: String, integrationEnabled: Bool) -> LaunchConfiguration {
+        let name = (shellPath as NSString).lastPathComponent
+        let kind = kind(for: shellPath)
+        if integrationEnabled, kind == .bash {
+            // Bash ignores --rcfile for login shells, so the managed rcfile
+            // sources the user's normal profile files itself.
+            return LaunchConfiguration(
+                executable: shellPath,
+                args: ["--rcfile", bashShimURL.path, "-i"],
+                execName: name,
+                kind: kind
+            )
+        }
+        return LaunchConfiguration(
+            executable: shellPath,
+            args: ["-l"],
+            execName: "-" + name,
+            kind: kind
+        )
     }
 
     /// The full payload Loom writes to ~/Library/Application Support/Loom/shell/.zshrc.
@@ -166,6 +229,148 @@ enum ShellIntegration {
     fi
     if (( ! ${preexec_functions[(I)__loom_preexec]} )); then
       preexec_functions+=(__loom_preexec)
+    fi
+    """
+
+    /// Bash does not have zsh's preexec/precmd hooks, so this shim uses
+    /// PROMPT_COMMAND to record the completed history entry after each
+    /// command. Duration is stored as zero for hand-typed bash commands; UI
+    /// reruns that go through `__loom_capture` still record a measured span.
+    static let bashShim: String = """
+    # Loom bash shell integration. Auto-managed: edits get overwritten on next launch.
+
+    __loom_bash_self="${BASH_SOURCE[0]}"
+    __loom_log_dir="$(cd "$(dirname "$__loom_bash_self")" >/dev/null 2>&1 && pwd)"
+    __loom_log_file="$__loom_log_dir/history.jsonl"
+    __loom_capture_dir="$__loom_log_dir/output"
+    __loom_last_capture_path=""
+    __loom_last_history_line=""
+    __loom_prompt_ready=0
+    __loom_in_prompt=0
+
+    if [[ -z "${__LOOM_BASH_USER_CONFIG_SOURCED:-}" ]]; then
+      export __LOOM_BASH_USER_CONFIG_SOURCED=1
+      if [[ -f "$HOME/.bash_profile" ]]; then
+        source "$HOME/.bash_profile"
+      elif [[ -f "$HOME/.bash_login" ]]; then
+        source "$HOME/.bash_login"
+      elif [[ -f "$HOME/.profile" ]]; then
+        source "$HOME/.profile"
+      fi
+      [[ -f "$HOME/.bashrc" ]] && source "$HOME/.bashrc"
+    fi
+
+    __loom_json_escape() {
+      local s="$1"
+      s="${s//\\\\/\\\\\\\\}"
+      s="${s//\\"/\\\\\\"}"
+      s="${s//$'\\n'/\\\\n}"
+      s="${s//$'\\t'/\\\\t}"
+      s="${s//$'\\r'/\\\\r}"
+      printf '"%s"' "$s"
+    }
+
+    __loom_should_skip_history() {
+      local cmd="$1"
+      local lower
+      lower=$(printf '%s' "$cmd" | /usr/bin/tr '[:upper:]' '[:lower:]')
+      case "$lower" in
+        gh\\ auth*|npm\\ token*|ssh-add*|aws\\ configure*|docker\\ login*|gcloud\\ auth*|az\\ login*|security\\ find-generic-password*|security\\ add-generic-password*|pass\\ *)
+          return 0
+          ;;
+      esac
+      if [[ "$cmd" =~ (^|[\\;\\&\\|[:space:]])(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)[A-Za-z0-9_]*= ]]; then
+        return 0
+      fi
+      if [[ "$lower" == *"--password"* || "$lower" == *"--token"* || "$lower" == *"--api-key"* || "$lower" == *"authorization: bearer"* ]]; then
+        return 0
+      fi
+      return 1
+    }
+
+    __loom_redact_command() {
+      printf '%s\\n' "$1" | /usr/bin/sed -E \\
+        -e 's/(authorization:[[:space:]]*bearer[[:space:]]+)[^[:space:]]+/\\1[REDACTED]/Ig' \\
+        -e 's/(--(api-key|token|password|secret)(=|[[:space:]]+))[^[:space:]]+/\\1[REDACTED]/Ig' \\
+        -e 's/((api[_-]?key|token|secret|password|passwd|credential)[[:space:]]*[:=][[:space:]]*)[^[:space:]"'"'"'`]+/\\1[REDACTED]/Ig'
+    }
+
+    __loom_history_command() {
+      HISTTIMEFORMAT= history 1 2>/dev/null | /usr/bin/sed -E 's/^[[:space:]]*[0-9]+[[:space:]]+//'
+    }
+
+    __loom_append_history_record() {
+      local cmd="$1"
+      local started="$2"
+      local ended="$3"
+      local exit_code="$4"
+      [[ -z "$cmd" ]] && return
+      if __loom_should_skip_history "$cmd"; then
+        return
+      fi
+      local safe_cmd=$(__loom_redact_command "$cmd")
+      local cmd_json=$(__loom_json_escape "$safe_cmd")
+      local cwd_json=$(__loom_json_escape "$PWD")
+      local sess_json=$(__loom_json_escape "${LOOM_SESSION_ID:-unknown}")
+      local output_field=""
+      if [[ -n "$__loom_last_capture_path" ]]; then
+        output_field=",\\"output\\":$(__loom_json_escape "$__loom_last_capture_path")"
+        __loom_last_capture_path=""
+      fi
+      printf '{"started":%s,"ended":%s,"exit":%s,"cwd":%s,"command":%s,"session":%s%s}\\n' \\
+        "$started" "$ended" "$exit_code" "$cwd_json" "$cmd_json" "$sess_json" "$output_field" \\
+        >> "$__loom_log_file" 2>/dev/null
+    }
+
+    __loom_capture() {
+      local cmd="$1"
+      mkdir -p "$__loom_capture_dir" 2>/dev/null
+      local stamp=$(/bin/date +%s)
+      local out="$__loom_capture_dir/cap-${stamp}-$$-${RANDOM}.out"
+      local start_ts=$(/bin/date +%s)
+      __loom_last_capture_path="$out"
+      local pipefail_was_on=0
+      set -o | /usr/bin/grep -q '^pipefail[[:space:]]*on' && pipefail_was_on=1
+      set -o pipefail
+      eval "$cmd" 2>&1 | tee "$out"
+      local exit_code=${PIPESTATUS[0]}
+      if [[ "$pipefail_was_on" == "1" ]]; then
+        set -o pipefail
+      else
+        set +o pipefail
+      fi
+      local end_ts=$(/bin/date +%s)
+      __loom_append_history_record "$cmd" "$start_ts" "$end_ts" "$exit_code"
+      __loom_last_history_line="$(HISTTIMEFORMAT= history 1 2>/dev/null)"
+      return "$exit_code"
+    }
+
+    __loom_precmd() {
+      local exit_code=$?
+      __loom_in_prompt=1
+      if [[ "$__loom_prompt_ready" != "1" ]]; then
+        __loom_prompt_ready=1
+        __loom_in_prompt=0
+        return "$exit_code"
+      fi
+      local raw_line
+      raw_line="$(HISTTIMEFORMAT= history 1 2>/dev/null)"
+      if [[ -n "$raw_line" && "$raw_line" != "$__loom_last_history_line" ]]; then
+        local end_ts=$(/bin/date +%s)
+        local cmd=$(__loom_history_command)
+        __loom_append_history_record "$cmd" "$end_ts" "$end_ts" "$exit_code"
+        __loom_last_history_line="$raw_line"
+      fi
+      __loom_in_prompt=0
+      return "$exit_code"
+    }
+
+    if [[ "${PROMPT_COMMAND:-}" != *__loom_precmd* ]]; then
+      if [[ -n "${PROMPT_COMMAND:-}" ]]; then
+        PROMPT_COMMAND="__loom_precmd; ${PROMPT_COMMAND}"
+      else
+        PROMPT_COMMAND="__loom_precmd"
+      fi
     fi
     """
 }

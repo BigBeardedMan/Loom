@@ -43,28 +43,29 @@ final class TerminalSession: Identifiable {
         terminalView.processDelegate = bridge
     }
 
-    /// Spawn `$SHELL -l` on first mount. Idempotent.
+    /// Spawn the configured shell on first mount. Idempotent.
     func start() {
         guard !hasStarted else { return }
         hasStarted = true
-        let shellPath = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        let env = makeEnvironment()
-        // Pass argv[0] as "-zsh" so the shell treats itself as a login shell
-        // and runs zprofile/zshrc — that's where Homebrew's PATH lands.
-        let execName = "-" + (shellPath as NSString).lastPathComponent
+        let shellPath = Self.currentShellPath
+        let launch = ShellIntegration.launchConfiguration(
+            for: shellPath,
+            integrationEnabled: Self.shellIntegrationEnabled
+        )
+        let env = makeEnvironment(for: launch.kind)
         feedRestoredTranscriptIfNeeded()
         terminalView.startProcess(
-            executable: shellPath,
-            args: ["-l"],
+            executable: launch.executable,
+            args: launch.args,
             environment: env,
-            execName: execName,
+            execName: launch.execName,
             currentDirectory: cwd.path
         )
     }
 
     /// Send a command into the live shell as if the user typed it.
-    /// When `capture` is true and shell integration is enabled, wraps
-    /// the command in the shim's `__loom_capture` helper so its
+    /// When `capture` is true and the active shell supports Loom integration,
+    /// wraps the command in the shim's `__loom_capture` helper so its
     /// stdout+stderr lands in `output/<stamp>-<pid>.out` and the matching
     /// `CommandRecord` carries an `outputPath`. Off by default to keep
     /// the legacy "send to terminal" semantics intact for callers that
@@ -74,7 +75,9 @@ final class TerminalSession: Identifiable {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        if capture && Self.shellIntegrationEnabled {
+        if capture,
+           Self.shellIntegrationEnabled,
+           ShellIntegration.supportsCapture(for: Self.currentShellPath) {
             // Single-quote the command for `eval` inside the shim, escaping
             // any embedded single quotes via `'\''` (the canonical zsh /
             // bash idiom for closing-then-reopening a quoted string).
@@ -345,7 +348,7 @@ final class TerminalSession: Identifiable {
         terminalView.nativeForegroundColor = NSColor(srgbRed: 0.93, green: 0.93, blue: 0.94, alpha: 1)
     }
 
-    private func makeEnvironment() -> [String] {
+    private func makeEnvironment(for shellKind: ShellIntegration.ShellKind) -> [String] {
         var env = ProcessInfo.processInfo.environment
         // Don't forward credential-shaped variables that may have been set in
         // the parent environment when Loom launched. The PTY shell will source
@@ -360,16 +363,25 @@ final class TerminalSession: Identifiable {
         if env["LANG"] == nil { env["LANG"] = "en_US.UTF-8" }
         env["TERM_PROGRAM"] = "Loom"
         env["TERM_PROGRAM_VERSION"] = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
-        // Loom shell integration: point zsh at the shim dir so each command
-        // lands in history.jsonl. The shim sources the user's normal config
-        // first, so behavior matches a stock login shell. Honors the
-        // Settings → Shell toggle: when off, we don't override ZDOTDIR or
-        // export the session id.
+        // Loom shell integration: supported shells get a stable session id
+        // for history filtering. zsh also gets ZDOTDIR pointed at the managed
+        // shim directory; bash is launched with --rcfile instead.
         if Self.shellIntegrationEnabled {
-            env["ZDOTDIR"] = ShellIntegration.supportDirectory.path
-            env["LOOM_SESSION_ID"] = id.uuidString
+            switch shellKind {
+            case .zsh:
+                env["ZDOTDIR"] = ShellIntegration.supportDirectory.path
+                env["LOOM_SESSION_ID"] = id.uuidString
+            case .bash:
+                env["LOOM_SESSION_ID"] = id.uuidString
+            case .unsupported:
+                break
+            }
         }
         return env.map { "\($0.key)=\($0.value)" }
+    }
+
+    private static var currentShellPath: String {
+        ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
     }
 
     /// Reads the user's shell-integration preference. Treats a missing key

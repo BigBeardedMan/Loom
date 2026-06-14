@@ -6,9 +6,13 @@ terminal transcripts, and paste behavior.
 ## Shell Integration
 
 **Capture commands from Loom terminals** is on by default. Loom points zsh at a
-small shim under `~/Library/Application Support/Loom Testing Edition/shell/`.
-The shim sources your normal zsh config first, then logs command text, cwd,
-timing, exit code, session id, and optional captured output to `history.jsonl`.
+small shim under `~/Library/Application Support/Loom Testing Edition/shell/`
+and launches bash with a managed rcfile from the same directory. The shims
+source your normal shell config first, then log command text, cwd, exit code,
+session id, and optional captured output to `history.jsonl`. zsh records
+hand-typed command timing; bash hand-typed commands currently record zero
+duration, while bash commands submitted through Loom's capture path carry
+measured start/end timestamps.
 
 Turning this off affects new terminal panes. Existing terminals keep the mode
 they started with.
@@ -47,4 +51,3 @@ renders the bracketed-paste markers literally.
 
 Image-only paste and image drag still insert editable Codex `--image '<path>' `
 arguments without pressing Return.
-
