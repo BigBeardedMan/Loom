@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { Icons } from "../lib/icons";
 import { ipc, type AgentDescriptor, type AgentGraphEvent, type AgentGraphRunSummary, type LiveAgentTaskGroup, type LocalEndpoint, type Workspace } from "../lib/ipc";
-import { PANEL_META } from "../lib/commands";
+import { PANEL_META, ROOM_META } from "../lib/commands";
 import { LOOM_ENDPOINTS_CHANGED } from "../lib/events";
 import { useRightRailContext, type MemoryFile } from "../lib/railContext";
 import { useApp, type Panel } from "../lib/store";
@@ -528,7 +528,12 @@ function DetailsContent({ workspace, block, blocks }: { workspace: Workspace | n
   return (
     <RailSection title="Details">
       {workspace && (
-        <RailRow icon="layers" color={workspaceColorVar[workspace.colorName]} title={workspace.name} detail={workspace.kindRaw === "code" ? "Prompt" : workspace.kindRaw} />
+        <RailRow
+          icon="layers"
+          color={workspaceColorVar[workspace.colorName]}
+          title={workspace.name}
+          detail={ROOM_META[workspace.kindRaw]?.label ?? workspace.kindRaw}
+        />
       )}
       {block ? (
         <RailRow icon={PANEL_META[block.kind].icon} color={PANEL_META[block.kind].color} title={defaultBlockTitle(block)} detail={PANEL_META[block.kind].label} />

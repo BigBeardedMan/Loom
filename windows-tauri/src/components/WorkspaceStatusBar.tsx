@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Icons } from "../lib/icons";
 import { ipc, type AgentDescriptor, type LiveAgentTaskGroup, type LocalEndpoint } from "../lib/ipc";
-import { effectiveRailTab, PANEL_META, rightRailTabLabel } from "../lib/commands";
+import { effectiveRailTab, PANEL_META, ROOM_META, rightRailTabLabel } from "../lib/commands";
 import { LOOM_ENDPOINTS_CHANGED } from "../lib/events";
 import { useRightRailContext } from "../lib/railContext";
 import { useApp } from "../lib/store";
@@ -83,7 +83,13 @@ export function WorkspaceStatusBar() {
         background: surface.shellStatus,
       }}
     >
-      <StatusSegment icon="layers" color={workspace ? workspaceColorVar[workspace.colorName] : workspaceColorVar.blue} label={workspace?.name ?? "No workspace"} detail={workspace?.folderPath || workspace?.kindRaw} onClick={() => setRightRailTab("details")} />
+      <StatusSegment
+        icon="layers"
+        color={workspace ? workspaceColorVar[workspace.colorName] : workspaceColorVar.blue}
+        label={workspace?.name ?? "No workspace"}
+        detail={workspace?.folderPath || (workspace ? ROOM_META[workspace.kindRaw]?.label : undefined)}
+        onClick={() => setRightRailTab("details")}
+      />
       <StatusSegment icon="panelRight" color={workspaceColorVar.blue} label={`${layout?.blocks.length ?? 0} panes`} detail={activeBlock ? blockTitle(activeBlock) : "No selection"} onClick={() => setRightRailTab("details")} />
       <StatusSegment icon="workflow" color={scopedLiveGroups.length ? workspaceColorVar.green : text.tertiary} label={`${scopedLiveGroups.length} live runs`} detail={liveRunDetail(scopedLiveGroups)} onClick={() => setRightRailTab("timeline")} />
       <StatusSegment icon="server" color={endpoints.length ? workspaceColorVar.purple : text.tertiary} label={agents[0]?.name || "Default agent"} detail={agents[0]?.model || `${endpoints.length} local endpoints`} onClick={() => setRightRailTab("tools")} />
