@@ -140,7 +140,7 @@ final class UpdateService {
         let alert = NSAlert()
         if let staged = available {
             alert.messageText = "Update available"
-            alert.informativeText = "Loom \(staged.displayLabel) is ready. Click Update in the top bar to install and relaunch."
+            alert.informativeText = "Loom Testing Edition \(staged.displayLabel) is ready. Click Update in the top bar to install and relaunch."
             alert.alertStyle = .informational
         } else if let err = lastRemoteError {
             alert.messageText = "Update check failed"
@@ -148,7 +148,7 @@ final class UpdateService {
             alert.alertStyle = .warning
         } else {
             let running = Self.runningVersionTriple()
-            alert.messageText = "Loom is up to date"
+            alert.messageText = "Loom Testing Edition is up to date"
             alert.informativeText = "You're running \(running.version) (\(running.build))."
             alert.alertStyle = .informational
         }

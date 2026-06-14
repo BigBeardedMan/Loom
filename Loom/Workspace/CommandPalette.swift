@@ -280,7 +280,7 @@ struct CommandPalette: View {
             ),
             PaletteItem(
                 id: "act:help",
-                title: "Loom Help",
+                title: "Loom Testing Help",
                 subtitle: "Open GUIDE.md on GitHub",
                 systemImage: "questionmark.circle",
                 tint: .accentColor,

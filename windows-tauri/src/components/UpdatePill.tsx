@@ -22,7 +22,7 @@ export function UpdatePill({ version }: Props) {
       if (i) {
         setInfo(i);
       } else {
-        setNotice("Loom is up to date.");
+        setNotice("Loom Testing Edition is up to date.");
         setTimeout(() => setNotice(null), 3000);
       }
     } catch (e) {

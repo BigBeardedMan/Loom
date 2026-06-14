@@ -51,11 +51,11 @@ export function Titlebar() {
           border: `1px solid ${surface.hairline}`,
           textDecoration: "none",
         }}
-        title="Open Loom on GitHub"
+        title="Open Loom Testing Edition on GitHub"
       >
         <LoomLogoMark size={19} />
         <span style={{ fontSize: 12, fontWeight: 700, color: text.primary }}>
-          Loom
+          Loom Testing
         </span>
       </a>
 

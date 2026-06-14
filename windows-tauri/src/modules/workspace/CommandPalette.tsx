@@ -337,7 +337,7 @@ export function CommandPalette() {
               }}
             >
               <Icons.plus size={12} strokeWidth={1.8} />
-              New Loom Window
+              New Loom Testing Window
             </Command.Item>
             <Command.Item
               value="settings"

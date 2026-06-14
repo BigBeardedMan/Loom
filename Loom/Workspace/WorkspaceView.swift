@@ -252,7 +252,7 @@ struct WorkspaceView: View {
         } label: {
             HStack(spacing: 8) {
                 LoomLogoMark(size: 24)
-                Text("Loom")
+                Text("Loom Testing")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(LoomTheme.primaryText)
             }
@@ -267,8 +267,8 @@ struct WorkspaceView: View {
         }
         .buttonStyle(.plain)
         .pointingHandCursor()
-        .help("Open Loom on GitHub")
-        .accessibilityLabel("Loom, open on GitHub")
+        .help("Open Loom Testing Edition on GitHub")
+        .accessibilityLabel("Loom Testing Edition, open on GitHub")
     }
 
     private var verticalHairline: some View {
