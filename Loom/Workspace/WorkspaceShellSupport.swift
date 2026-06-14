@@ -158,6 +158,9 @@ struct WorkspaceRightRailView: View {
     let blocks: [WorkspaceBlock]
 
     @State private var runSummaries: [AgentGraphRunSummary] = []
+    @State private var expandedRunID: String?
+    @State private var loadingRunID: String?
+    @State private var eventsByRunID: [String: [AgentGraphEvent]] = [:]
     @State private var memoryFiles: [WorkspaceMemoryFile] = []
 
     var body: some View {
@@ -337,16 +340,67 @@ struct WorkspaceRightRailView: View {
             if scopedRunSummaries.isEmpty {
                 railMuted("No graph ledgers found under ~/.loom/agent-runs.")
             } else {
-                ForEach(scopedRunSummaries.prefix(6)) { summary in
+                ForEach(scopedRunSummaries.prefix(8)) { summary in
+                    runHistoryCard(summary)
+                }
+            }
+        }
+    }
+
+    private func runHistoryCard(_ summary: AgentGraphRunSummary) -> some View {
+        let expanded = expandedRunID == summary.id
+        let events = eventsByRunID[summary.id] ?? []
+        let recentEvents = Array(events.suffix(5).reversed())
+
+        return VStack(alignment: .leading, spacing: 0) {
+            Button {
+                toggleRunExpansion(summary)
+            } label: {
+                HStack(alignment: .center, spacing: 6) {
                     railRow(
                         icon: statusIcon(summary.status),
                         tint: statusTint(summary.status),
                         title: summary.title,
                         detail: summaryChips(summary).joined(separator: " · ")
                     )
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(LoomTheme.tertiaryText)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .help(expanded ? "Collapse run ledger" : "Inspect run ledger")
+
+            if expanded {
+                Divider()
+                    .overlay(LoomTheme.hairline)
+                    .padding(.vertical, 8)
+
+                VStack(alignment: .leading, spacing: 7) {
+                    if loadingRunID == summary.id {
+                        railMuted("Loading ledger events...")
+                    } else if recentEvents.isEmpty {
+                        railMuted("No ledger events found.")
+                    } else {
+                        ForEach(recentEvents, id: \.eventID) { event in
+                            railRow(
+                                icon: eventIcon(event.type),
+                                tint: eventTint(event.type),
+                                title: event.type.rawValue,
+                                detail: eventDetail(event)
+                            )
+                        }
+                    }
+
+                    railCode(displayPath(summary.ledgerPath))
                 }
             }
         }
+        .padding(10)
+        .background(LoomTheme.inset)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private var filesContent: some View {
@@ -559,6 +613,26 @@ struct WorkspaceRightRailView: View {
         memoryFiles = WorkspaceMemoryFile.load(from: workspace?.folderPath)
     }
 
+    private func toggleRunExpansion(_ summary: AgentGraphRunSummary) {
+        if expandedRunID == summary.id {
+            expandedRunID = nil
+            return
+        }
+
+        expandedRunID = summary.id
+        guard eventsByRunID[summary.id] == nil else { return }
+        loadingRunID = summary.id
+        Task { await loadEvents(for: summary) }
+    }
+
+    private func loadEvents(for summary: AgentGraphRunSummary) async {
+        let events = (try? await AgentGraphLedger.shared.events(rootRunID: summary.id)) ?? []
+        eventsByRunID[summary.id] = events.sorted { $0.occurredAt < $1.occurredAt }
+        if loadingRunID == summary.id {
+            loadingRunID = nil
+        }
+    }
+
     private func normalizedPath(_ path: String) -> String {
         URL(fileURLWithPath: path).standardizedFileURL.path
     }
@@ -688,6 +762,62 @@ struct WorkspaceRightRailView: View {
         case "failed", "cancelled": return LoomTheme.orange
         default: return LoomTheme.blue
         }
+    }
+
+    private func eventIcon(_ type: AgentGraphEventType) -> String {
+        switch type {
+        case .runCompleted, .spawnCompleted:
+            return "checkmark.circle.fill"
+        case .runFailed, .runCancelled, .spawnFailed:
+            return "xmark.circle.fill"
+        case .toolStarted, .toolCompleted:
+            return "terminal"
+        case .handoffWritten, .handoffAccepted, .handoffRejected:
+            return "arrowshape.turn.up.right"
+        case .attentionRequested, .andonPaused:
+            return "exclamationmark.triangle.fill"
+        case .graphCreated, .runStarted, .runHeartbeat, .runStatusChanged, .spawnRequested, .spawnStarted, .andonResumed:
+            return "point.3.connected.trianglepath.dotted"
+        case .taskCreated, .taskUpdated, .taskStatusChanged, .edgeCreated:
+            return "list.bullet.rectangle"
+        }
+    }
+
+    private func eventTint(_ type: AgentGraphEventType) -> Color {
+        switch type {
+        case .runCompleted, .spawnCompleted, .toolCompleted, .handoffAccepted, .andonResumed:
+            return LoomTheme.green
+        case .runFailed, .runCancelled, .spawnFailed, .handoffRejected, .attentionRequested, .andonPaused:
+            return LoomTheme.orange
+        case .toolStarted:
+            return LoomTheme.purple
+        default:
+            return LoomTheme.blue
+        }
+    }
+
+    private func eventDetail(_ event: AgentGraphEvent) -> String {
+        let candidates = [
+            event.summary,
+            event.title,
+            event.payload["tool"],
+            event.payload["status"],
+            event.payload["subject"],
+            event.payload["taskID"],
+            event.payload["path"],
+            event.source
+        ]
+        let detail = candidates.compactMap { value -> String? in
+            guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+                return nil
+            }
+            return trimmed
+        }.first
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        let relativeTime = formatter.localizedString(for: event.occurredAt, relativeTo: .now)
+        guard let detail else { return relativeTime }
+        return "\(detail) · \(relativeTime)"
     }
 
     private func summaryChips(_ summary: AgentGraphRunSummary) -> [String] {
