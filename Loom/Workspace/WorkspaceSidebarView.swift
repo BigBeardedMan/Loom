@@ -23,6 +23,7 @@ struct WorkspaceSidebarView: View {
     @State private var renamingNoteID: UUID?
     @State private var clearAllConfirm: ClearAllScope?
     @State private var showRecentlyDeletedTerminals: Bool = false
+    @State private var reviewRunSummaries: [AgentGraphRunSummary] = []
     @FocusState private var renameFocused: Bool
 
     private enum ClearAllScope: Identifiable {
@@ -52,6 +53,9 @@ struct WorkspaceSidebarView: View {
         .padding(.vertical, 14)
         .frame(maxHeight: .infinity, alignment: .top)
         .task { seedIfEmpty() }
+        .task(id: reviewRunsTaskKey) {
+            await refreshReviewRuns()
+        }
         .onChange(of: workspaces.map(\.id)) { _, _ in
             ensureSelection()
         }
@@ -726,9 +730,152 @@ struct WorkspaceSidebarView: View {
 
     private var reviewSessionsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            sectionHeader(title: "Sessions", trailing: { EmptyView() })
-            emptyHint("Review workspaces don't have sessions yet.")
+            sectionHeader(title: "Review Runs", trailing: {
+                HStack(spacing: 6) {
+                    countBadge(reviewRunSummaries.count)
+                    Button {
+                        Task { await refreshReviewRuns() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(LoomTheme.mutedText)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Refresh review runs")
+                    .accessibilityLabel("Refresh review runs")
+                }
+            })
+            if reviewRunSummaries.isEmpty {
+                emptyHint("Review-ready runs will appear here after agents write graph ledger evidence.")
+            } else {
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(reviewRunSummaries.prefix(8)) { summary in
+                            reviewRunRow(summary)
+                        }
+                    }
+                }
+                .frame(maxHeight: 300)
+            }
         }
+    }
+
+    private func reviewRunRow(_ summary: AgentGraphRunSummary) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: reviewRunIcon(summary))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(reviewRunTint(summary))
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(summary.title)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(LoomTheme.primaryText)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text(relativeReviewTime(summary.lastActivity))
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(LoomTheme.tertiaryText)
+                        .lineLimit(1)
+                }
+                Text(reviewRunDetail(summary))
+                    .font(.system(size: 10))
+                    .foregroundStyle(LoomTheme.mutedText)
+                    .lineLimit(2)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(LoomTheme.softPanel.opacity(0.5))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(LoomTheme.hairline, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private var reviewRunsTaskKey: String {
+        [
+            selectedWorkspaceID?.uuidString ?? "none",
+            selectedWorkspace?.folderPath ?? "",
+            selectedKind.rawValue
+        ].joined(separator: ":")
+    }
+
+    @MainActor
+    private func refreshReviewRuns() async {
+        guard selectedKind == .review else {
+            reviewRunSummaries = []
+            return
+        }
+        let summaries = (try? await AgentGraphLedger.shared.summaries()) ?? []
+        reviewRunSummaries = scopedReviewSummaries(summaries)
+    }
+
+    private func scopedReviewSummaries(_ summaries: [AgentGraphRunSummary]) -> [AgentGraphRunSummary] {
+        guard let folderPath = selectedWorkspace?.folderPath,
+              !folderPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return summaries
+        }
+        let root = URL(fileURLWithPath: folderPath).standardizedFileURL.path
+        return summaries.filter { summary in
+            guard let workspacePath = summary.workspacePath, !workspacePath.isEmpty else { return false }
+            let candidate = URL(fileURLWithPath: workspacePath).standardizedFileURL.path
+            return candidate == root || candidate.hasPrefix(root + "/")
+        }
+    }
+
+    private func reviewRunIcon(_ summary: AgentGraphRunSummary) -> String {
+        switch summary.status.lowercased() {
+        case "failed", "cancelled":
+            return "exclamationmark.triangle"
+        case "completed":
+            return summary.gitDirty == true ? "doc.badge.clock" : "checkmark.circle"
+        case "running", "pending", "in_progress", "in-progress":
+            return "arrow.triangle.2.circlepath"
+        default:
+            return "point.3.connected.trianglepath.dotted"
+        }
+    }
+
+    private func reviewRunTint(_ summary: AgentGraphRunSummary) -> Color {
+        switch summary.status.lowercased() {
+        case "failed", "cancelled":
+            return LoomTheme.orange
+        case "completed":
+            return summary.gitDirty == true ? LoomTheme.orange : LoomTheme.green
+        case "running", "pending", "in_progress", "in-progress":
+            return LoomTheme.blue
+        default:
+            return LoomTheme.mutedText
+        }
+    }
+
+    private func reviewRunDetail(_ summary: AgentGraphRunSummary) -> String {
+        var parts: [String] = [summary.status.capitalized]
+        if let branch = summary.gitBranch, !branch.isEmpty {
+            parts.append(branch)
+        }
+        if summary.toolEventCount > 0 {
+            parts.append("\(summary.toolEventCount) tools")
+        }
+        if summary.taskCount > 0 {
+            parts.append("\(summary.taskCount) tasks")
+        }
+        if summary.gitDirty == true {
+            parts.append("changes pending")
+        }
+        if let workspacePath = summary.workspacePath, !workspacePath.isEmpty {
+            parts.append(URL(fileURLWithPath: workspacePath).lastPathComponent)
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func relativeReviewTime(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: date, relativeTo: .now)
     }
 
     // MARK: - Clear all
