@@ -19,8 +19,8 @@ struct WorkspaceView: View {
     @State private var renamingBlockID: UUID?
     @State private var selectedUsageTool: CLITool? = nil
     @State private var transcriptPreview: TerminalTranscriptSession?
-    @State private var isRightRailVisible: Bool = true
-    @State private var rightRailTab: WorkspaceRightRailTab = .timeline
+    @AppStorage("loom.shell.rightRailVisible") private var isRightRailVisible: Bool = true
+    @AppStorage("loom.shell.rightRailTab") private var rightRailTabRaw: String = WorkspaceRightRailTab.timeline.rawValue
     @State private var rightRailRefreshNonce: Int = 0
     @State private var selectedBlockID: UUID?
 
@@ -49,6 +49,17 @@ struct WorkspaceView: View {
         return nil
     }
 
+    private var rightRailTab: WorkspaceRightRailTab {
+        WorkspaceRightRailTab(rawValue: rightRailTabRaw) ?? .timeline
+    }
+
+    private var rightRailTabBinding: Binding<WorkspaceRightRailTab> {
+        Binding(
+            get: { rightRailTab },
+            set: { rightRailTabRaw = $0.rawValue }
+        )
+    }
+
     var body: some View {
         ZStack {
             LoomTheme.background
@@ -72,7 +83,7 @@ struct WorkspaceView: View {
 
                         if isRightRailVisible && canFitInspector {
                             WorkspaceRightRailView(
-                                selectedTab: $rightRailTab,
+                                selectedTab: rightRailTabBinding,
                                 refreshNonce: rightRailRefreshNonce,
                                 workspace: selectedWorkspace,
                                 selectedBlock: selectedBlock,
@@ -505,7 +516,7 @@ struct WorkspaceView: View {
     }
 
     private func openInspector(_ tab: WorkspaceRightRailTab) {
-        rightRailTab = tab
+        rightRailTabRaw = tab.rawValue
         if !isRightRailVisible {
             withAnimation(.easeInOut(duration: 0.18)) {
                 isRightRailVisible = true
