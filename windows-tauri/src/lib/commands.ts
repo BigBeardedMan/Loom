@@ -92,7 +92,15 @@ export function railTabsForContext({
   ) {
     add("diff");
   }
-  if (workspace?.folderPath || hasMemoryFiles) add("memory");
+  if (
+    workspace?.folderPath ||
+    hasMemoryFiles ||
+    workspace?.kindRaw === "runs" ||
+    workspace?.kindRaw === "review" ||
+    runs.length > 0
+  ) {
+    add("memory");
+  }
   add("details");
   return tabs;
 }

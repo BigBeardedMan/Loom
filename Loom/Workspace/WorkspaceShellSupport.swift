@@ -201,7 +201,9 @@ struct WorkspaceRightRailView: View {
         if workspace?.kind == .review || workspace?.kind == .runs || scopedRunSummaries.contains(where: { $0.gitBranch != nil || $0.gitDirty != nil || $0.toolEventCount > 0 }) {
             tabs.append(.diff)
         }
-        if workspace?.folderPath.isEmpty == false || !memoryFiles.isEmpty { tabs.append(.memory) }
+        if workspace?.folderPath.isEmpty == false || !memoryFiles.isEmpty || !scopedRunSummaries.isEmpty {
+            tabs.append(.memory)
+        }
         tabs.append(.details)
         return tabs
     }
