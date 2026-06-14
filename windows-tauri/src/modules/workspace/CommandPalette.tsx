@@ -9,8 +9,8 @@ import {
   type WorkspaceColor,
 } from "../../lib/theme";
 import { Icons } from "../../lib/icons";
-import { useApp } from "../../lib/store";
-import { ipc, type CommandRecord, type SessionInfo } from "../../lib/ipc";
+import { useApp, type RightRailTab } from "../../lib/store";
+import { ipc, type CommandRecord, type SessionInfo, type WorkspaceKind } from "../../lib/ipc";
 import { LOOM_REFRESH_RUNS } from "../../lib/events";
 import { useRightRailContext } from "../../lib/railContext";
 import { ADD_BLOCK_COMMANDS, PANEL_META, ROOM_KINDS, ROOM_META, panelsForKind, railTabsForContext, workspaceMatchesKind } from "../../lib/commands";
@@ -67,6 +67,14 @@ export function CommandPalette() {
 
   const refreshRuns = () => {
     setRightRailTab("timeline");
+    window.dispatchEvent(new Event(LOOM_REFRESH_RUNS));
+    closePalette();
+  };
+
+  const openWorkflow = (kind: WorkspaceKind, tab: RightRailTab) => {
+    const room = workspaces.find((ws) => workspaceMatchesKind(ws, kind));
+    if (room) selectWorkspace(room.id);
+    setRightRailTab(tab);
     window.dispatchEvent(new Event(LOOM_REFRESH_RUNS));
     closePalette();
   };
@@ -248,6 +256,70 @@ export function CommandPalette() {
                 )}
               </Command.Item>
             ))}
+          </Command.Group>
+
+          <Command.Group
+            heading="Workflow"
+            className="section-header"
+            style={{ padding: "10px 14px 4px" }}
+          >
+            <Command.Item
+              value="open runs timeline live graph history"
+              onSelect={() => openWorkflow("runs", "timeline")}
+              className="flex cursor-pointer items-center gap-2"
+              style={{
+                padding: "7px 14px",
+                fontSize: 13,
+                fontWeight: 500,
+                color: text.muted,
+                borderRadius: 6,
+              }}
+            >
+              <Icons.workflow size={12} strokeWidth={1.8} />
+              <span className="flex-1 truncate">Open Runs Timeline</span>
+              <span className="font-mono truncate" style={{ fontSize: 11, color: text.tertiary, maxWidth: 220 }}>
+                Live graph history
+              </span>
+            </Command.Item>
+            <Command.Item
+              value="open review queue packet diff changed files"
+              onSelect={() => openWorkflow("review", "diff")}
+              className="flex cursor-pointer items-center gap-2"
+              style={{
+                padding: "7px 14px",
+                fontSize: 13,
+                fontWeight: 500,
+                color: text.muted,
+                borderRadius: 6,
+              }}
+            >
+              <Icons.diff size={12} strokeWidth={1.8} />
+              <span className="flex-1 truncate">Open Review Queue</span>
+              <span className="font-mono truncate" style={{ fontSize: 11, color: text.tertiary, maxWidth: 220 }}>
+                Review packet
+              </span>
+            </Command.Item>
+            <Command.Item
+              value="open project memory read only context"
+              onSelect={() => {
+                setRightRailTab("memory");
+                closePalette();
+              }}
+              className="flex cursor-pointer items-center gap-2"
+              style={{
+                padding: "7px 14px",
+                fontSize: 13,
+                fontWeight: 500,
+                color: text.muted,
+                borderRadius: 6,
+              }}
+            >
+              <Icons.brain size={12} strokeWidth={1.8} />
+              <span className="flex-1 truncate">Open Project Memory</span>
+              <span className="font-mono truncate" style={{ fontSize: 11, color: text.tertiary, maxWidth: 220 }}>
+                Read-only context
+              </span>
+            </Command.Item>
           </Command.Group>
 
           {recent.length > 0 && (

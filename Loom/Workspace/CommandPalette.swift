@@ -166,6 +166,7 @@ struct CommandPalette: View {
             workspaceSection(),
             recentCommandsSection(),
             addBlockSection(),
+            workflowSection(),
             inspectorSection(),
             quickActionsSection()
         ]
@@ -235,6 +236,35 @@ struct CommandPalette: View {
             )
         }
         return PaletteSection(title: "Add Pane", items: items)
+    }
+
+    private func workflowSection() -> PaletteSection {
+        PaletteSection(title: "Workflow", items: [
+            PaletteItem(
+                id: "workflow:runs-timeline",
+                title: "Open Runs Timeline",
+                subtitle: "Switch to Runs and show live graph history",
+                systemImage: WorkspaceRightRailTab.timeline.systemImage,
+                tint: LoomTheme.green,
+                action: .openWorkflow(.runs, .timeline)
+            ),
+            PaletteItem(
+                id: "workflow:review-queue",
+                title: "Open Review Queue",
+                subtitle: "Switch to Review and show the review packet",
+                systemImage: WorkspaceRightRailTab.diff.systemImage,
+                tint: LoomTheme.orange,
+                action: .openWorkflow(.review, .diff)
+            ),
+            PaletteItem(
+                id: "workflow:project-memory",
+                title: "Open Project Memory",
+                subtitle: "Show read-only memory for the active room",
+                systemImage: WorkspaceRightRailTab.memory.systemImage,
+                tint: LoomTheme.purple,
+                action: .openInspector(.memory)
+            )
+        ])
     }
 
     private func inspectorSection() -> PaletteSection {
@@ -365,6 +395,10 @@ struct CommandPalette: View {
             NotificationCenter.default.post(name: .loomOpenInspectorTab, object: tab.rawValue)
         case .refreshRuns:
             NotificationCenter.default.post(name: .loomRefreshRuns, object: nil)
+        case .openWorkflow(let kind, let tab):
+            NotificationCenter.default.post(name: .loomSwitchWorkspaceKind, object: kind.rawValue)
+            NotificationCenter.default.post(name: .loomOpenInspectorTab, object: tab.rawValue)
+            NotificationCenter.default.post(name: .loomRefreshInspectorContext, object: nil)
         case .openSettings:
             // SwiftUI's standard openSettings keyboard hits this same path
             // via the macOS app menu; using NSApp keeps the binding clean
@@ -435,6 +469,7 @@ private enum PaletteAction: Hashable {
     case toggleInspector
     case openInspector(WorkspaceRightRailTab)
     case refreshRuns
+    case openWorkflow(WorkspaceKind, WorkspaceRightRailTab)
     case openSettings
     case openURL(String)
 }
