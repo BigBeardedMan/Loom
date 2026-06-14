@@ -48,6 +48,8 @@ export function WorkspaceSidebar() {
   const [preview, setPreview] = useState<TerminalTranscriptSession | null>(null);
   const workspace = workspaces.find((w) => w.id === selectedId) ?? null;
   const terminalBlocks = (layout?.blocks ?? []).filter((b) => b.kind === "terminal");
+  const isReviewRoom = workspace?.kindRaw === "review" || workspace?.kindRaw === "build";
+  const isRunsRoom = workspace?.kindRaw === "runs";
 
   useEffect(() => {
     const tick = () => {
@@ -219,18 +221,25 @@ export function WorkspaceSidebar() {
               </div>
             )}
           </div>
-        ) : workspace?.kindRaw === "runs" || workspace?.kindRaw === "review" || workspace?.kindRaw === "build" ? (
+        ) : isRunsRoom || isReviewRoom ? (
           <div className="flex min-h-0 flex-1 flex-col">
             <SectionHeader
-              title={workspace.kindRaw === "runs" ? "Run History" : "Review Runs"}
-              trailing={<CountBadge value={runSummaries.length} color="var(--color-ws-orange)" />}
+              title={isRunsRoom ? "Run History" : "Review Runs"}
+              trailing={
+                <div className="flex items-center gap-1">
+                  <CountBadge value={runSummaries.length} color={isRunsRoom ? "var(--color-ws-green)" : "var(--color-ws-orange)"} />
+                  <TinyIconButton title={isRunsRoom ? "Refresh run history" : "Refresh review runs"} onClick={refreshSidebarData}>
+                    <Icons.refresh size={11} strokeWidth={2} />
+                  </TinyIconButton>
+                </div>
+              }
             />
             {runSummaries.length === 0 ? (
-              <EmptyHint label="No run history for this workspace yet." />
+              <EmptyHint label={isRunsRoom ? "No run history for this workspace yet." : "Review-ready runs will appear here after agents write graph ledger evidence."} />
             ) : (
               <div className="scrollbar-thin flex min-h-0 flex-col gap-1 overflow-y-auto">
-                {runSummaries.slice(0, 12).map((run) => (
-                  <RunSummaryRow key={run.id} run={run} />
+                {runSummaries.slice(0, isRunsRoom ? 12 : 8).map((run) => (
+                  <RunSummaryRow key={run.id} run={run} variant={isRunsRoom ? "history" : "review"} />
                 ))}
               </div>
             )}
@@ -484,28 +493,44 @@ function WorkspaceRow({
   );
 }
 
-function RunSummaryRow({ run }: { run: AgentGraphRunSummary }) {
+function RunSummaryRow({
+  run,
+  variant = "history",
+}: {
+  run: AgentGraphRunSummary;
+  variant?: "history" | "review";
+}) {
+  const review = variant === "review";
+  const dirty = run.gitDirty === true;
+  const statusColor = reviewRunColor(run);
   return (
     <div
-      className="flex items-center gap-2"
+      className="flex items-start gap-2"
       style={{
-        padding: "6px 9px",
+        padding: "7px 9px",
         borderRadius: radius.row,
         background: "color-mix(in srgb, " + surface.softPanel + ", transparent 58%)",
-        border: `1px solid ${surface.hairline}`,
+        border: `1px solid ${review && dirty ? "color-mix(in srgb, var(--color-ws-orange) 45%, transparent)" : surface.hairline}`,
       }}
       title={run.ledgerPath}
     >
-      {runStatusIcon(run.status)}
+      {review ? reviewRunStatusIcon(run) : runStatusIcon(run.status)}
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate" style={{ fontSize: 11, fontWeight: 650, color: text.primary }}>
-          {run.title || run.id}
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate" style={{ fontSize: 11, fontWeight: 650, color: text.primary }}>
+            {run.title || run.id}
+          </span>
+          {review && (
+            <span className="font-mono flex-none" style={{ fontSize: 9, color: text.tertiary }}>
+              {shortAgo(run.lastActivity)}
+            </span>
+          )}
         </span>
         <span
-          className="truncate"
-          style={{ fontSize: 10, color: text.tertiary, fontFamily: "var(--font-mono)" }}
+          className={review ? "" : "truncate"}
+          style={{ fontSize: 10, color: review ? statusColor : text.tertiary, fontFamily: "var(--font-mono)" }}
         >
-          {runSummaryMeta(run)}
+          {review ? reviewRunMeta(run) : runSummaryMeta(run)}
         </span>
       </span>
     </div>
@@ -981,6 +1006,27 @@ function runStatusIcon(status: string): ReactNode {
   }
 }
 
+function reviewRunStatusIcon(run: AgentGraphRunSummary): ReactNode {
+  switch (run.status.toLowerCase()) {
+    case "completed":
+      return run.gitDirty === true
+        ? <Icons.diff size={12} strokeWidth={2.2} color="var(--color-ws-orange)" />
+        : <Icons.checkCircle size={12} strokeWidth={2.2} color="var(--color-ws-green)" />;
+    case "failed":
+    case "cancelled":
+      return <Icons.failedCircle size={12} strokeWidth={2.2} color="var(--color-ws-orange)" />;
+    default:
+      return <Icons.workflow size={12} strokeWidth={2.2} color="var(--color-ws-blue)" />;
+  }
+}
+
+function reviewRunColor(run: AgentGraphRunSummary): string {
+  const status = run.status.toLowerCase();
+  if (status === "failed" || status === "cancelled" || run.gitDirty === true) return "var(--color-ws-orange)";
+  if (status === "completed") return "var(--color-ws-green)";
+  return text.tertiary as string;
+}
+
 function runSummaryMeta(run: AgentGraphRunSummary): string {
   return [
     run.source || run.modelLabel || "run",
@@ -991,6 +1037,25 @@ function runSummaryMeta(run: AgentGraphRunSummary): string {
   ]
     .filter(Boolean)
     .join(" · ");
+}
+
+function reviewRunMeta(run: AgentGraphRunSummary): string {
+  return [
+    run.status,
+    run.gitBranch,
+    (run.toolEventCount ?? 0) > 0 ? `${run.toolEventCount} tools` : null,
+    (run.taskCount ?? 0) > 0 ? `${run.taskCount} tasks` : null,
+    run.gitDirty === true ? "changes pending" : null,
+    pathBaseName(run.workspacePath),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function pathBaseName(path?: string | null): string | null {
+  const value = path?.replace(/[\\/]+$/, "");
+  if (!value) return null;
+  return value.split(/[\\/]/).pop() || value;
 }
 
 function displayPath(path: string): string {
