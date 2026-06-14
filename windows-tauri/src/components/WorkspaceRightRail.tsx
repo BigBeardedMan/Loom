@@ -1,20 +1,13 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { Icons } from "../lib/icons";
 import { ipc, type AgentDescriptor, type AgentGraphEvent, type AgentGraphRunSummary, type LiveAgentTaskGroup, type LocalEndpoint, type Workspace } from "../lib/ipc";
-import { PANEL_META, railTabsForContext } from "../lib/commands";
+import { PANEL_META } from "../lib/commands";
 import { LOOM_ENDPOINTS_CHANGED } from "../lib/events";
+import { useRightRailContext, type MemoryFile } from "../lib/railContext";
 import { useApp, type Panel } from "../lib/store";
 import { radius, surface, text, workspaceColorVar } from "../lib/theme";
 import { defaultPreviewUrlFor } from "../modules/build/PreviewPane";
 import type { Block } from "../modules/workspace/LayoutPersistence";
-
-type MemoryFile = {
-  id: string;
-  name: string;
-  path: string;
-  excerpt: string;
-  characterCount: number;
-};
 
 export function WorkspaceRightRail() {
   const workspaces = useApp((s) => s.workspaces);
@@ -24,28 +17,23 @@ export function WorkspaceRightRail() {
   const activeBlockId = useApp((s) => s.activeBlockId);
   const selectedTab = useApp((s) => s.rightRailTab);
   const setSelectedTab = useApp((s) => s.setRightRailTab);
+  const blocks = layout?.blocks ?? [];
   const activeBlock = layout?.blocks.find((b) => b.id === activeBlockId) ?? null;
-  const [runs, setRuns] = useState<AgentGraphRunSummary[]>([]);
+  const { scopedRuns, memoryFiles, railTabs, refreshRuns: refreshRunSummaries } = useRightRailContext(workspace, blocks);
   const [liveGroups, setLiveGroups] = useState<LiveAgentTaskGroup[]>([]);
   const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
   const [loadingRunId, setLoadingRunId] = useState<string | null>(null);
   const [eventsByRun, setEventsByRun] = useState<Record<string, AgentGraphEvent[]>>({});
-  const [memoryFiles, setMemoryFiles] = useState<MemoryFile[]>([]);
   const [agents, setAgents] = useState<AgentDescriptor[]>([]);
   const [endpoints, setEndpoints] = useState<LocalEndpoint[]>([]);
 
-  const scopedRuns = useMemo(() => filterRunsForWorkspace(runs, workspace), [runs, workspace?.folderPath]);
   const scopedLiveGroups = useMemo(() => filterLiveGroupsForWorkspace(liveGroups, workspace), [liveGroups, workspace?.folderPath]);
   const reviewableRuns = useMemo(() => scopedRuns.filter(isReviewableRun), [scopedRuns]);
   const reviewableRunKey = reviewableRuns.slice(0, 6).map((run) => run.id).join("|");
-  const railTabs = useMemo(
-    () => railTabsForContext({ workspace, blocks: layout?.blocks ?? [], runs: scopedRuns, hasMemoryFiles: memoryFiles.length > 0 }),
-    [workspace?.id, workspace?.folderPath, workspace?.kindRaw, layout?.blocks, scopedRuns, memoryFiles.length]
-  );
   const effectiveTab = railTabs.some((tab) => tab.tab === selectedTab) ? selectedTab : railTabs[0]?.tab ?? "details";
 
   const refreshRuns = () => {
-    ipc.agentGraph.list().then(setRuns).catch(() => setRuns([]));
+    refreshRunSummaries();
     ipc.liveTasks.list().then(setLiveGroups).catch(() => setLiveGroups([]));
   };
   const refreshProviders = () => {
@@ -61,24 +49,9 @@ export function WorkspaceRightRail() {
   }, []);
 
   useEffect(() => {
-    window.addEventListener("loom-refresh-runs", refreshRuns);
-    return () => window.removeEventListener("loom-refresh-runs", refreshRuns);
-  }, []);
-
-  useEffect(() => {
     window.addEventListener(LOOM_ENDPOINTS_CHANGED, refreshProviders);
     return () => window.removeEventListener(LOOM_ENDPOINTS_CHANGED, refreshProviders);
   }, []);
-
-  useEffect(() => {
-    let active = true;
-    loadMemoryFiles(workspace).then((files) => {
-      if (active) setMemoryFiles(files);
-    });
-    return () => {
-      active = false;
-    };
-  }, [workspace?.id, workspace?.folderPath]);
 
   useEffect(() => {
     if (effectiveTab !== "diff" || reviewableRuns.length === 0) return;
@@ -197,11 +170,11 @@ export function WorkspaceRightRail() {
           />
         )}
         {effectiveTab === "files" && <FilesContent workspace={workspace} memoryFiles={memoryFiles} />}
-        {effectiveTab === "preview" && <PreviewContent workspace={workspace} blocks={layout?.blocks ?? []} />}
-        {effectiveTab === "tools" && <ToolsContent blocks={layout?.blocks ?? []} agents={agents} endpoints={endpoints} />}
-        {effectiveTab === "diff" && <DiffContent runs={scopedRuns} liveGroups={scopedLiveGroups} workspace={workspace} blocks={layout?.blocks ?? []} eventsByRun={eventsByRun} />}
+        {effectiveTab === "preview" && <PreviewContent workspace={workspace} blocks={blocks} />}
+        {effectiveTab === "tools" && <ToolsContent blocks={blocks} agents={agents} endpoints={endpoints} />}
+        {effectiveTab === "diff" && <DiffContent runs={scopedRuns} liveGroups={scopedLiveGroups} workspace={workspace} blocks={blocks} eventsByRun={eventsByRun} />}
         {effectiveTab === "memory" && <MemoryContent memoryFiles={memoryFiles} runs={scopedRuns} />}
-        {effectiveTab === "details" && <DetailsContent workspace={workspace} block={activeBlock} blocks={layout?.blocks ?? []} />}
+        {effectiveTab === "details" && <DetailsContent workspace={workspace} block={activeBlock} blocks={blocks} />}
       </main>
     </aside>
   );
@@ -1143,16 +1116,6 @@ function isRunningStatus(status: string): boolean {
   return ["running", "pending", "in_progress", "in-progress"].includes(status.toLowerCase());
 }
 
-function filterRunsForWorkspace(runs: AgentGraphRunSummary[], workspace: Workspace | null): AgentGraphRunSummary[] {
-  if (!workspace?.folderPath) return runs;
-  const root = normalizedPath(workspace.folderPath);
-  return runs.filter((run) => {
-    if (!run.workspacePath) return false;
-    const candidate = normalizedPath(run.workspacePath);
-    return candidate === root || candidate.startsWith(`${root}/`) || candidate.startsWith(`${root}\\`);
-  });
-}
-
 function filterLiveGroupsForWorkspace(liveGroups: LiveAgentTaskGroup[], workspace: Workspace | null): LiveAgentTaskGroup[] {
   if (!workspace?.folderPath) return liveGroups;
   const root = normalizedPath(workspace.folderPath);
@@ -1170,34 +1133,4 @@ function normalizedPath(path?: string | null): string {
 function liveGroupTitle(group: LiveAgentTaskGroup): string {
   const source = String(group.source || "agent");
   return group.modelLabel ? `${source} - ${group.modelLabel}` : source;
-}
-
-async function loadMemoryFiles(workspace: Workspace | null): Promise<MemoryFile[]> {
-  if (!workspace?.folderPath) return [];
-  const names = ["CLAUDE.md", "AGENTS.md", "GUIDE.md", "README.md"];
-  const files = await Promise.all(
-    names.map(async (name) => {
-      const path = joinPath(workspace.folderPath, name);
-      try {
-        const raw = await ipc.fs.read(path);
-        const trimmed = raw.trim();
-        if (!trimmed) return null;
-        return {
-          id: path,
-          name,
-          path,
-          characterCount: trimmed.length,
-          excerpt: trimmed.length > 420 ? `${trimmed.slice(0, 420)}...` : trimmed,
-        };
-      } catch {
-        return null;
-      }
-    })
-  );
-  return files.filter((file): file is MemoryFile => Boolean(file));
-}
-
-function joinPath(root: string, name: string): string {
-  const sep = root.includes("\\") ? "\\" : "/";
-  return `${root.replace(/[\\/]+$/, "")}${sep}${name}`;
 }

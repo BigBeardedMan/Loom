@@ -11,6 +11,8 @@ import {
 import { Icons } from "../../lib/icons";
 import { useApp } from "../../lib/store";
 import { ipc, type CommandRecord, type SessionInfo } from "../../lib/ipc";
+import { LOOM_REFRESH_RUNS } from "../../lib/events";
+import { useRightRailContext } from "../../lib/railContext";
 import { ADD_BLOCK_COMMANDS, PANEL_META, panelsForKind, railTabsForContext } from "../../lib/commands";
 
 // Mirrors Loom/Workspace/CommandPalette.swift.
@@ -31,9 +33,12 @@ export function CommandPalette() {
   const [recent, setRecent] = useState<CommandRecord[]>([]);
   const selectedWorkspace = workspaces.find((w) => w.id === selectedWorkspaceId);
   const canAddPane = !layout || paneCapacityLimit === null || layout.blocks.length < paneCapacityLimit;
+  const { scopedRuns, memoryFiles } = useRightRailContext(selectedWorkspace ?? null, layout?.blocks ?? []);
   const inspectorCommands = railTabsForContext({
     workspace: selectedWorkspace ?? null,
     blocks: layout?.blocks ?? [],
+    runs: scopedRuns,
+    hasMemoryFiles: memoryFiles.length > 0,
   });
 
   useEffect(() => {
@@ -62,7 +67,7 @@ export function CommandPalette() {
 
   const refreshRuns = () => {
     setRightRailTab("timeline");
-    window.dispatchEvent(new Event("loom-refresh-runs"));
+    window.dispatchEvent(new Event(LOOM_REFRESH_RUNS));
     closePalette();
   };
 

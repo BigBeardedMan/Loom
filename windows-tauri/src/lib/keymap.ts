@@ -5,6 +5,7 @@ import { useEffect } from "react";
 import { useApp, type Panel } from "./store";
 import { ipc } from "./ipc";
 import { panelsForKind } from "./commands";
+import { LOOM_REFRESH_RUNS } from "./events";
 
 type Binding = {
   combo: string;
@@ -133,7 +134,7 @@ export function useGlobalKeymap() {
         description: "Refresh Runs",
         run: () => {
           setRightRailTab("timeline");
-          window.dispatchEvent(new Event("loom-refresh-runs"));
+          window.dispatchEvent(new Event(LOOM_REFRESH_RUNS));
         },
       },
     ];

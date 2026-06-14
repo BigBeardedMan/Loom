@@ -3,6 +3,7 @@ import { Icons } from "../lib/icons";
 import { ipc, type AgentDescriptor, type LiveAgentTaskGroup, type LocalEndpoint } from "../lib/ipc";
 import { effectiveRailTab, PANEL_META, rightRailTabLabel } from "../lib/commands";
 import { LOOM_ENDPOINTS_CHANGED } from "../lib/events";
+import { useRightRailContext } from "../lib/railContext";
 import { useApp } from "../lib/store";
 import { surface, text, workspaceColorVar } from "../lib/theme";
 import type { Block } from "../modules/workspace/LayoutPersistence";
@@ -21,7 +22,13 @@ export function WorkspaceStatusBar() {
   const [agents, setAgents] = useState<AgentDescriptor[]>([]);
   const [endpoints, setEndpoints] = useState<LocalEndpoint[]>([]);
   const updateSegment = updateStatusSegment(updateStatus, updatePill);
-  const effectiveRightRailTab = effectiveRailTab(rightRailTab, { workspace, blocks: layout?.blocks ?? [] });
+  const { scopedRuns, memoryFiles } = useRightRailContext(workspace, layout?.blocks ?? []);
+  const effectiveRightRailTab = effectiveRailTab(rightRailTab, {
+    workspace,
+    blocks: layout?.blocks ?? [],
+    runs: scopedRuns,
+    hasMemoryFiles: memoryFiles.length > 0,
+  });
   const scopedLiveGroups = filterLiveGroupsForWorkspace(liveGroups, workspace?.folderPath);
 
   useEffect(() => {

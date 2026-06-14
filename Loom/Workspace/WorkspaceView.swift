@@ -525,21 +525,11 @@ struct WorkspaceView: View {
     }
 
     private var availableInspectorTabs: [WorkspaceRightRailTab] {
-        var tabs: [WorkspaceRightRailTab] = []
-        if selectedWorkspace?.folderPath.isEmpty == false { tabs.append(.files) }
-        if layout.blocks.contains(where: { $0.kind == .preview }) || selectedBlock?.kind == .preview {
-            tabs.append(.preview)
-        }
-        tabs.append(.timeline)
-        tabs.append(.tools)
-        if selectedWorkspace?.kind == .review || selectedWorkspace?.kind == .runs {
-            tabs.append(.diff)
-        }
-        if selectedWorkspace?.folderPath.isEmpty == false || selectedWorkspace?.kind == .runs || selectedWorkspace?.kind == .review {
-            tabs.append(.memory)
-        }
-        tabs.append(.details)
-        return tabs
+        WorkspaceRightRailAvailability.tabs(
+            workspace: selectedWorkspace,
+            selectedBlock: selectedBlock,
+            blocks: layout.blocks
+        )
     }
 
     private func rightRailView(width: CGFloat) -> some View {

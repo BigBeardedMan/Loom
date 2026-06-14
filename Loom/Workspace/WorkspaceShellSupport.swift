@@ -38,6 +38,38 @@ enum WorkspaceRightRailTab: String, CaseIterable, Identifiable {
     }
 }
 
+enum WorkspaceRightRailAvailability {
+    static func tabs(
+        workspace: Workspace?,
+        selectedBlock: WorkspaceBlock? = nil,
+        blocks: [WorkspaceBlock],
+        memoryFiles: [WorkspaceMemoryFile] = [],
+        runSummaries: [AgentGraphRunSummary] = []
+    ) -> [WorkspaceRightRailTab] {
+        var tabs: [WorkspaceRightRailTab] = []
+        if workspace?.folderPath.isEmpty == false { tabs.append(.files) }
+        if blocks.contains(where: { $0.kind == .preview }) || selectedBlock?.kind == .preview {
+            tabs.append(.preview)
+        }
+        tabs.append(.timeline)
+        tabs.append(.tools)
+        if workspace?.kind == .review
+            || workspace?.kind == .runs
+            || runSummaries.contains(where: { $0.gitBranch != nil || $0.gitDirty != nil || $0.toolEventCount > 0 }) {
+            tabs.append(.diff)
+        }
+        if workspace?.folderPath.isEmpty == false
+            || workspace?.kind == .runs
+            || workspace?.kind == .review
+            || !memoryFiles.isEmpty
+            || !runSummaries.isEmpty {
+            tabs.append(.memory)
+        }
+        tabs.append(.details)
+        return tabs
+    }
+}
+
 struct WorkspaceRoomRailView: View {
     @Environment(\.modelContext) private var modelContext
     let workspaces: [Workspace]
@@ -265,23 +297,13 @@ struct WorkspaceRightRailView: View {
     }
 
     private var availableTabs: [WorkspaceRightRailTab] {
-        var tabs: [WorkspaceRightRailTab] = []
-        if workspace?.folderPath.isEmpty == false { tabs.append(.files) }
-        if blocks.contains(where: { $0.kind == .preview }) || selectedBlock?.kind == .preview { tabs.append(.preview) }
-        tabs.append(.timeline)
-        tabs.append(.tools)
-        if workspace?.kind == .review || workspace?.kind == .runs || scopedRunSummaries.contains(where: { $0.gitBranch != nil || $0.gitDirty != nil || $0.toolEventCount > 0 }) {
-            tabs.append(.diff)
-        }
-        if workspace?.folderPath.isEmpty == false
-            || workspace?.kind == .runs
-            || workspace?.kind == .review
-            || !memoryFiles.isEmpty
-            || !scopedRunSummaries.isEmpty {
-            tabs.append(.memory)
-        }
-        tabs.append(.details)
-        return tabs
+        WorkspaceRightRailAvailability.tabs(
+            workspace: workspace,
+            selectedBlock: selectedBlock,
+            blocks: blocks,
+            memoryFiles: memoryFiles,
+            runSummaries: scopedRunSummaries
+        )
     }
 
     private var scopedRunSummaries: [AgentGraphRunSummary] {
