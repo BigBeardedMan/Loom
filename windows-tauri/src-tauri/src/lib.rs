@@ -114,21 +114,38 @@ fn window_open(app: AppHandle, workspace_id: Option<String>) -> tauri::Result<()
 fn shell_open(state: State<'_, AppState>, target: String) -> Result<(), String> {
     let resolved = if target == "app-data" {
         state.data_dir.clone()
-    } else if target.starts_with("https://") {
+    } else if target.starts_with("http://") || target.starts_with("https://") {
         let url = url::Url::parse(&target).map_err(|e| e.to_string())?;
-        let host = url.host_str().unwrap_or_default();
-        let allowed = url.scheme() == "https"
-            && host.eq_ignore_ascii_case("github.com")
-            && (url.path() == "/BigBeardedMan/Loom"
-                || url.path().starts_with("/BigBeardedMan/Loom/"));
-        if !allowed {
+        if !is_allowed_shell_url(&url) {
             return Err(format!("external URL is not allowed: {target}"));
         }
         return open_target(&target);
     } else {
-        security::validate_app_data_path(&state, &target)?
+        security::validate_existing_path(&state, &target)?
     };
     open_target(&resolved.to_string_lossy())
+}
+
+fn is_allowed_shell_url(url: &url::Url) -> bool {
+    is_allowed_github_url(url) || is_loopback_preview_url(url)
+}
+
+fn is_allowed_github_url(url: &url::Url) -> bool {
+    let host = url.host_str().unwrap_or_default();
+    url.scheme() == "https"
+        && host.eq_ignore_ascii_case("github.com")
+        && (url.path() == "/BigBeardedMan/Loom" || url.path().starts_with("/BigBeardedMan/Loom/"))
+}
+
+fn is_loopback_preview_url(url: &url::Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+        && matches!(
+            url.host_str()
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+                .as_str(),
+            "localhost" | "127.0.0.1" | "::1"
+        )
 }
 
 fn open_target(target: &str) -> Result<(), String> {

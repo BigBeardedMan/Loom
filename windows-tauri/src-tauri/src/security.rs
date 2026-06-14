@@ -87,20 +87,6 @@ pub fn validate_write_path(state: &AppState, path: impl AsRef<Path>) -> Result<P
     Ok(canonical)
 }
 
-pub fn validate_app_data_path(state: &AppState, path: impl AsRef<Path>) -> Result<PathBuf, String> {
-    let canonical = std::fs::canonicalize(path.as_ref())
-        .map_err(|e| format!("canonicalize {}: {e}", path.as_ref().display()))?;
-    let data = std::fs::canonicalize(&state.data_dir).map_err(|e| e.to_string())?;
-    if path_is_within(&canonical, &data) {
-        Ok(canonical)
-    } else {
-        Err(format!(
-            "path is outside app data: {}",
-            path.as_ref().display()
-        ))
-    }
-}
-
 pub fn is_path_sensitive(path: &Path) -> bool {
     is_sensitive_path(path)
 }
