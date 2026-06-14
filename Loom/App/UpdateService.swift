@@ -254,12 +254,14 @@ final class UpdateService {
             if available != nil { available = nil }
             return
         }
-        // Only surface staged builds that are actually different from what's
-        // running. Otherwise re-launching after an update would keep showing
-        // the button until the manifest is cleared.
+        // Only surface staged builds that are strictly newer than what's
+        // running. Stale or same-version staging can happen after manual
+        // tests; clearing the manifest keeps the Update pill honest.
         let running = Self.runningVersionTriple()
-        let stagedTriple = (manifest.version, manifest.build)
-        let isNewer = stagedTriple != (running.version, running.build)
+        let isNewer = Self.isStagedUpdateNewer(manifest, than: running)
+        if !isNewer {
+            Self.clearManifest()
+        }
         let next: StagedUpdate? = isNewer ? manifest : nil
         if next != available { available = next }
     }
@@ -388,6 +390,28 @@ final class UpdateService {
         let version = info?["CFBundleShortVersionString"] as? String ?? "0.0.0"
         let build = info?["CFBundleVersion"] as? String ?? "0"
         return (version, build)
+    }
+
+    private static func isStagedUpdateNewer(
+        _ staged: StagedUpdate,
+        than running: (version: String, build: String)
+    ) -> Bool {
+        if GitHubReleaseFetcher.isNewer(tag: staged.version, than: running.version) {
+            return true
+        }
+        if GitHubReleaseFetcher.isNewer(tag: running.version, than: staged.version) {
+            return false
+        }
+        return isBuildNewer(staged.build, than: running.build)
+    }
+
+    private static func isBuildNewer(_ staged: String, than running: String) -> Bool {
+        let stagedTrimmed = staged.trimmingCharacters(in: .whitespacesAndNewlines)
+        let runningTrimmed = running.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let stagedInt = Int(stagedTrimmed), let runningInt = Int(runningTrimmed) {
+            return stagedInt > runningInt
+        }
+        return stagedTrimmed.compare(runningTrimmed, options: [.numeric]) == .orderedDescending
     }
 
     // MARK: - Helper script
