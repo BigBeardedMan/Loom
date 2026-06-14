@@ -570,6 +570,15 @@ export function AgentPane({ workspace, blockId, presentation = "agent" }: Props)
     setBusy(false);
   };
 
+  const startNewChat = () => {
+    if (busy) return;
+    setTurns([]);
+    setLmNativeResponseId(null);
+    setLmRunStatus(null);
+    setLmRunUsage(null);
+    if (chatTranscriptKey) localStorage.removeItem(chatTranscriptKey);
+  };
+
   const lmReadiness = [
     {
       label: "Workspace",
@@ -721,6 +730,28 @@ export function AgentPane({ workspace, blockId, presentation = "agent" }: Props)
               )
             )}
           </>
+        )}
+        {isChatPane && (
+          <button
+            onClick={startNewChat}
+            disabled={busy || turns.length === 0}
+            title="Start a new chat in this pane"
+            aria-label="Start a new chat in this pane"
+            className="flex items-center gap-1"
+            style={{
+              marginLeft: "auto",
+              padding: "4px 8px",
+              borderRadius: 5,
+              background: "rgba(255, 255, 255, 0.06)",
+              border: "1px solid rgba(255, 255, 255, 0.10)",
+              color: "rgba(255,255,255,0.78)",
+              fontSize: 11,
+              opacity: busy || turns.length === 0 ? 0.45 : 1,
+            }}
+          >
+            <Icons.plus size={11} strokeWidth={2} />
+            New chat
+          </button>
         )}
       </div>
 
