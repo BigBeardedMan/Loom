@@ -229,6 +229,7 @@ final class WorkspaceLayout {
 
     var liveAgentTerminalCount: Int = 0
     var commandTargetBlockID: UUID?
+    private(set) var deckCapacityLimit: Int?
 
     /// True once at least one kind has been hydrated. Suppresses the auto-save
     /// during initial load so prefetch doesn't write back over kinds that are
@@ -283,7 +284,18 @@ final class WorkspaceLayout {
         defaultCwd = url ?? FileManager.default.homeDirectoryForCurrentUser
     }
 
-    func addBlock(_ kind: PanelKind) {
+    var canAddBlock: Bool {
+        guard let deckCapacityLimit else { return true }
+        return blocks.count < deckCapacityLimit
+    }
+
+    func setDeckCapacityLimit(_ limit: Int?) {
+        deckCapacityLimit = limit
+    }
+
+    @discardableResult
+    func addBlock(_ kind: PanelKind) -> Bool {
+        guard canAddBlock else { return false }
         var current = blocks
         let block = WorkspaceBlock(kind: kind, cwd: defaultCwd)
         if kind == .terminal {
@@ -299,9 +311,12 @@ final class WorkspaceLayout {
         blocksByKind[currentKind] = current
         commandTargetBlockID = block.id
         persistCurrent()
+        return true
     }
 
-    func addTerminalBlock(cwd: URL, title: String? = nil) {
+    @discardableResult
+    func addTerminalBlock(cwd: URL, title: String? = nil) -> Bool {
+        guard canAddBlock else { return false }
         var current = blocks
         let block = WorkspaceBlock(kind: .terminal, cwd: cwd)
         block.autoTerminalIndex = Self.nextTerminalIndex(in: current)
@@ -310,9 +325,12 @@ final class WorkspaceLayout {
         blocksByKind[currentKind] = current
         commandTargetBlockID = block.id
         persistCurrent()
+        return true
     }
 
-    func restoreTerminalBlock(_ restore: TerminalTranscriptRestore) {
+    @discardableResult
+    func restoreTerminalBlock(_ restore: TerminalTranscriptRestore) -> Bool {
+        guard canAddBlock else { return false }
         var current = blocks
         let block = WorkspaceBlock(kind: .terminal, cwd: restore.cwd)
         block.autoTerminalIndex = Self.nextTerminalIndex(in: current)
@@ -328,6 +346,7 @@ final class WorkspaceLayout {
         blocksByKind[currentKind] = current
         commandTargetBlockID = block.id
         persistCurrent()
+        return true
     }
 
     private static func nextTerminalIndex(in blocks: [WorkspaceBlock]) -> Int {

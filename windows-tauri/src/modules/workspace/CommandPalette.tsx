@@ -22,6 +22,7 @@ export function CommandPalette() {
   const selectedWorkspaceId = useApp((s) => s.selectedWorkspaceId);
   const selectWorkspace = useApp((s) => s.selectWorkspace);
   const layout = useApp((s) => s.layout);
+  const paneCapacityLimit = useApp((s) => s.paneCapacityLimit);
   const openSettings = useApp((s) => s.openSettings);
   const addBlock = useApp((s) => s.addBlock);
   const isRightRailVisible = useApp((s) => s.isRightRailVisible);
@@ -29,6 +30,7 @@ export function CommandPalette() {
   const setRightRailTab = useApp((s) => s.setRightRailTab);
   const [recent, setRecent] = useState<CommandRecord[]>([]);
   const selectedWorkspace = workspaces.find((w) => w.id === selectedWorkspaceId);
+  const canAddPane = !layout || paneCapacityLimit === null || layout.blocks.length < paneCapacityLimit;
   const inspectorCommands = railTabsForContext({
     workspace: selectedWorkspace ?? null,
     blocks: layout?.blocks ?? [],
@@ -174,7 +176,9 @@ export function CommandPalette() {
               <Command.Item
                 key={kind}
                 value={`add ${label}`}
+                disabled={!canAddPane}
                 onSelect={() => {
+                  if (!canAddPane) return;
                   addBlock(kind);
                   closePalette();
                 }}
@@ -183,12 +187,18 @@ export function CommandPalette() {
                   padding: "7px 14px",
                   fontSize: 13,
                   fontWeight: 500,
-                  color: text.muted,
+                  color: canAddPane ? text.muted : text.tertiary,
                   borderRadius: 6,
+                  opacity: canAddPane ? 1 : 0.5,
                 }}
               >
                 <Icon size={12} strokeWidth={1.8} />
                 Add {label} pane
+                {!canAddPane && (
+                  <span className="ml-auto" style={{ fontSize: 11, color: text.tertiary }}>
+                    Pane limit reached
+                  </span>
+                )}
               </Command.Item>
             ))}
           </Command.Group>

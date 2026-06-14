@@ -140,6 +140,7 @@ struct LoomApp: App {
                         layout.addBlock(panel)
                     }
                     .keyboardShortcut(shortcutKey(for: panel), modifiers: [.command, .shift])
+                    .disabled(!layout.canAddBlock)
                 }
             }
 

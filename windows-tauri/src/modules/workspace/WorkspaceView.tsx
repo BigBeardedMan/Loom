@@ -16,6 +16,7 @@ import { UsageView } from "../usage/UsageView";
 import { CommandsPane } from "../commands/CommandsPane";
 import {
   computeDeckMetrics,
+  deckCapacity,
   dropTargetAt,
   pinPreviewRect,
   pinDragSign,
@@ -55,6 +56,7 @@ export function WorkspaceView() {
   const toggleFullRow = useApp((s) => s.toggleFullRow);
   const activeBlockId = useApp((s) => s.activeBlockId);
   const setActiveBlock = useApp((s) => s.setActiveBlock);
+  const setPaneCapacityLimit = useApp((s) => s.setPaneCapacityLimit);
   const usageTool = useApp((s) => s.selectedUsageTool);
   const workspace = workspaces.find((w) => w.id === selectedId);
 
@@ -86,6 +88,12 @@ export function WorkspaceView() {
     () => computeDeckMetrics(deckSize, blocks),
     [deckSize, blocks]
   );
+
+  useEffect(() => {
+    const capacity = deckCapacity(deckSize);
+    setPaneCapacityLimit(capacity.cols * capacity.rows);
+    return () => setPaneCapacityLimit(null);
+  }, [deckSize, setPaneCapacityLimit]);
 
   // Block-drag state for pin/swap. Tracking is global so the user can drag
   // anywhere on screen and we still see mousemove/mouseup.

@@ -63,6 +63,7 @@ type AppState = {
   isRightRailVisible: boolean;
   rightRailTab: RightRailTab;
   activeBlockId: string | null;
+  paneCapacityLimit: number | null;
 
   loadWorkspaces: () => Promise<void>;
   selectWorkspace: (id: string | null) => void;
@@ -104,6 +105,7 @@ type AppState = {
   toggleRightRail: () => void;
   setRightRailTab: (tab: RightRailTab) => void;
   setActiveBlock: (id: string | null) => void;
+  setPaneCapacityLimit: (limit: number | null) => void;
 };
 
 const SELECTED_WS_KEY = "loom.selectedWorkspaceId";
@@ -194,6 +196,7 @@ export const useApp = create<AppState>((set, get) => ({
   isRightRailVisible: storedRightRailVisible(),
   rightRailTab: storedRightRailTab(),
   activeBlockId: null,
+  paneCapacityLimit: null,
 
   loadWorkspaces: async () => {
     const list = await loadCanonicalWorkspaces();
@@ -295,6 +298,8 @@ export const useApp = create<AppState>((set, get) => ({
     const wsId = get().selectedWorkspaceId;
     const current = get().layout;
     if (!wsId || !current) return;
+    const limit = get().paneCapacityLimit;
+    if (limit !== null && current.blocks.length >= limit) return;
     const block = newBlock(kind);
     if (kind === "preview") {
       block.autoPreviewIndex = current.blocks.filter((b) => b.kind === "preview").length;
@@ -319,6 +324,8 @@ export const useApp = create<AppState>((set, get) => ({
     const wsId = get().selectedWorkspaceId;
     const current = get().layout;
     if (!wsId || !current) return;
+    const limit = get().paneCapacityLimit;
+    if (limit !== null && current.blocks.length >= limit) return;
     const block = newBlock("terminal");
     block.customTitle = restore.title;
     block.terminalCount = 1;
@@ -541,6 +548,7 @@ export const useApp = create<AppState>((set, get) => ({
     set({ rightRailTab: tab, isRightRailVisible: true });
   },
   setActiveBlock: (id) => set({ activeBlockId: id }),
+  setPaneCapacityLimit: (limit) => set({ paneCapacityLimit: limit }),
 }));
 
 export const workspaceColorClass: Record<Workspace["colorName"], string> = {

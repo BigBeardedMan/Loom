@@ -30,7 +30,7 @@ struct WorkspaceView: View {
     }
 
     private var canAddBlock: Bool {
-        layout.blocks.count < deckCapacity
+        layout.canAddBlock
     }
 
     private var selectedWorkspace: Workspace? {
@@ -131,6 +131,7 @@ struct WorkspaceView: View {
         .loomAppearance()
         .onChange(of: layout.selectedWorkspaceID) { _, _ in handleWorkspaceChange() }
         .onChange(of: selectedWorkspace?.folderPath) { _, _ in syncTerminalCwd() }
+        .onChange(of: deckSize) { _, _ in syncDeckCapacity() }
         .onReceive(NotificationCenter.default.publisher(for: .loomToggleInspector)) { _ in
             toggleRightRail()
         }
@@ -148,7 +149,10 @@ struct WorkspaceView: View {
             switchToWorkspace(kind)
         }
         .animation(.easeOut(duration: 0.16), value: transcriptPreview?.id)
-        .task { handleWorkspaceChange() }
+        .task {
+            syncDeckCapacity()
+            handleWorkspaceChange()
+        }
     }
 
     private func handleWorkspaceChange() {
@@ -232,7 +236,8 @@ struct WorkspaceView: View {
             CommandPalette(
                 isPresented: $showCommandPalette,
                 isRightRailVisible: isRightRailVisible,
-                inspectorTabs: availableInspectorTabs
+                inspectorTabs: availableInspectorTabs,
+                canAddBlock: canAddBlock
             )
         }
         .onReceive(NotificationCenter.default.publisher(for: .loomOpenPalette)) { _ in
@@ -476,8 +481,9 @@ struct WorkspaceView: View {
     private func addBlockButton(_ panel: PanelKind) -> some View {
         Button {
             guard canAddBlock else { return }
-            layout.addBlock(panel)
-            selectedBlockID = layout.commandTargetBlockID
+            if layout.addBlock(panel) {
+                selectedBlockID = layout.commandTargetBlockID
+            }
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "plus")
@@ -571,6 +577,10 @@ struct WorkspaceView: View {
         liveAgentTasks.refresh()
         rightRailRefreshNonce &+= 1
         openInspector(.timeline)
+    }
+
+    private func syncDeckCapacity() {
+        layout.setDeckCapacityLimit(deckCapacity)
     }
 
     private var leftRail: some View {

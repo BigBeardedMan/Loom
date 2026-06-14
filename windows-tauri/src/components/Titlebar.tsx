@@ -19,12 +19,14 @@ export function Titlebar() {
   const selectedId = useApp((s) => s.selectedWorkspaceId);
   const addBlock = useApp((s) => s.addBlock);
   const layout = useApp((s) => s.layout);
+  const paneCapacityLimit = useApp((s) => s.paneCapacityLimit);
   const selectedUsageTool = useApp((s) => s.selectedUsageTool);
   const setUsageTool = useApp((s) => s.setUsageTool);
   const openPalette = useApp((s) => s.openPalette);
   const openSettings = useApp((s) => s.openSettings);
   const workspace = workspaces.find((w) => w.id === selectedId);
   const dictation = useDictation();
+  const canAddPane = !layout || paneCapacityLimit === null || layout.blocks.length < paneCapacityLimit;
 
   return (
     <div
@@ -126,6 +128,7 @@ export function Titlebar() {
         <AddBlockStrip
           workspaceKind={workspace.kindRaw}
           activeKinds={layout?.blocks.map((b) => b.kind) ?? []}
+          canAdd={canAddPane}
           onAdd={(k) => addBlock(k)}
         />
       ) : null}
@@ -209,10 +212,12 @@ function SelectedUsageStatus({
 function AddBlockStrip({
   workspaceKind,
   activeKinds,
+  canAdd,
   onAdd,
 }: {
   workspaceKind: string;
   activeKinds: PanelType[];
+  canAdd: boolean;
   onAdd: (k: PanelType) => void;
 }) {
   const available = panelsForKind(workspaceKind);
@@ -234,16 +239,19 @@ function AddBlockStrip({
         return (
           <button
             key={p}
-            onClick={() => onAdd(p)}
+            onClick={() => {
+              if (canAdd) onAdd(p);
+            }}
+            disabled={!canAdd}
             className="flex items-center gap-1 transition-colors"
             style={{
               padding: "3px 8px",
               borderRadius: 999,
               background: "transparent",
-              color: text.primary,
+              color: canAdd ? text.primary : text.tertiary,
               fontSize: 11,
               fontWeight: 600,
-              opacity: used ? 0.55 : 1,
+              opacity: canAdd ? (used ? 0.55 : 1) : 0.42,
             }}
             onMouseEnter={(e) => {
               e.currentTarget.style.background = surface.softPanel as string;
@@ -251,7 +259,7 @@ function AddBlockStrip({
             onMouseLeave={(e) => {
               e.currentTarget.style.background = "transparent";
             }}
-            title={`Add ${meta.label} pane`}
+            title={canAdd ? `Add ${meta.label} pane` : "Pane limit reached"}
           >
             <Icons.plus size={9} strokeWidth={2.5} />
             <Icon size={10} strokeWidth={2} color={meta.color} />

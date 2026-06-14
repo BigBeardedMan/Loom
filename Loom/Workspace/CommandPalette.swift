@@ -25,6 +25,7 @@ struct CommandPalette: View {
     @Binding var isPresented: Bool
     let isRightRailVisible: Bool
     let inspectorTabs: [WorkspaceRightRailTab]
+    let canAddBlock: Bool
     @State private var query: String = ""
     @State private var selectedID: String?
 
@@ -148,8 +149,10 @@ struct CommandPalette: View {
             .background(selectedID == item.id ? Color.accentColor.opacity(0.18) : Color.clear)
         }
         .buttonStyle(.plain)
+        .disabled(!item.isEnabled)
+        .opacity(item.isEnabled ? 1 : 0.48)
         .onHover { hovering in
-            if hovering { selectedID = item.id }
+            if hovering, item.isEnabled { selectedID = item.id }
         }
     }
 
@@ -223,9 +226,10 @@ struct CommandPalette: View {
             PaletteItem(
                 id: "panel:\(panel.rawValue)",
                 title: "Add \(panel.label) pane",
-                subtitle: nil,
+                subtitle: canAddBlock ? nil : "Pane limit reached",
                 systemImage: panel.systemImage,
                 tint: .accentColor,
+                isEnabled: canAddBlock,
                 action: .addBlock(panel)
             )
         }
@@ -344,6 +348,7 @@ struct CommandPalette: View {
     }
 
     private func execute(_ item: PaletteItem) {
+        guard item.isEnabled else { return }
         switch item.action {
         case .switchWorkspace(let id):
             layout.selectedWorkspaceID = id
@@ -396,7 +401,26 @@ private struct PaletteItem: Identifiable, Hashable {
     let subtitle: String?
     let systemImage: String
     let tint: Color
+    let isEnabled: Bool
     let action: PaletteAction
+
+    init(
+        id: String,
+        title: String,
+        subtitle: String?,
+        systemImage: String,
+        tint: Color,
+        isEnabled: Bool = true,
+        action: PaletteAction
+    ) {
+        self.id = id
+        self.title = title
+        self.subtitle = subtitle
+        self.systemImage = systemImage
+        self.tint = tint
+        self.isEnabled = isEnabled
+        self.action = action
+    }
 
     static func == (lhs: PaletteItem, rhs: PaletteItem) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }

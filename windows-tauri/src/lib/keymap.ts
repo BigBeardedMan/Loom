@@ -33,6 +33,7 @@ export function useGlobalKeymap() {
   const addBlock = useApp((s) => s.addBlock);
   const removeBlock = useApp((s) => s.removeBlock);
   const layout = useApp((s) => s.layout);
+  const paneCapacityLimit = useApp((s) => s.paneCapacityLimit);
   const workspaces = useApp((s) => s.workspaces);
   const selectedWorkspaceId = useApp((s) => s.selectedWorkspaceId);
   const selectWorkspace = useApp((s) => s.selectWorkspace);
@@ -53,6 +54,7 @@ export function useGlobalKeymap() {
       return layout?.blocks[0]?.id;
     })();
     const selectedWorkspace = workspaces.find((w) => w.id === selectedWorkspaceId);
+    const canAddPane = !layout || paneCapacityLimit === null || layout.blocks.length < paneCapacityLimit;
 
     const bindings: Binding[] = [
       {
@@ -63,7 +65,9 @@ export function useGlobalKeymap() {
       {
         combo: "ctrl+t",
         description: "Add Terminal pane",
-        run: () => addBlock("terminal"),
+        run: () => {
+          if (canAddPane) addBlock("terminal");
+        },
       },
       {
         combo: "ctrl+w",
@@ -151,7 +155,9 @@ export function useGlobalKeymap() {
       bindings.push({
         combo: `ctrl+shift+${i + 1}`,
         description: `Add ${kind} pane`,
-        run: () => addBlock(kind),
+        run: () => {
+          if (canAddPane) addBlock(kind);
+        },
       });
     });
 
@@ -176,6 +182,7 @@ export function useGlobalKeymap() {
     openPalette,
     closePalette,
     addBlock,
+    paneCapacityLimit,
     removeBlock,
     layout,
     workspaces,
