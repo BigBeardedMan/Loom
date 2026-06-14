@@ -147,6 +147,9 @@ struct WorkspaceView: View {
         .onReceive(NotificationCenter.default.publisher(for: .loomRefreshRuns)) { _ in
             refreshRunContext()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .loomRefreshInspectorContext)) { _ in
+            refreshInspectorContextInPlace()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .loomSwitchWorkspaceKind)) { notification in
             guard let raw = notification.object as? String,
                   let kind = WorkspaceKind(rawValue: raw) else { return }
@@ -590,9 +593,13 @@ struct WorkspaceView: View {
     }
 
     private func refreshRunContext() {
+        refreshInspectorContextInPlace()
+        openInspector(.timeline)
+    }
+
+    private func refreshInspectorContextInPlace() {
         liveAgentTasks.refresh()
         rightRailRefreshNonce &+= 1
-        openInspector(.timeline)
     }
 
     @MainActor

@@ -381,7 +381,7 @@ struct WorkspaceRightRailView: View {
             }
             Spacer()
             Button {
-                Task { await refreshRailData() }
+                NotificationCenter.default.post(name: .loomRefreshInspectorContext, object: nil)
             } label: {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 10, weight: .bold))
