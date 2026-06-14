@@ -354,15 +354,16 @@ function PreviewContent({ workspace, blocks }: { workspace: Workspace | null; bl
       {previews.length === 0 ? (
         <Muted>No Preview panes are open in this room.</Muted>
       ) : (
-        previews.map((block) => (
-          <RailRow
-            key={block.id}
-            icon="eye"
-            color={workspaceColorVar.pink}
-            title={defaultBlockTitle(block)}
-            detail={workspace ? defaultPreviewUrlFor(workspace, block.autoPreviewIndex ?? 0) : `http://localhost:${3000 + (block.autoPreviewIndex ?? 0)}`}
-          />
-        ))
+        previews.map((block) => {
+          const url = previewUrlForBlock(workspace, block);
+          const title = defaultBlockTitle(block);
+          return (
+            <section key={block.id} style={sectionBox}>
+              <RailRow icon="eye" color={workspaceColorVar.pink} title={title} detail={url} />
+              <PreviewActions url={url} label={title} />
+            </section>
+          );
+        })
       )}
     </RailSection>
   );
@@ -479,15 +480,16 @@ function DiffContent({
         {previews.length === 0 ? (
           <Muted>No Preview panes are open in this room.</Muted>
         ) : (
-          previews.slice(0, 3).map((block) => (
-            <RailRow
-              key={block.id}
-              icon="eye"
-              color={workspaceColorVar.pink}
-              title={defaultBlockTitle(block)}
-              detail={workspace ? defaultPreviewUrlFor(workspace, block.autoPreviewIndex ?? 0) : `http://localhost:${3000 + (block.autoPreviewIndex ?? 0)}`}
-            />
-          ))
+          previews.slice(0, 3).map((block) => {
+            const url = previewUrlForBlock(workspace, block);
+            const title = defaultBlockTitle(block);
+            return (
+              <section key={block.id} style={sectionBox}>
+                <RailRow icon="eye" color={workspaceColorVar.pink} title={title} detail={url} />
+                <PreviewActions url={url} label={title} />
+              </section>
+            );
+          })
         )}
       </RailSection>
     </>
@@ -606,6 +608,24 @@ function FolderActions({ path, label }: { path: string; label: string }) {
   );
 }
 
+function PreviewActions({ url, label }: { url: string; label: string }) {
+  const copyUrl = () => void navigator.clipboard?.writeText(url);
+  const openUrl = () => void window.open(url, "_blank", "noopener,noreferrer");
+
+  return (
+    <div className="flex items-center gap-1.5" style={{ marginTop: 7 }}>
+      <RailActionButton title={`Copy ${label} preview URL`} onClick={copyUrl}>
+        <Icons.copy size={11} strokeWidth={2.2} />
+        Copy
+      </RailActionButton>
+      <RailActionButton title={`Open ${label} preview`} onClick={openUrl}>
+        <Icons.go size={11} strokeWidth={2.2} />
+        Open
+      </RailActionButton>
+    </div>
+  );
+}
+
 function MemoryFileActions({ file }: { file: MemoryFile }) {
   const copyPath = () => void navigator.clipboard?.writeText(file.path);
   const revealPath = () => void ipc.fs.reveal(file.path);
@@ -682,6 +702,12 @@ function defaultBlockTitle(block: Block): string {
   if (block.customTitle?.trim()) return block.customTitle.trim();
   if (block.kind === "chat" && block.autoChatIndex) return block.autoChatIndex === 1 ? "Chat" : `Chat ${block.autoChatIndex}`;
   return PANEL_META[block.kind].label;
+}
+
+function previewUrlForBlock(workspace: Workspace | null, block: Block): string {
+  return workspace
+    ? defaultPreviewUrlFor(workspace, block.autoPreviewIndex ?? 0)
+    : `http://localhost:${3000 + (block.autoPreviewIndex ?? 0)}`;
 }
 
 function summaryChips(run: AgentGraphRunSummary): string[] {

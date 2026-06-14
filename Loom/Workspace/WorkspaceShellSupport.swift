@@ -594,12 +594,7 @@ struct WorkspaceRightRailView: View {
                 railMuted("No Preview panes in this room.")
             } else {
                 ForEach(previewBlocks) { block in
-                    railRow(
-                        icon: "globe",
-                        tint: LoomTheme.pink,
-                        title: block.displayTitle,
-                        detail: block.effectivePreviewURL
-                    )
+                    previewRailCard(for: block)
                 }
             }
         }
@@ -713,12 +708,7 @@ struct WorkspaceRightRailView: View {
                 railMuted("No Preview panes are open in this room.")
             } else {
                 ForEach(previewBlocks.prefix(3)) { block in
-                    railRow(
-                        icon: "globe",
-                        tint: LoomTheme.pink,
-                        title: block.displayTitle,
-                        detail: block.effectivePreviewURL
-                    )
+                    previewRailCard(for: block)
                 }
             }
         }
@@ -1045,6 +1035,32 @@ struct WorkspaceRightRailView: View {
         }
     }
 
+    private func previewRailCard(for block: WorkspaceBlock) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            railRow(
+                icon: "globe",
+                tint: LoomTheme.pink,
+                title: block.displayTitle,
+                detail: block.effectivePreviewURL
+            )
+            previewActions(url: block.effectivePreviewURL, label: block.displayTitle)
+        }
+        .padding(9)
+        .background(LoomTheme.inset)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func previewActions(url: String, label: String) -> some View {
+        HStack(spacing: 6) {
+            railActionButton(title: "Copy", systemImage: "doc.on.doc", help: "Copy \(label) preview URL") {
+                copyPath(url)
+            }
+            railActionButton(title: "Open", systemImage: "arrow.up.forward.app", help: "Open \(label) preview") {
+                openURLString(url)
+            }
+        }
+    }
+
     private func railActionButton(
         title: String,
         systemImage: String,
@@ -1092,6 +1108,11 @@ struct WorkspaceRightRailView: View {
 
     private func openPath(_ path: String) {
         NSWorkspace.shared.open(URL(fileURLWithPath: path))
+    }
+
+    private func openURLString(_ rawURL: String) {
+        guard let url = URL(string: rawURL) else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private func railRow(icon: String, tint: Color, title: String, detail: String) -> some View {
