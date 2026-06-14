@@ -11,6 +11,7 @@ import { AppShell } from "./components/AppShell";
 function App() {
   const loadWorkspaces = useApp((s) => s.loadWorkspaces);
   const setUpdatePill = useApp((s) => s.setUpdatePill);
+  const setUpdateStatus = useApp((s) => s.setUpdateStatus);
   const [crash, setCrash] = useState<CrashReport | null>(null);
 
   useGlobalKeymap();
@@ -54,19 +55,39 @@ function App() {
 
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | null = null;
+    let stopped = false;
+    let currentVersion: string | null = null;
     const tick = async () => {
+      if (stopped) return;
+      setUpdateStatus({ state: "checking", version: currentVersion });
       try {
         const info = await ipc.update.check();
-        if (info) setUpdatePill({ version: info.version });
-        else setUpdatePill(null);
-      } catch {}
+        if (stopped) return;
+        if (info) {
+          setUpdatePill({ version: info.version });
+          setUpdateStatus({ state: "available", version: info.version });
+        } else {
+          setUpdatePill(null);
+          setUpdateStatus({ state: "upToDate", version: currentVersion });
+        }
+      } catch {
+        if (stopped) return;
+        setUpdateStatus({ state: "failed", version: currentVersion });
+      }
     };
-    tick();
+    const prime = async () => {
+      try {
+        currentVersion = await ipc.appVersion();
+      } catch {}
+      await tick();
+    };
+    void prime();
     timer = setInterval(tick, 60_000);
     return () => {
+      stopped = true;
       if (timer) clearInterval(timer);
     };
-  }, [setUpdatePill]);
+  }, [setUpdatePill, setUpdateStatus]);
 
   return (
     <ErrorBoundary>

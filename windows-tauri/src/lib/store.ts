@@ -33,6 +33,10 @@ export type Panel =
 
 type UsageTool = "claude" | "codex" | "lmstudio" | null;
 type UsageTimeframe = "day" | "week" | "month" | "year";
+type UpdateStatus = {
+  state: "checking" | "available" | "upToDate" | "failed";
+  version?: string | null;
+};
 export type RightRailTab =
   | "timeline"
   | "files"
@@ -53,6 +57,7 @@ type AppState = {
   selectedUsageTool: UsageTool;
   usageTimeframe: UsageTimeframe;
   updatePill: { version: string } | null;
+  updateStatus: UpdateStatus;
   blockStatus: Record<string, "idle" | "active" | "warning">;
   theme: Theme;
   isRightRailVisible: boolean;
@@ -93,6 +98,7 @@ type AppState = {
   setUsageTool: (t: UsageTool) => void;
   setUsageTimeframe: (tf: UsageTimeframe) => void;
   setUpdatePill: (info: { version: string } | null) => void;
+  setUpdateStatus: (status: UpdateStatus) => void;
   setTheme: (t: Theme) => void;
   setRightRailVisible: (visible: boolean) => void;
   toggleRightRail: () => void;
@@ -182,6 +188,7 @@ export const useApp = create<AppState>((set, get) => ({
   selectedUsageTool: null,
   usageTimeframe: (localStorage.getItem("loom.usage.timeframe") as UsageTimeframe) || "day",
   updatePill: null,
+  updateStatus: { state: "checking", version: null },
   blockStatus: {},
   theme: (localStorage.getItem("loom.theme") as Theme) || "system",
   isRightRailVisible: storedRightRailVisible(),
@@ -513,6 +520,7 @@ export const useApp = create<AppState>((set, get) => ({
     set({ usageTimeframe: tf });
   },
   setUpdatePill: (info) => set({ updatePill: info }),
+  setUpdateStatus: (status) => set({ updateStatus: status }),
   setTheme: (t) => {
     localStorage.setItem("loom.theme", t);
     if (t === "system") document.documentElement.removeAttribute("data-theme");

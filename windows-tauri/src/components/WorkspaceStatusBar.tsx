@@ -15,9 +15,11 @@ export function WorkspaceStatusBar() {
   const activeBlock = layout?.blocks.find((b) => b.id === activeBlockId) ?? null;
   const rightRailTab = useApp((s) => s.rightRailTab);
   const updatePill = useApp((s) => s.updatePill);
+  const updateStatus = useApp((s) => s.updateStatus);
   const [liveGroups, setLiveGroups] = useState<LiveAgentTaskGroup[]>([]);
   const [agents, setAgents] = useState<AgentDescriptor[]>([]);
   const [endpoints, setEndpoints] = useState<LocalEndpoint[]>([]);
+  const updateSegment = updateStatusSegment(updateStatus, updatePill);
 
   useEffect(() => {
     const tick = () => ipc.liveTasks.list().then(setLiveGroups).catch(() => {});
@@ -47,10 +49,29 @@ export function WorkspaceStatusBar() {
       <StatusSegment icon="workflow" color={liveGroups.length ? workspaceColorVar.green : text.tertiary} label={`${liveGroups.length} live runs`} detail={liveRunDetail(liveGroups)} />
       <StatusSegment icon="server" color={endpoints.length ? workspaceColorVar.purple : text.tertiary} label={agents[0]?.name || "Default agent"} detail={agents[0]?.model || `${endpoints.length} local endpoints`} />
       <div className="flex-1" />
+      <StatusSegment icon={updateSegment.icon} color={updateSegment.color} label={updateSegment.label} detail={updateSegment.detail} />
       <StatusSegment icon="panelRight" color={workspaceColorVar.blue} label={rightRailLabel(rightRailTab)} detail="inspector" />
-      {updatePill && <StatusSegment icon="updateAvailable" color={workspaceColorVar.green} label="Update available" detail={updatePill.version} />}
     </footer>
   );
+}
+
+function updateStatusSegment(
+  status: ReturnType<typeof useApp.getState>["updateStatus"],
+  pill: ReturnType<typeof useApp.getState>["updatePill"]
+): { icon: keyof typeof Icons; color: string; label: string; detail?: string | null } {
+  if (pill) {
+    return { icon: "updateAvailable", color: workspaceColorVar.green, label: "Update Available", detail: pill.version };
+  }
+  switch (status.state) {
+    case "available":
+      return { icon: "updateAvailable", color: workspaceColorVar.green, label: "Update Available", detail: status.version };
+    case "checking":
+      return { icon: "updateApplying", color: workspaceColorVar.blue, label: "Checking Updates", detail: status.version };
+    case "failed":
+      return { icon: "failedCircle", color: workspaceColorVar.orange, label: "Update Check Failed", detail: status.version };
+    case "upToDate":
+      return { icon: "checkCircle", color: text.tertiary, label: "Up To Date", detail: status.version };
+  }
 }
 
 function rightRailLabel(tab: RightRailTab): string {
