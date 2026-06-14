@@ -129,6 +129,11 @@ struct WorkspaceView: View {
         .onReceive(NotificationCenter.default.publisher(for: .loomRefreshRuns)) { _ in
             refreshRunContext()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .loomSwitchWorkspaceKind)) { notification in
+            guard let raw = notification.object as? String,
+                  let kind = WorkspaceKind(rawValue: raw) else { return }
+            switchToWorkspace(kind)
+        }
         .animation(.easeOut(duration: 0.16), value: transcriptPreview?.id)
         .task { handleWorkspaceChange() }
     }
@@ -529,6 +534,12 @@ struct WorkspaceView: View {
                 isRightRailVisible = true
             }
         }
+    }
+
+    private func switchToWorkspace(_ kind: WorkspaceKind) {
+        guard let workspace = workspaces.first(where: { $0.kind == kind }) else { return }
+        selectedUsageTool = nil
+        layout.selectedWorkspaceID = workspace.id
     }
 
     private func refreshRunContext() {

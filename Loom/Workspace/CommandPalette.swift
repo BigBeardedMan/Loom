@@ -10,6 +10,7 @@ extension Notification.Name {
     static let loomToggleInspector = Notification.Name("loom.toggleInspector")
     static let loomOpenInspectorTab = Notification.Name("loom.openInspectorTab")
     static let loomRefreshRuns = Notification.Name("loom.refreshRuns")
+    static let loomSwitchWorkspaceKind = Notification.Name("loom.switchWorkspaceKind")
 }
 
 /// Fuzzy-style command palette. Aggregates the most-likely actions from

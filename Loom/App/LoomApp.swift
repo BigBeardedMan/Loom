@@ -168,11 +168,17 @@ struct LoomApp: App {
                     NotificationCenter.default.post(name: .loomToggleInspector, object: nil)
                 }
                 .keyboardShortcut("i", modifiers: [.command, .option])
-                Button("Show Timeline Inspector") {
-                    NotificationCenter.default.post(name: .loomOpenInspectorTab, object: WorkspaceRightRailTab.timeline.rawValue)
+                Divider()
+                ForEach(WorkspaceKind.allCases) { kind in
+                    Button("Open \(kind.label) Room") {
+                        NotificationCenter.default.post(name: .loomSwitchWorkspaceKind, object: kind.rawValue)
+                    }
                 }
-                Button("Show Tools Inspector") {
-                    NotificationCenter.default.post(name: .loomOpenInspectorTab, object: WorkspaceRightRailTab.tools.rawValue)
+                Divider()
+                ForEach(WorkspaceRightRailTab.allCases) { tab in
+                    Button("Show \(tab.label) Inspector") {
+                        NotificationCenter.default.post(name: .loomOpenInspectorTab, object: tab.rawValue)
+                    }
                 }
                 Button("Refresh Runs") {
                     NotificationCenter.default.post(name: .loomRefreshRuns, object: nil)
