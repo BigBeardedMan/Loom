@@ -543,6 +543,21 @@ struct WorkspaceRightRailView: View {
                 detail: decision.detail
             )
 
+            railSectionTitle("Changed Files")
+            let changedFiles = reviewChangedFiles
+            if changedFiles.isEmpty {
+                railMuted("No changed-file list has been recorded yet.")
+            } else {
+                ForEach(changedFiles.prefix(8), id: \.self) { path in
+                    railRow(
+                        icon: "doc.text",
+                        tint: LoomTheme.blue,
+                        title: URL(fileURLWithPath: path).lastPathComponent,
+                        detail: path
+                    )
+                }
+            }
+
             railSectionTitle("Review Signals")
             let reviewable = reviewableRunSummaries
             if reviewable.isEmpty {
@@ -686,9 +701,7 @@ struct WorkspaceRightRailView: View {
         let runs = reviewableRunSummaries
         guard !runs.isEmpty else { return [] }
 
-        let loadedEvents = runs
-            .flatMap { eventsByRunID[$0.id] ?? [] }
-            .sorted { $0.occurredAt > $1.occurredAt }
+        let loadedEvents = loadedReviewEvents
         let failedEvents = loadedEvents.filter { event in
             event.type == .runFailed
             || event.type == .spawnFailed
@@ -779,6 +792,49 @@ struct WorkspaceRightRailView: View {
         }
 
         return Array(rows.prefix(6))
+    }
+
+    private var loadedReviewEvents: [AgentGraphEvent] {
+        reviewableRunSummaries
+            .flatMap { eventsByRunID[$0.id] ?? [] }
+            .sorted { $0.occurredAt > $1.occurredAt }
+    }
+
+    private var reviewChangedFiles: [String] {
+        var files: [String] = []
+        var seen: Set<String> = []
+        for event in loadedReviewEvents {
+            let texts = [
+                event.payload["reviewSummary"],
+                event.payload["review"],
+                event.summary
+            ].compactMap { $0 }
+            for text in texts {
+                for path in changedFiles(in: text) where seen.insert(path).inserted {
+                    files.append(path)
+                }
+            }
+        }
+        return files
+    }
+
+    private func changedFiles(in reviewText: String) -> [String] {
+        var paths: [String] = []
+        var inChangedFiles = false
+        for rawLine in reviewText.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line == "Changed files:" {
+                inChangedFiles = true
+                continue
+            }
+            guard inChangedFiles else { continue }
+            if line.isEmpty { break }
+            guard line.hasPrefix("- ") else { break }
+            let path = String(line.dropFirst(2)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if path.isEmpty || path.hasPrefix("…and") { continue }
+            paths.append(path)
+        }
+        return paths
     }
 
     private func normalizedPath(_ path: String) -> String {

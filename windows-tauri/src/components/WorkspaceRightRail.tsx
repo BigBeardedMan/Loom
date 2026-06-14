@@ -448,6 +448,7 @@ function DiffContent({
   const previews = blocks.filter((block) => block.kind === "preview");
   const decision = shipDecision(runs, liveGroups);
   const packet = reviewPacketRows(reviewable, eventsByRun, previews);
+  const changedFiles = changedFilesFromReviewEvents(reviewable, eventsByRun);
   return (
     <>
       <RailSection title="Review Packet">
@@ -461,6 +462,15 @@ function DiffContent({
       </RailSection>
       <RailSection title="Ship Decision">
         <RailRow icon={decision.icon} color={decision.color} title={decision.title} detail={decision.detail} />
+      </RailSection>
+      <RailSection title="Changed Files">
+        {changedFiles.length === 0 ? (
+          <Muted>No changed-file list has been recorded yet.</Muted>
+        ) : (
+          changedFiles.slice(0, 8).map((path) => (
+            <RailRow key={path} icon="file" color={workspaceColorVar.blue} title={reviewPathBaseName(path)} detail={path} />
+          ))
+        )}
       </RailSection>
       <RailSection title="Review Signals">
         {reviewable.length === 0 ? (
@@ -868,6 +878,54 @@ function reviewPacketRows(
   }
 
   return rows.slice(0, 6);
+}
+
+function changedFilesFromReviewEvents(
+  runs: AgentGraphRunSummary[],
+  eventsByRun: Record<string, AgentGraphEvent[]>
+): string[] {
+  const seen = new Set<string>();
+  const files: string[] = [];
+  const events = runs
+    .flatMap((run) => eventsByRun[run.id] ?? [])
+    .sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt));
+  for (const event of events) {
+    const texts = [event.payload?.reviewSummary, event.payload?.review, event.summary].filter(
+      (value): value is string => Boolean(value)
+    );
+    for (const textValue of texts) {
+      for (const path of changedFilesInReviewText(textValue)) {
+        if (seen.has(path)) continue;
+        seen.add(path);
+        files.push(path);
+      }
+    }
+  }
+  return files;
+}
+
+function changedFilesInReviewText(textValue: string): string[] {
+  const files: string[] = [];
+  let inChangedFiles = false;
+  for (const rawLine of textValue.split("\n")) {
+    const line = rawLine.trim();
+    if (line === "Changed files:") {
+      inChangedFiles = true;
+      continue;
+    }
+    if (!inChangedFiles) continue;
+    if (!line) break;
+    if (!line.startsWith("- ")) break;
+    const path = line.slice(2).trim();
+    if (!path || path.startsWith("…and")) continue;
+    files.push(path);
+  }
+  return files;
+}
+
+function reviewPathBaseName(path: string): string {
+  const trimmed = path.replace(/[\\/]+$/, "");
+  return trimmed.split(/[\\/]/).pop() || trimmed;
 }
 
 function isReviewableRun(run: AgentGraphRunSummary): boolean {
