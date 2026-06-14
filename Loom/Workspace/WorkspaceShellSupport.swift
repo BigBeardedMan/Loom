@@ -55,7 +55,7 @@ enum WorkspaceRightRailAvailability {
         tabs.append(.tools)
         if workspace?.kind == .review
             || workspace?.kind == .runs
-            || runSummaries.contains(where: { $0.gitBranch != nil || $0.gitDirty != nil || $0.toolEventCount > 0 }) {
+            || runSummaries.contains(where: hasReviewEvidence) {
             tabs.append(.diff)
         }
         if workspace?.folderPath.isEmpty == false
@@ -82,6 +82,15 @@ enum WorkspaceRightRailAvailability {
             let candidate = normalizedPath(workspacePath)
             return candidate == root || candidate.hasPrefix(root + "/")
         }
+    }
+
+    static func hasReviewEvidence(_ summary: AgentGraphRunSummary) -> Bool {
+        summary.gitBranch != nil
+        || summary.gitDirty != nil
+        || summary.gitHead != nil
+        || summary.toolEventCount > 0
+        || summary.taskCount > 0
+        || !summary.toolNames.isEmpty
     }
 
     private static func normalizedPath(_ path: String) -> String {
@@ -1445,12 +1454,7 @@ struct WorkspaceRightRailView: View {
     }
 
     private func isReviewable(_ summary: AgentGraphRunSummary) -> Bool {
-        summary.gitBranch != nil
-        || summary.gitDirty != nil
-        || summary.gitHead != nil
-        || summary.toolEventCount > 0
-        || summary.taskCount > 0
-        || !summary.toolNames.isEmpty
+        WorkspaceRightRailAvailability.hasReviewEvidence(summary)
     }
 
     private func limitedList(_ values: [String], empty: String, limit: Int = 3) -> String {
@@ -1484,7 +1488,7 @@ struct WorkspaceRightRailView: View {
         let hasCompletedEvidence = runs.contains { summary in
             isCompletedStatus(summary.status)
             && summary.gitDirty != true
-            && (summary.toolEventCount > 0 || summary.taskCount > 0 || summary.gitHead != nil || summary.gitBranch != nil)
+            && WorkspaceRightRailAvailability.hasReviewEvidence(summary)
         }
         return WorkspaceWorkflowSignals(
             hasActiveAgents: hasActiveAgents,
@@ -1718,7 +1722,7 @@ struct WorkspaceStatusBar: View {
         let ready = runSummaries.filter { summary in
             isCompletedStatus(summary.status)
             && summary.gitDirty != true
-            && (summary.toolEventCount > 0 || summary.taskCount > 0 || summary.gitHead != nil || summary.gitBranch != nil)
+            && WorkspaceRightRailAvailability.hasReviewEvidence(summary)
         }.count
 
         if attention > 0 {

@@ -82,9 +82,14 @@ export const RIGHT_RAIL_COMMANDS: Array<{
 type RailContext = {
   workspace?: Workspace | null;
   blocks?: Pick<Block, "kind">[];
-  runs?: Pick<AgentGraphRunSummary, "gitBranch" | "gitDirty" | "toolEventCount">[];
+  runs?: RailRunSummary[];
   hasMemoryFiles?: boolean;
 };
+
+type RailRunSummary = Pick<
+  AgentGraphRunSummary,
+  "gitBranch" | "gitDirty" | "gitHead" | "toolEventCount" | "taskCount" | "toolNames"
+>;
 
 export function railTabsForContext({
   workspace = null,
@@ -105,8 +110,9 @@ export function railTabsForContext({
   add("tools");
   if (
     workspace?.kindRaw === "review" ||
+    workspace?.kindRaw === "build" ||
     workspace?.kindRaw === "runs" ||
-    runs.some((run) => run.gitBranch || run.gitDirty !== undefined || (run.toolEventCount ?? 0) > 0)
+    runs.some(hasReviewEvidence)
   ) {
     add("diff");
   }
@@ -121,6 +127,17 @@ export function railTabsForContext({
   }
   add("details");
   return tabs;
+}
+
+function hasReviewEvidence(run: RailRunSummary): boolean {
+  return Boolean(
+    run.gitBranch ||
+      run.gitDirty !== undefined ||
+      run.gitHead ||
+      (run.toolEventCount ?? 0) > 0 ||
+      (run.taskCount ?? 0) > 0 ||
+      (run.toolNames?.length ?? 0) > 0
+  );
 }
 
 export function effectiveRailTab(tab: RightRailTab, context: RailContext = {}): RightRailTab {
