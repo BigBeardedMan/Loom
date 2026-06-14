@@ -23,6 +23,7 @@ const SOURCE_META: Record<
   gemini: { label: "Gemini", color: "rgb(46, 128, 245)", Icon: Icons.diamond },
   lmstudio: { label: "LM Studio", color: "rgb(158, 102, 242)", Icon: Icons.cpu },
   ollama: { label: "Ollama", color: "rgb(217, 217, 217)", Icon: Icons.package },
+  "openai-compat": { label: "Local", color: "rgb(140, 166, 191)", Icon: Icons.server },
   openAICompatible: { label: "Local", color: "rgb(140, 166, 191)", Icon: Icons.server },
 };
 
@@ -181,6 +182,7 @@ function projectTaskGroupsFromEvents(events: AgentGraphEvent[]): LiveAgentTaskGr
 }
 
 function normalizeAgentSource(raw: AgentGraphEvent["source"]): AgentSource {
+  if (raw === "openAICompatible") return "openai-compat";
   if (typeof raw === "string" && raw in SOURCE_META) return raw as AgentSource;
   return "lmstudio";
 }
@@ -432,7 +434,7 @@ function GroupBlock({
   historical?: boolean;
   onClear?: () => void;
 }) {
-  const meta = SOURCE_META[group.source] ?? SOURCE_META.openAICompatible;
+  const meta = SOURCE_META[group.source] ?? SOURCE_META["openai-compat"];
   const Icon = meta.Icon;
   return (
     <section>
@@ -1066,13 +1068,13 @@ function EmptyState() {
 }
 
 function displayName(group: LiveAgentTaskGroup): string {
-  const meta = SOURCE_META[group.source] ?? SOURCE_META.openAICompatible;
+  const meta = SOURCE_META[group.source] ?? SOURCE_META["openai-compat"];
   const model = normalizedModelLabel(group.modelLabel);
   return `${meta.label} - ${model ?? "Default"}`;
 }
 
 function sourceLabel(task: LiveAgentTask): string {
-  const meta = SOURCE_META[task.source] ?? SOURCE_META.openAICompatible;
+  const meta = SOURCE_META[task.source] ?? SOURCE_META["openai-compat"];
   const model = normalizedModelLabel(task.modelLabel);
   return `${meta.label} - ${model ?? "Default"}`;
 }

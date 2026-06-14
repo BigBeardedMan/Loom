@@ -825,6 +825,7 @@ export type AgentSource =
   | "gemini"
   | "lmstudio"
   | "ollama"
+  | "openai-compat"
   | "openAICompatible";
 
 function emptyDevLmStudioRuntime(error: string): LmStudioRuntimeStatus {
