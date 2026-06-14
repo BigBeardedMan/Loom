@@ -101,183 +101,6 @@ enum WorkspaceRightRailAvailability {
     }
 }
 
-struct WorkspaceRoomRailView: View {
-    @Environment(\.modelContext) private var modelContext
-    let workspaces: [Workspace]
-    @Binding var selectedWorkspaceID: UUID?
-    @Binding var selectedUsageTool: CLITool?
-    let isRightRailVisible: Bool
-    let activeInspectorTab: WorkspaceRightRailTab
-    let toggleRightRail: () -> Void
-    let openInspector: (WorkspaceRightRailTab) -> Void
-    let openSettings: () -> Void
-
-    var body: some View {
-        VStack(spacing: 8) {
-            ForEach(workspaces) { workspace in
-                roomButton(workspace)
-            }
-
-            Spacer(minLength: 12)
-
-            Divider()
-                .overlay(LoomTheme.hairline)
-                .padding(.horizontal, 10)
-
-            railUtilityButton(
-                systemImage: "chart.line.uptrend.xyaxis",
-                help: "Usage dashboards",
-                isActive: selectedUsageTool != nil,
-                action: { selectedUsageTool = selectedUsageTool == nil ? .claude : nil }
-            )
-
-            railUtilityButton(
-                systemImage: "wrench.and.screwdriver",
-                help: "Open tools and models",
-                isActive: isRightRailVisible && activeInspectorTab == .tools,
-                action: { openInspector(.tools) }
-            )
-
-            railUtilityButton(
-                systemImage: "sidebar.right",
-                help: isRightRailVisible ? "Hide inspector" : "Show inspector",
-                isActive: isRightRailVisible,
-                action: toggleRightRail
-            )
-
-            railUtilityButton(
-                systemImage: "gearshape",
-                help: "Open Settings",
-                isActive: false,
-                action: openSettings
-            )
-        }
-        .padding(.vertical, 8)
-        .frame(maxHeight: .infinity)
-        .background(LoomTheme.shellRail.opacity(0.6))
-        .overlay(Rectangle().fill(LoomTheme.hairline.opacity(0.65)).frame(width: 1), alignment: .trailing)
-    }
-
-    private func roomButton(_ workspace: Workspace) -> some View {
-        let selected = workspace.id == selectedWorkspaceID && selectedUsageTool == nil
-        let hasFolder = !workspace.folderPath.isEmpty
-        return Button {
-            selectRoom(workspace)
-        } label: {
-            VStack(spacing: 4) {
-                ZStack(alignment: .topTrailing) {
-                    Image(systemName: workspace.kind.systemImage)
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(selected ? workspace.color.color : LoomTheme.mutedText)
-                        .frame(width: 34, height: 28)
-                        .background(selected ? workspace.color.color.opacity(0.12) : Color.clear)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                    if hasFolder {
-                        Image(systemName: "folder.fill")
-                            .font(.system(size: 7, weight: .bold))
-                            .foregroundStyle(selected ? workspace.color.color : LoomTheme.tertiaryText)
-                            .frame(width: 13, height: 13)
-                            .background(selected ? LoomTheme.panel : workspace.color.color.opacity(0.18))
-                            .clipShape(Circle())
-                            .offset(x: 5, y: -5)
-                    }
-                }
-                Text(workspace.kind.label)
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(selected ? LoomTheme.primaryText : LoomTheme.tertiaryText)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-            }
-            .frame(width: 52)
-            .padding(.vertical, 5)
-            .background(selected ? LoomTheme.softPanel.opacity(0.42) : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .contentShape(RoundedRectangle(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
-        .pointingHandCursor()
-        .help(roomHelp(for: workspace))
-        .accessibilityLabel(roomHelp(for: workspace))
-        .contextMenu {
-            roomContextMenu(for: workspace)
-        }
-    }
-
-    private func selectRoom(_ workspace: Workspace) {
-        selectedUsageTool = nil
-        selectedWorkspaceID = workspace.id
-    }
-
-    @ViewBuilder
-    private func roomContextMenu(for workspace: Workspace) -> some View {
-        let hasFolder = !workspace.folderPath.isEmpty
-        Button(hasFolder ? "Change Folder..." : "Set Folder...") {
-            chooseFolder(for: workspace)
-        }
-        if hasFolder {
-            Button("Reveal in Finder") {
-                revealInFinder(workspace)
-            }
-            Button("Clear Folder", role: .destructive) {
-                clearFolder(for: workspace)
-            }
-        }
-    }
-
-    private func chooseFolder(for workspace: Workspace) {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.message = "Choose a folder for \(workspace.kind.label)"
-        if !workspace.folderPath.isEmpty {
-            panel.directoryURL = URL(fileURLWithPath: workspace.folderPath)
-        }
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        selectRoom(workspace)
-        workspace.folderPath = url.path
-        try? modelContext.save()
-    }
-
-    private func clearFolder(for workspace: Workspace) {
-        selectRoom(workspace)
-        workspace.folderPath = ""
-        try? modelContext.save()
-    }
-
-    private func revealInFinder(_ workspace: Workspace) {
-        guard let url = workspace.folderURL else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([url])
-    }
-
-    private func roomHelp(for workspace: Workspace) -> String {
-        if workspace.folderPath.isEmpty {
-            return "Open \(workspace.kind.label). Right-click to set a folder."
-        }
-        return "Open \(workspace.kind.label): \(workspace.displayFolderPath)"
-    }
-
-    private func railUtilityButton(
-        systemImage: String,
-        help: String,
-        isActive: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(isActive ? LoomTheme.blue : LoomTheme.mutedText)
-                .frame(width: 34, height: 30)
-                .background(isActive ? LoomTheme.blue.opacity(0.12) : Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
-        .pointingHandCursor()
-        .help(help)
-        .accessibilityLabel(help)
-    }
-}
-
 struct WorkspaceRightRailView: View {
     @Environment(LiveAgentTasksService.self) private var liveAgentTasks
     @Environment(AgentRegistry.self) private var agentRegistry
@@ -302,7 +125,11 @@ struct WorkspaceRightRailView: View {
             content
         }
         .background(LoomTheme.shellInspector)
-        .overlay(Rectangle().fill(LoomTheme.hairline.opacity(0.65)).frame(width: 1), alignment: .leading)
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(LoomTheme.hairline.opacity(0.78), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 18))
         .task(id: refreshKey) {
             await refreshRailData()
         }
@@ -438,39 +265,9 @@ struct WorkspaceRightRailView: View {
     }
 
     private var workflowMap: some View {
-        let signals = workflowSignals
-        let metrics = workflowMetrics
         let focus = workflowFocus
-        let phases = [
-            ("Scope", workspace != nil, workspace?.color.color ?? LoomTheme.blue),
-            ("Workspace", workspace?.folderPath.isEmpty == false, LoomTheme.blue),
-            ("Agents", signals.hasActiveAgents, LoomTheme.purple),
-            ("Checks", signals.hasCheckSignals, LoomTheme.green),
-            ("Review", signals.hasReviewSignals, signals.hasAttention ? LoomTheme.orange : LoomTheme.green),
-            ("Ship", signals.shipReady, LoomTheme.green)
-        ]
         return VStack(alignment: .leading, spacing: 7) {
-            railSectionTitle("Workflow")
-            HStack(spacing: 5) {
-                ForEach(Array(phases.enumerated()), id: \.offset) { _, phase in
-                    VStack(spacing: 4) {
-                        Circle()
-                            .fill(phase.1 ? phase.2 : LoomTheme.hairline)
-                            .frame(width: 7, height: 7)
-                        Text(phase.0)
-                            .font(.system(size: 8, weight: .semibold))
-                            .foregroundStyle(phase.1 ? LoomTheme.primaryText : LoomTheme.tertiaryText)
-                            .lineLimit(1)
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-            }
-            HStack(spacing: 8) {
-                workflowMetricChip("Active", value: metrics.activeCount, tint: LoomTheme.blue)
-                workflowMetricChip("Ready", value: metrics.readyCount, tint: LoomTheme.green)
-                workflowMetricChip("Attention", value: metrics.attentionCount, tint: LoomTheme.orange)
-                workflowMetricChip("Checks", value: metrics.checkCount, tint: LoomTheme.purple)
-            }
+            railSectionTitle("Status")
             Button {
                 selectedTab = focus.targetTab
             } label: {

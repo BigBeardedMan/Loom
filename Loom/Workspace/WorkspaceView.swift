@@ -9,7 +9,6 @@ struct WorkspaceView: View {
     @Environment(LiveAgentTasksService.self) private var liveAgentTasks
     @Environment(WorkspaceContext.self) private var workspaceContext
     @Environment(TerminalTranscriptStore.self) private var terminalHistory
-    @Environment(\.openURL) private var openURL
     @Query(sort: \Workspace.createdAt) private var workspaces: [Workspace]
     @State private var showCommandPalette: Bool = false
     @State private var deckSize: CGSize = CGSize(width: 1400, height: 800)
@@ -19,8 +18,9 @@ struct WorkspaceView: View {
     @State private var renamingBlockID: UUID?
     @State private var selectedUsageTool: CLITool? = nil
     @State private var transcriptPreview: TerminalTranscriptSession?
-    @AppStorage("loom.shell.rightRailVisible") private var isRightRailVisible: Bool = true
+    @AppStorage("loom.shell.rightRailVisible") private var isRightRailVisible: Bool = false
     @AppStorage("loom.shell.rightRailTab") private var rightRailTabRaw: String = WorkspaceRightRailTab.files.rawValue
+    @AppStorage("loom.shell.focusedDefaultsApplied.9.0.16") private var focusedDefaultsApplied: Bool = false
     @State private var rightRailRefreshNonce: Int = 0
     @State private var selectedBlockID: UUID?
     @State private var inspectorRunSummaries: [AgentGraphRunSummary] = []
@@ -80,33 +80,29 @@ struct WorkspaceView: View {
                     let compactInspectorWidth = min(324, max(260, proxy.size.width - 34))
                     ZStack(alignment: .topTrailing) {
                         HStack(alignment: .top, spacing: 10) {
-                            roomRail
-                                .frame(width: 62)
-
                             leftRail
-                                .frame(width: canFitInspector ? 232 : 214)
+                                .frame(width: canFitInspector ? 276 : 236)
 
                             deckOrUsage
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                            if isRightRailVisible && canFitInspector {
-                                rightRailView(width: inspectorWidth)
-                                    .transition(.move(edge: .trailing).combined(with: .opacity))
-                            }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                        if isRightRailVisible && !canFitInspector {
-                            Color.black.opacity(0.22)
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    toggleRightRail()
-                                }
-                                .transition(.opacity)
-                                .zIndex(10)
+                        if isRightRailVisible {
+                            if !canFitInspector {
+                                Color.black.opacity(0.22)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        toggleRightRail()
+                                    }
+                                    .transition(.opacity)
+                                    .zIndex(10)
+                            }
 
-                            rightRailView(width: compactInspectorWidth)
+                            rightRailView(width: canFitInspector ? inspectorWidth : compactInspectorWidth)
                                 .frame(maxHeight: .infinity)
+                                .padding(.vertical, canFitInspector ? 8 : 0)
+                                .padding(.trailing, canFitInspector ? 8 : 0)
                                 .shadow(color: Color.black.opacity(0.22), radius: 22, x: -8, y: 8)
                                 .transition(.move(edge: .trailing).combined(with: .opacity))
                                 .zIndex(11)
@@ -139,6 +135,9 @@ struct WorkspaceView: View {
         .onChange(of: deckSize) { _, _ in syncDeckCapacity() }
         .onReceive(NotificationCenter.default.publisher(for: .loomToggleInspector)) { _ in
             toggleRightRail()
+        }
+        .task {
+            applyFocusedShellDefaultsIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: .loomOpenInspectorTab)) { notification in
             guard let raw = notification.object as? String,
@@ -206,9 +205,8 @@ struct WorkspaceView: View {
 
     private var topBar: some View {
         HStack(spacing: 8) {
-            brandButton
-            commandPaletteButton
             workspaceIdentity
+            commandPaletteButton
 
             Spacer()
 
@@ -249,51 +247,20 @@ struct WorkspaceView: View {
         }
     }
 
-    private var brandButton: some View {
-        Button {
-            openURL(URL(string: "https://github.com/BigBeardedMan/Loom")!)
-        } label: {
-            HStack(spacing: 7) {
-                LoomLogoMark(size: 22)
-                Text("Loom")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(LoomTheme.primaryText)
-                Text("Testing")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(LoomTheme.tertiaryText)
-            }
-            .padding(.horizontal, 4)
-            .padding(.vertical, 4)
-        }
-        .buttonStyle(.plain)
-        .pointingHandCursor()
-        .help("Open Loom Testing Edition on GitHub")
-        .accessibilityLabel("Loom Testing Edition, open on GitHub")
-    }
-
     @ViewBuilder
     private var workspaceIdentity: some View {
         if let selectedWorkspace {
-            HStack(spacing: 8) {
+            HStack(spacing: 7) {
                 Circle()
                     .fill(selectedWorkspace.color.color)
-                    .frame(width: 8, height: 8)
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 6) {
-                        Text(selectedWorkspace.name)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(LoomTheme.primaryText)
-                            .lineLimit(1)
-                        Image(systemName: selectedWorkspace.kind.systemImage)
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(LoomTheme.mutedText)
-                    }
-                    Text(selectedWorkspace.displayFolderPath.isEmpty ? selectedWorkspace.kind.label : selectedWorkspace.displayFolderPath)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(LoomTheme.mutedText)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
+                    .frame(width: 7, height: 7)
+                Text(selectedWorkspace.name)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(LoomTheme.primaryText)
+                    .lineLimit(1)
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(LoomTheme.tertiaryText)
             }
             .frame(minWidth: 150, alignment: .leading)
         } else {
@@ -496,22 +463,6 @@ struct WorkspaceView: View {
 
     // MARK: - Sidebar
 
-    private var roomRail: some View {
-        @Bindable var bindable = layout
-        return WorkspaceRoomRailView(
-            workspaces: workspaces,
-            selectedWorkspaceID: $bindable.selectedWorkspaceID,
-            selectedUsageTool: $selectedUsageTool,
-            isRightRailVisible: isRightRailVisible,
-            activeInspectorTab: effectiveRightRailTab,
-            toggleRightRail: {
-                toggleRightRail()
-            },
-            openInspector: openInspector,
-            openSettings: openSettings
-        )
-    }
-
     private var availableInspectorTabs: [WorkspaceRightRailTab] {
         WorkspaceRightRailAvailability.tabs(
             workspace: selectedWorkspace,
@@ -546,6 +497,12 @@ struct WorkspaceView: View {
             blocks: layout.blocks
         )
         .frame(width: width)
+    }
+
+    private func applyFocusedShellDefaultsIfNeeded() {
+        guard !focusedDefaultsApplied else { return }
+        focusedDefaultsApplied = true
+        isRightRailVisible = false
     }
 
     private func toggleRightRail() {
@@ -604,7 +561,7 @@ struct WorkspaceView: View {
     private var leftRail: some View {
         @Bindable var bindable = layout
         return WorkspaceSidebarView(
-            showsWorkspaceSection: false,
+            showsWorkspaceSection: true,
             selectedWorkspaceID: $bindable.selectedWorkspaceID,
             selectedUsageTool: $selectedUsageTool,
             transcriptPreview: $transcriptPreview
@@ -913,12 +870,6 @@ struct WorkspaceView: View {
             detail: "Add Terminal, Editor, Runs, Chat, Agent, or Commands from the command bar.",
             tint: selectedWorkspace?.color.color ?? LoomTheme.blue
         )
-    }
-
-    private func openSettings() {
-        #if canImport(AppKit)
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-        #endif
     }
 
 }

@@ -24,6 +24,7 @@ import { toolBrandColor, toolLabel, type Tool } from "../../lib/usage";
 import type { Block } from "./LayoutPersistence";
 
 const USAGE_TOOLS: Tool[] = ["claude", "codex", "lmstudio"];
+const SHOW_USAGE_SECTION = false;
 
 export function WorkspaceSidebar() {
   const workspaces = useApp((s) => s.workspaces);
@@ -180,42 +181,44 @@ export function WorkspaceSidebar() {
           )}
         </div>
 
-        <div style={{ height: 14 }} />
-
-        <SectionHeader
-          title="Usage"
-          trailing={
-            <button
-              onClick={refreshUsage}
-              aria-label="Refresh usage"
-              title="Refresh usage"
-              style={{
-                padding: 3,
-                borderRadius: 5,
-                color: text.muted,
-              }}
-            >
-              {usageLoading ? (
-                <Icons.spinner size={12} className="animate-spin" />
-              ) : (
-                <Icons.refresh size={12} strokeWidth={2} />
-              )}
-            </button>
-          }
-        />
-        <div className="flex flex-col gap-1">
-          {USAGE_TOOLS.map((tool) => (
-            <UsageRow
-              key={tool}
-              tool={tool}
-              data={usage[tool]}
-              selected={selectedUsageTool === tool}
-              onSelect={() => setUsageTool(selectedUsageTool === tool ? null : tool)}
+        {SHOW_USAGE_SECTION && (
+          <>
+            <div style={{ height: 14 }} />
+            <SectionHeader
+              title="Usage"
+              trailing={
+                <button
+                  onClick={refreshUsage}
+                  aria-label="Refresh usage"
+                  title="Refresh usage"
+                  style={{
+                    padding: 3,
+                    borderRadius: 5,
+                    color: text.muted,
+                  }}
+                >
+                  {usageLoading ? (
+                    <Icons.spinner size={12} className="animate-spin" />
+                  ) : (
+                    <Icons.refresh size={12} strokeWidth={2} />
+                  )}
+                </button>
+              }
             />
-          ))}
-        </div>
-
-        <div style={{ height: 14 }} />
+            <div className="flex flex-col gap-1">
+              {USAGE_TOOLS.map((tool) => (
+                <UsageRow
+                  key={tool}
+                  tool={tool}
+                  data={usage[tool]}
+                  selected={selectedUsageTool === tool}
+                  onSelect={() => setUsageTool(selectedUsageTool === tool ? null : tool)}
+                />
+              ))}
+            </div>
+            <div style={{ height: 14 }} />
+          </>
+        )}
 
         {workspace?.kindRaw === "ideas" ? (
           <div className="flex min-h-0 flex-1 flex-col">

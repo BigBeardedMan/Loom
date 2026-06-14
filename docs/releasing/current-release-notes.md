@@ -1,5 +1,9 @@
 ## Changes
 
+- Testing Edition now uses a focused Codex/Hermes-style shell: one left workspace/sidebar surface, a central workroom that keeps its width, and an optional floating right context card.
+- The old duplicate room rail is removed from the default shell, usage meters are hidden from the default sidebar, and the top bar now reads as the current workroom title plus actions instead of repeating app branding.
+- Runs and Review inspector context now opens with a single prioritized status row instead of a six-phase workflow dashboard.
+- Testing Edition version metadata now moves to 9.0.16 across macOS, Windows/Tauri, and the bundled LM Studio helper.
 - Testing Edition shell chrome is substantially quieter on macOS and Windows, with flatter room/sidebar/right/status rails, a calmer top bar, fewer inactive pills, and lighter pane shadows.
 - Runs and Review workflow context now appears only when useful instead of occupying every right-rail tab.
 - Testing Edition version metadata now moves to 9.0.15 across macOS, Windows/Tauri, and the bundled LM Studio helper.

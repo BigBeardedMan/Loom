@@ -161,16 +161,23 @@ button:not(:disabled) {
 
 .loom-shell-sidebar-panel {
   flex: none;
-  width: clamp(214px, 18vw, 248px);
+  width: clamp(260px, 18vw, 320px);
 }
 
 .loom-right-rail-scrim {
   display: none;
 }
 
+.loom-right-rail {
+  position: absolute;
+  inset: 8px 8px 8px auto;
+  z-index: 30;
+  flex-basis: auto !important;
+}
+
 @media (max-width: 1180px) {
   .loom-shell-sidebar-panel {
-    width: 214px;
+    width: 236px;
   }
 
   .loom-right-rail-scrim {
@@ -183,12 +190,10 @@ button:not(:disabled) {
   }
 
   .loom-right-rail {
-    position: absolute;
     inset: 0 0 0 auto;
-    z-index: 30;
     width: min(324px, calc(100% - 34px)) !important;
     max-width: calc(100% - 34px);
-    flex-basis: auto !important;
+    border-radius: 0 !important;
     box-shadow: -8px 8px 22px rgba(0, 0, 0, 0.22);
   }
 }

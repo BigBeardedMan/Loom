@@ -1,6 +1,4 @@
 import { useApp } from "../lib/store";
-import { ipc } from "../lib/ipc";
-import { LoomLogoMark } from "./LoomLogoMark";
 import { UpdatePill } from "./UpdatePill";
 import { Icons } from "../lib/icons";
 import { useDictation } from "../lib/dictation";
@@ -35,24 +33,30 @@ export function Titlebar() {
         gap: topbar.gap,
       }}
     >
-      <a
-        href="#"
-        onClick={(e) => {
-          e.preventDefault();
-          ipc.shell.open("https://github.com/BigBeardedMan/Loom").catch(() => {});
-        }}
-        className="flex items-center gap-2"
+      <div
+        className="flex min-w-0 items-center gap-2"
         style={{
-          padding: "4px 4px",
+          padding: "4px 2px",
           minHeight: 34,
-          textDecoration: "none",
+          maxWidth: 280,
         }}
-        title="Open Loom Testing Edition on GitHub"
+        title={workspace?.folderPath || workspace?.name || "No workspace"}
       >
-        <LoomLogoMark size={19} />
-        <span style={{ fontSize: 13, fontWeight: 800, color: text.primary }}>Loom</span>
-        <span style={{ fontSize: 10, fontWeight: 700, color: text.tertiary }}>Testing</span>
-      </a>
+        <span
+          aria-hidden="true"
+          style={{
+            width: 7,
+            height: 7,
+            borderRadius: 999,
+            background: workspace ? workspaceColorVar[workspace.colorName] : text.tertiary,
+            flex: "none",
+          }}
+        />
+        <span className="truncate" style={{ fontSize: 14, fontWeight: 750, color: text.primary }}>
+          {workspace?.name ?? "No workspace"}
+        </span>
+        <Icons.moreHorizontal size={14} strokeWidth={2.2} color={text.tertiary as string} />
+      </div>
 
       <button
         onClick={openPalette}

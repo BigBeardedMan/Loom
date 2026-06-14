@@ -112,6 +112,7 @@ type AppState = {
 const SELECTED_WS_KEY = "loom.selectedWorkspaceId";
 const RIGHT_RAIL_VISIBLE_KEY = "loom.shell.rightRailVisible";
 const RIGHT_RAIL_TAB_KEY = "loom.shell.rightRailTab";
+const FOCUSED_DEFAULTS_KEY = "loom.shell.focusedDefaultsApplied.9.0.16";
 
 const RIGHT_RAIL_TABS = new Set<RightRailTab>([
   "files",
@@ -124,7 +125,7 @@ const RIGHT_RAIL_TABS = new Set<RightRailTab>([
 ]);
 
 function storedRightRailVisible(): boolean {
-  return localStorage.getItem(RIGHT_RAIL_VISIBLE_KEY) !== "false";
+  return localStorage.getItem(RIGHT_RAIL_VISIBLE_KEY) === "true";
 }
 
 function storedRightRailTab(): RightRailTab {
@@ -581,3 +582,9 @@ export const workspaceColorClass: Record<Workspace["colorName"], string> = {
   yellow: "bg-[var(--color-ws-yellow)]",
   purple: "bg-[var(--color-ws-purple)]",
 };
+
+if (localStorage.getItem(FOCUSED_DEFAULTS_KEY) !== "true") {
+  localStorage.setItem(FOCUSED_DEFAULTS_KEY, "true");
+  localStorage.setItem(RIGHT_RAIL_VISIBLE_KEY, "false");
+  useApp.setState({ isRightRailVisible: false });
+}

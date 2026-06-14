@@ -7,6 +7,7 @@ private let sidebarLog = Logger(subsystem: "com.chasesims.LoomTestingEdition", c
 
 struct WorkspaceSidebarView: View {
     var showsWorkspaceSection: Bool = true
+    var showsUsageSection: Bool = false
 
     @Query(sort: \Workspace.createdAt) private var workspaces: [Workspace]
     @Query(sort: \IdeaNote.createdAt) private var allNotes: [IdeaNote]
@@ -45,8 +46,10 @@ struct WorkspaceSidebarView: View {
                 workspaceSection
                 Divider().overlay(LoomTheme.hairline)
             }
-            usageSection
-            Divider().overlay(LoomTheme.hairline)
+            if showsUsageSection {
+                usageSection
+                Divider().overlay(LoomTheme.hairline)
+            }
             sessionsSection
         }
         .padding(.horizontal, 10)

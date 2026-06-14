@@ -89,7 +89,9 @@ export function WorkspaceRightRail() {
         width: "var(--loom-inspector-width, 308px)",
         flex: "0 0 var(--loom-inspector-width, 308px)",
         background: surface.shellInspector,
-        borderLeft: `1px solid ${surface.hairline}`,
+        border: `1px solid ${surface.hairline}`,
+        borderRadius: 18,
+        boxShadow: "0 18px 38px rgba(0, 0, 0, 0.34)",
       }}
     >
       <header
@@ -145,7 +147,6 @@ export function WorkspaceRightRail() {
       <main className="scrollbar-thin min-h-0 flex-1 overflow-y-auto" style={{ padding: 12 }}>
         {showWorkflowMap && (
           <WorkflowMap
-            workspace={workspace}
             runs={scopedRuns}
             liveGroups={scopedLiveGroups}
             memoryFileCount={memoryFiles.length}
@@ -186,56 +187,21 @@ export function WorkspaceRightRail() {
 }
 
 function WorkflowMap({
-  workspace,
   runs,
   liveGroups,
   memoryFileCount,
 }: {
-  workspace: Workspace | null;
   runs: AgentGraphRunSummary[];
   liveGroups: LiveAgentTaskGroup[];
   memoryFileCount: number;
 }) {
   const setRightRailTab = useApp((s) => s.setRightRailTab);
-  const signals = workflowSignals(runs, liveGroups);
   const metrics = workflowMetrics(runs, liveGroups);
   const focus = workflowFocus(metrics, memoryFileCount);
-  const phases = [
-    ["Scope", !!workspace, workspace ? workspaceColorVar[workspace.colorName] : workspaceColorVar.blue],
-    ["Workspace", !!workspace?.folderPath, workspaceColorVar.blue],
-    ["Agents", signals.hasActiveAgents, workspaceColorVar.purple],
-    ["Checks", signals.hasCheckSignals, workspaceColorVar.green],
-    ["Review", signals.hasReviewSignals, signals.hasAttention ? workspaceColorVar.orange : workspaceColorVar.green],
-    ["Ship", signals.shipReady, workspaceColorVar.green],
-  ] as const;
 
   return (
     <section style={sectionBox}>
-      <SectionTitle>Workflow</SectionTitle>
-      <div className="grid grid-cols-6 gap-1">
-        {phases.map(([label, active, color]) => (
-          <div key={label} className="min-w-0 text-center">
-            <span
-              style={{
-                display: "inline-block",
-                width: 7,
-                height: 7,
-                borderRadius: 999,
-                background: active ? color : surface.hairline,
-              }}
-            />
-            <div className="truncate" style={{ fontSize: 8, fontWeight: 700, color: active ? text.primary : text.tertiary }}>
-              {label}
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="grid grid-cols-2 gap-1.5" style={{ marginTop: 8 }}>
-        <WorkflowMetricChip label="Active" value={metrics.activeCount} color={workspaceColorVar.blue} />
-        <WorkflowMetricChip label="Ready" value={metrics.readyCount} color={workspaceColorVar.green} />
-        <WorkflowMetricChip label="Attention" value={metrics.attentionCount} color={workspaceColorVar.orange} />
-        <WorkflowMetricChip label="Checks" value={metrics.checkCount} color={workspaceColorVar.purple} />
-      </div>
+      <SectionTitle>Status</SectionTitle>
       <button
         type="button"
         className="flex w-full items-center gap-2 text-left"
@@ -261,37 +227,6 @@ function WorkflowMap({
         <Icons.chevronRight size={11} strokeWidth={2.2} color={text.tertiary as string} />
       </button>
     </section>
-  );
-}
-
-function WorkflowMetricChip({
-  label,
-  value,
-  color,
-}: {
-  label: string;
-  value: number;
-  color: string;
-}) {
-  return (
-    <div
-      className="flex min-w-0 items-center gap-1.5"
-      style={{
-        padding: "5px 7px",
-        borderRadius: 7,
-        background: surface.softPanel,
-      }}
-    >
-      <span style={{ minWidth: 14, fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)", color }}>
-        {value}
-      </span>
-      <span
-        className="truncate"
-        style={{ fontSize: 9, fontWeight: 700, color: value > 0 ? text.primary : text.tertiary }}
-      >
-        {label}
-      </span>
-    </div>
   );
 }
 
