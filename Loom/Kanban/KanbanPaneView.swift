@@ -5,6 +5,7 @@ import SwiftUI
 /// previously-saved cards aren't lost, but the pane no longer renders them.
 struct KanbanPaneView: View {
     @Environment(LiveAgentTasksService.self) private var liveAgentTasks
+    let workspacePath: String?
     @State private var confirmClearAll: Bool = false
     @State private var runSummaries: [AgentGraphRunSummary] = []
     @State private var projectedRunGroups: [LiveAgentTaskGroup] = []
@@ -42,7 +43,7 @@ struct KanbanPaneView: View {
             }
         }
         .background(LoomTheme.panel)
-        .task {
+        .task(id: normalizedWorkspacePath ?? "all") {
             await refreshRunHistory()
         }
         .confirmationDialog(
@@ -199,6 +200,12 @@ struct KanbanPaneView: View {
                 .padding(.vertical, 1)
                 .background(Color.white.opacity(0.05))
                 .clipShape(Capsule())
+            if let workspaceScopeName {
+                Text(workspaceScopeName)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
             Spacer()
         }
         .padding(.horizontal, 12)
@@ -641,7 +648,8 @@ struct KanbanPaneView: View {
     }
 
     private func refreshRunHistory() async {
-        let summaries = (try? await AgentGraphLedger.shared.summaries()) ?? []
+        let allSummaries = (try? await AgentGraphLedger.shared.summaries()) ?? []
+        let summaries = scopedSummaries(allSummaries)
         runSummaries = summaries
 
         var projected: [LiveAgentTaskGroup] = []
@@ -652,6 +660,27 @@ struct KanbanPaneView: View {
         var seen: Set<String> = []
         projectedRunGroups = projected.filter { group in
             seen.insert(group.id).inserted
+        }
+    }
+
+    private var normalizedWorkspacePath: String? {
+        guard let workspacePath,
+              !workspacePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return URL(fileURLWithPath: workspacePath).standardizedFileURL.path
+    }
+
+    private var workspaceScopeName: String? {
+        normalizedWorkspacePath.map { URL(fileURLWithPath: $0).lastPathComponent }
+    }
+
+    private func scopedSummaries(_ summaries: [AgentGraphRunSummary]) -> [AgentGraphRunSummary] {
+        guard let root = normalizedWorkspacePath else { return summaries }
+        return summaries.filter { summary in
+            guard let workspacePath = summary.workspacePath, !workspacePath.isEmpty else { return false }
+            let candidate = URL(fileURLWithPath: workspacePath).standardizedFileURL.path
+            return candidate == root || candidate.hasPrefix(root + "/")
         }
     }
 

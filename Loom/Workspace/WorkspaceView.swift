@@ -824,7 +824,7 @@ struct WorkspaceView: View {
         case .editor:
             EditorPaneView(rootURL: selectedWorkspace?.folderURL)
         case .tasks:
-            KanbanPaneView()
+            KanbanPaneView(workspacePath: selectedWorkspace?.folderPath)
         case .chat:
             AgentPaneView(
                 cwd: selectedWorkspace?.folderURL,

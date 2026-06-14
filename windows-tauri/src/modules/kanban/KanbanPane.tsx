@@ -55,6 +55,31 @@ function mergeTaskGroups(
   return [...liveGroups, ...projectedGroups.filter((group) => !liveIds.has(group.id))];
 }
 
+function filterRunsForWorkspace(
+  summaries: AgentGraphRunSummary[],
+  workspacePath?: string | null
+): AgentGraphRunSummary[] {
+  const root = normalizedPath(workspacePath);
+  if (!root) return summaries;
+  return summaries.filter((summary) => {
+    const candidate = normalizedPath(summary.workspacePath);
+    return Boolean(candidate && (candidate === root || candidate.startsWith(`${root}/`) || candidate.startsWith(`${root}\\`)));
+  });
+}
+
+function normalizedPath(path?: string | null): string | null {
+  const value = path?.trim();
+  if (!value) return null;
+  return value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+function workspaceScopeName(path?: string | null): string | null {
+  const normalized = normalizedPath(path);
+  if (!normalized) return null;
+  const parts = normalized.split("/");
+  return parts[parts.length - 1] || normalized;
+}
+
 function projectTaskGroupsFromEvents(events: AgentGraphEvent[]): LiveAgentTaskGroup[] {
   const tasks = events
     .filter((event) =>
@@ -164,7 +189,7 @@ function taskGroupHeadline(tasks: LiveAgentTask[]): string | null {
 // Mirrors Loom/Kanban/KanbanPaneView.swift: this pane shows live CLI agent
 // run/task sessions plus graph-ledger task projections. Saved kanban data
 // remains in storage for compatibility.
-export function KanbanPane({ blockId }: Props) {
+export function KanbanPane({ workspace, blockId }: Props) {
   const setBlockStatus = useApp((s) => s.setBlockStatus);
   const [groups, setGroups] = useState<LiveAgentTaskGroup[]>([]);
   const [projectedGroups, setProjectedGroups] = useState<LiveAgentTaskGroup[]>([]);
@@ -179,9 +204,10 @@ export function KanbanPane({ blockId }: Props) {
       ipc.liveTasks.list(),
       ipc.agentGraph.list(),
     ]);
-    const nextProjected = await loadProjectedGroups(nextSummaries);
+    const scopedSummaries = filterRunsForWorkspace(nextSummaries, workspace.folderPath);
+    const nextProjected = await loadProjectedGroups(scopedSummaries);
     setGroups(nextGroups);
-    setRunSummaries(nextSummaries);
+    setRunSummaries(scopedSummaries);
     setProjectedGroups(nextProjected);
   };
 
@@ -189,10 +215,11 @@ export function KanbanPane({ blockId }: Props) {
     let active = true;
     Promise.all([ipc.liveTasks.list(), ipc.agentGraph.list()])
       .then(async ([nextGroups, nextSummaries]) => {
-        const nextProjected = await loadProjectedGroups(nextSummaries);
+        const scopedSummaries = filterRunsForWorkspace(nextSummaries, workspace.folderPath);
+        const nextProjected = await loadProjectedGroups(scopedSummaries);
         if (!active) return;
         setGroups(nextGroups);
-        setRunSummaries(nextSummaries);
+        setRunSummaries(scopedSummaries);
         setProjectedGroups(nextProjected);
       })
       .catch(() => {});
@@ -206,7 +233,7 @@ export function KanbanPane({ blockId }: Props) {
       active = false;
       off?.();
     };
-  }, []);
+  }, [workspace.folderPath]);
 
   useEffect(() => {
     if (!blockId) return;
@@ -242,6 +269,7 @@ export function KanbanPane({ blockId }: Props) {
         taskCount={tasks.length}
         busy={busy}
         canClearAll={groups.length > 0}
+        workspaceScope={workspaceScopeName(workspace.folderPath)}
         onRefresh={() => void refresh()}
         onClearAll={() => void clearAll()}
       />
@@ -273,6 +301,7 @@ function Header({
   taskCount,
   busy,
   canClearAll,
+  workspaceScope,
   onRefresh,
   onClearAll,
 }: {
@@ -280,6 +309,7 @@ function Header({
   taskCount: number;
   busy: string | null;
   canClearAll: boolean;
+  workspaceScope: string | null;
   onRefresh: () => void;
   onClearAll: () => void;
 }) {
@@ -329,6 +359,19 @@ function Header({
           }}
         >
           {taskCount} tasks
+        </span>
+      )}
+      {workspaceScope && (
+        <span
+          className="truncate"
+          style={{
+            maxWidth: 140,
+            fontSize: 10,
+            fontWeight: 700,
+            color: "rgba(255,255,255,0.36)",
+          }}
+        >
+          {workspaceScope}
         </span>
       )}
       <IconButton title="Refresh now" disabled={busy !== null} onClick={onRefresh}>
