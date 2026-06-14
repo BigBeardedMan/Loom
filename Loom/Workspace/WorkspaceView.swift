@@ -552,7 +552,8 @@ struct WorkspaceView: View {
     }
 
     private func openInspector(_ tab: WorkspaceRightRailTab) {
-        rightRailTabRaw = tab.rawValue
+        let target = availableInspectorTabs.contains(tab) ? tab : (availableInspectorTabs.first ?? .details)
+        rightRailTabRaw = target.rawValue
         if !isRightRailVisible {
             withAnimation(.easeInOut(duration: 0.18)) {
                 isRightRailVisible = true

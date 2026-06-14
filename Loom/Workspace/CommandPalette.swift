@@ -158,6 +158,7 @@ struct CommandPalette: View {
     private var filteredSections: [PaletteSection] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let allSections = [
+            roomSection(),
             workspaceSection(),
             recentCommandsSection(),
             addBlockSection(),
@@ -172,6 +173,21 @@ struct CommandPalette: View {
             }
             return filtered.isEmpty ? nil : PaletteSection(title: section.title, items: filtered)
         }
+    }
+
+    private func roomSection() -> PaletteSection {
+        let items = WorkspaceKind.allCases.map { kind in
+            let workspace = workspaces.first { $0.kind == kind }
+            return PaletteItem(
+                id: "room:\(kind.rawValue)",
+                title: "Open \(kind.label) Room",
+                subtitle: workspace?.displayFolderPath.isEmpty == false ? workspace?.displayFolderPath : "Switch to \(kind.label)",
+                systemImage: kind.systemImage,
+                tint: workspace?.color.color ?? .accentColor,
+                action: .switchWorkspaceKind(kind)
+            )
+        }
+        return PaletteSection(title: "Rooms", items: items)
     }
 
     private func workspaceSection() -> PaletteSection {
@@ -331,6 +347,8 @@ struct CommandPalette: View {
         switch item.action {
         case .switchWorkspace(let id):
             layout.selectedWorkspaceID = id
+        case .switchWorkspaceKind(let kind):
+            NotificationCenter.default.post(name: .loomSwitchWorkspaceKind, object: kind.rawValue)
         case .rerunCommand(let cmd):
             layout.firstTerminalSession()?.submit(cmd, capture: true)
         case .addBlock(let panel):
@@ -386,6 +404,7 @@ private struct PaletteItem: Identifiable, Hashable {
 
 private enum PaletteAction: Hashable {
     case switchWorkspace(UUID)
+    case switchWorkspaceKind(WorkspaceKind)
     case rerunCommand(String)
     case addBlock(PanelKind)
     case toggleInspector
