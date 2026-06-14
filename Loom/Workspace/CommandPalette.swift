@@ -210,13 +210,15 @@ struct CommandPalette: View {
     }
 
     private func recentCommandsSection() -> PaletteSection {
+        let canRerunCommands = layout.firstTerminalSession() != nil
         let items = history.records.prefix(20).map { record in
             PaletteItem(
                 id: "cmd:\(record.id)",
                 title: record.command,
-                subtitle: shortCwd(record.cwd),
+                subtitle: canRerunCommands ? shortCwd(record.cwd) : "Open a Terminal pane to rerun commands",
                 systemImage: record.succeeded ? "checkmark.circle" : "xmark.circle",
                 tint: record.succeeded ? .green : .orange,
+                isEnabled: canRerunCommands,
                 action: .rerunCommand(record.command)
             )
         }
@@ -394,7 +396,8 @@ struct CommandPalette: View {
         case .switchWorkspaceKind(let kind):
             NotificationCenter.default.post(name: .loomSwitchWorkspaceKind, object: kind.rawValue)
         case .rerunCommand(let cmd):
-            layout.firstTerminalSession()?.submit(cmd, capture: true)
+            guard let terminal = layout.firstTerminalSession() else { return }
+            terminal.submit(cmd, capture: true)
         case .addBlock(let panel):
             layout.addBlock(panel)
         case .toggleInspector:
