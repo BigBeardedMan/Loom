@@ -800,6 +800,30 @@ struct WorkspaceSidebarView: View {
                     .font(.system(size: 10))
                     .foregroundStyle(LoomTheme.mutedText)
                     .lineLimit(2)
+                HStack(spacing: 4) {
+                    runRowActionButton(
+                        systemImage: "sidebar.right",
+                        help: "Inspect run evidence"
+                    ) {
+                        NotificationCenter.default.post(
+                            name: .loomOpenInspectorTab,
+                            object: selectedKind == .review ? WorkspaceRightRailTab.diff.rawValue : WorkspaceRightRailTab.timeline.rawValue
+                        )
+                        NotificationCenter.default.post(name: .loomRefreshInspectorContext, object: nil)
+                    }
+                    runRowActionButton(
+                        systemImage: "doc.on.doc",
+                        help: "Copy ledger path"
+                    ) {
+                        copyLedgerPath(summary.ledgerPath)
+                    }
+                    runRowActionButton(
+                        systemImage: "folder",
+                        help: "Reveal ledger in Finder"
+                    ) {
+                        revealLedger(summary.ledgerPath)
+                    }
+                }
             }
         }
         .padding(.horizontal, 8)
@@ -880,6 +904,12 @@ struct WorkspaceSidebarView: View {
         if summary.taskCount > 0 {
             parts.append("\(summary.taskCount) tasks")
         }
+        if summary.childRunCount > 0 {
+            parts.append("\(summary.childRunCount) child runs")
+        }
+        if !summary.parentRunIDs.isEmpty {
+            parts.append("\(summary.parentRunIDs.count) parents")
+        }
         if summary.gitDirty == true {
             parts.append("changes pending")
         }
@@ -887,6 +917,34 @@ struct WorkspaceSidebarView: View {
             parts.append(URL(fileURLWithPath: workspacePath).lastPathComponent)
         }
         return parts.joined(separator: " · ")
+    }
+
+    private func runRowActionButton(
+        systemImage: String,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(LoomTheme.mutedText)
+                .frame(width: 18, height: 16)
+                .background(LoomTheme.inset.opacity(0.7))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .help(help)
+        .accessibilityLabel(help)
+    }
+
+    private func copyLedgerPath(_ path: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(path, forType: .string)
+    }
+
+    private func revealLedger(_ path: String) {
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
     }
 
     private func relativeReviewTime(_ date: Date) -> String {

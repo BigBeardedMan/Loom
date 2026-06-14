@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Icons } from "../../lib/icons";
+import { LOOM_REFRESH_RUNS } from "../../lib/events";
 import { useApp } from "../../lib/store";
 import {
   ipc,
@@ -501,8 +502,15 @@ function RunSummaryRow({
   variant?: "history" | "review";
 }) {
   const review = variant === "review";
+  const setRightRailTab = useApp((s) => s.setRightRailTab);
   const dirty = run.gitDirty === true;
   const statusColor = reviewRunColor(run);
+  const inspectRun = () => {
+    setRightRailTab(review ? "diff" : "timeline");
+    window.dispatchEvent(new Event(LOOM_REFRESH_RUNS));
+  };
+  const copyLedgerPath = () => void navigator.clipboard?.writeText(run.ledgerPath);
+  const revealLedger = () => void ipc.agentGraph.reveal(run.id);
   return (
     <div
       className="flex items-start gap-2"
@@ -532,6 +540,17 @@ function RunSummaryRow({
         >
           {review ? reviewRunMeta(run) : runSummaryMeta(run)}
         </span>
+      </span>
+      <span className="flex flex-none items-center gap-1">
+        <TinyIconButton title="Inspect run evidence" onClick={inspectRun}>
+          <Icons.panelRight size={10} strokeWidth={2.2} />
+        </TinyIconButton>
+        <TinyIconButton title="Copy ledger path" onClick={copyLedgerPath}>
+          <Icons.copy size={10} strokeWidth={2.2} />
+        </TinyIconButton>
+        <TinyIconButton title="Reveal ledger" onClick={revealLedger}>
+          <Icons.folderOpen size={10} strokeWidth={2.2} />
+        </TinyIconButton>
       </span>
     </div>
   );
@@ -1034,6 +1053,9 @@ function runSummaryMeta(run: AgentGraphRunSummary): string {
     shortAgo(run.lastActivity),
     run.gitBranch,
     (run.toolEventCount ?? 0) > 0 ? `${run.toolEventCount} tools` : null,
+    (run.taskCount ?? 0) > 0 ? `${run.taskCount} tasks` : null,
+    (run.childRunCount ?? 0) > 0 ? `${run.childRunCount} child runs` : null,
+    (run.parentRunIds?.length ?? 0) > 0 ? `${run.parentRunIds?.length ?? 0} parents` : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -1045,6 +1067,8 @@ function reviewRunMeta(run: AgentGraphRunSummary): string {
     run.gitBranch,
     (run.toolEventCount ?? 0) > 0 ? `${run.toolEventCount} tools` : null,
     (run.taskCount ?? 0) > 0 ? `${run.taskCount} tasks` : null,
+    (run.childRunCount ?? 0) > 0 ? `${run.childRunCount} child runs` : null,
+    (run.parentRunIds?.length ?? 0) > 0 ? `${run.parentRunIds?.length ?? 0} parents` : null,
     run.gitDirty === true ? "changes pending" : null,
     pathBaseName(run.workspacePath),
   ]
