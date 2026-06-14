@@ -441,6 +441,8 @@ struct WorkspaceRightRailView: View {
 
     private var workflowMap: some View {
         let signals = workflowSignals
+        let metrics = workflowMetrics
+        let focus = workflowFocus
         let phases = [
             ("Scope", workspace != nil, workspace?.color.color ?? LoomTheme.blue),
             ("Workspace", workspace?.folderPath.isEmpty == false, LoomTheme.blue),
@@ -465,10 +467,73 @@ struct WorkspaceRightRailView: View {
                     .frame(maxWidth: .infinity)
                 }
             }
+            LazyVGrid(
+                columns: [
+                    GridItem(.flexible(), spacing: 6),
+                    GridItem(.flexible(), spacing: 6)
+                ],
+                alignment: .leading,
+                spacing: 6
+            ) {
+                workflowMetricChip("Active", value: metrics.activeCount, tint: LoomTheme.blue)
+                workflowMetricChip("Ready", value: metrics.readyCount, tint: LoomTheme.green)
+                workflowMetricChip("Attention", value: metrics.attentionCount, tint: LoomTheme.orange)
+                workflowMetricChip("Checks", value: metrics.checkCount, tint: LoomTheme.purple)
+            }
+            Button {
+                selectedTab = focus.targetTab
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: focus.icon)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(focus.tint)
+                        .frame(width: 16, height: 16)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(focus.title)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(LoomTheme.primaryText)
+                            .lineLimit(1)
+                        Text(focus.detail)
+                            .font(.system(size: 9))
+                            .foregroundStyle(LoomTheme.mutedText)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(LoomTheme.tertiaryText)
+                }
+                .padding(8)
+                .background(LoomTheme.softPanel.opacity(0.5))
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+                .contentShape(RoundedRectangle(cornerRadius: 7))
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .help("Open \(focus.targetTab.label)")
         }
         .padding(10)
         .background(LoomTheme.inset)
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func workflowMetricChip(_ label: String, value: Int, tint: Color) -> some View {
+        HStack(spacing: 5) {
+            Text("\(value)")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(tint)
+                .frame(minWidth: 14, alignment: .leading)
+            Text(label)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(value > 0 ? LoomTheme.primaryText : LoomTheme.tertiaryText)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(LoomTheme.softPanel.opacity(0.44))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
     }
 
     private var timelineContent: some View {
@@ -1530,6 +1595,93 @@ struct WorkspaceRightRailView: View {
         )
     }
 
+    private var workflowMetrics: WorkspaceWorkflowMetrics {
+        let runs = scopedRunSummaries
+        let runningCount = runs.filter { isRunningStatus($0.status) }.count
+        let attentionCount = runs.filter { summary in
+            isAttentionStatus(summary.status) || summary.gitDirty == true
+        }.count
+        let readyCount = runs.filter { summary in
+            isCompletedStatus(summary.status)
+            && summary.gitDirty != true
+            && WorkspaceRightRailAvailability.hasReviewEvidence(summary)
+        }.count
+        let reviewableCount = runs.filter(isReviewable).count
+        let checkCount = runs.reduce(0) { partial, summary in
+            partial + summary.toolEventCount + summary.taskCount
+        }
+
+        return WorkspaceWorkflowMetrics(
+            activeCount: scopedLiveAgentGroups.count + runningCount,
+            readyCount: readyCount,
+            attentionCount: attentionCount,
+            reviewableCount: reviewableCount,
+            checkCount: checkCount
+        )
+    }
+
+    private var workflowFocus: (
+        icon: String,
+        tint: Color,
+        title: String,
+        detail: String,
+        targetTab: WorkspaceRightRailTab
+    ) {
+        let metrics = workflowMetrics
+        if metrics.attentionCount > 0 {
+            return (
+                "exclamationmark.triangle.fill",
+                LoomTheme.orange,
+                "\(metrics.attentionCount) attention signal\(metrics.attentionCount == 1 ? "" : "s")",
+                "Review failed, cancelled, or dirty runs",
+                .diff
+            )
+        }
+        if metrics.activeCount > 0 {
+            return (
+                "point.3.connected.trianglepath.dotted",
+                LoomTheme.blue,
+                "\(metrics.activeCount) active stream\(metrics.activeCount == 1 ? "" : "s")",
+                "Watch the live timeline",
+                .timeline
+            )
+        }
+        if metrics.readyCount > 0 {
+            return (
+                "checkmark.seal.fill",
+                LoomTheme.green,
+                "\(metrics.readyCount) ready for review",
+                "Open the review packet",
+                .diff
+            )
+        }
+        if metrics.checkCount > 0 || metrics.reviewableCount > 0 {
+            return (
+                "doc.text.magnifyingglass",
+                LoomTheme.purple,
+                "\(max(metrics.checkCount, metrics.reviewableCount)) review signal\(max(metrics.checkCount, metrics.reviewableCount) == 1 ? "" : "s")",
+                "Inspect recorded evidence",
+                .diff
+            )
+        }
+        if !memoryFiles.isEmpty {
+            return (
+                "brain.head.profile",
+                LoomTheme.purple,
+                "\(memoryFiles.count) memory file\(memoryFiles.count == 1 ? "" : "s")",
+                "Review project context",
+                .memory
+            )
+        }
+        return (
+            "sidebar.right",
+            LoomTheme.mutedText,
+            "No review queue yet",
+            "Inspect the current room",
+            .details
+        )
+    }
+
     private var shipDecision: (icon: String, tint: Color, title: String, detail: String) {
         let signals = workflowSignals
         if signals.shipReady {
@@ -1601,6 +1753,14 @@ private struct WorkspaceWorkflowSignals {
     let hasAttention: Bool
     let hasReviewSignals: Bool
     let shipReady: Bool
+}
+
+private struct WorkspaceWorkflowMetrics {
+    let activeCount: Int
+    let readyCount: Int
+    let attentionCount: Int
+    let reviewableCount: Int
+    let checkCount: Int
 }
 
 private struct LedgerEvidence: Identifiable {

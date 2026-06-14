@@ -4,7 +4,7 @@ import { ipc, type AgentDescriptor, type AgentGraphEvent, type AgentGraphRunSumm
 import { PANEL_META, ROOM_META } from "../lib/commands";
 import { LOOM_ENDPOINTS_CHANGED } from "../lib/events";
 import { useRightRailContext, type MemoryFile } from "../lib/railContext";
-import { useApp, type Panel } from "../lib/store";
+import { useApp, type Panel, type RightRailTab } from "../lib/store";
 import { radius, surface, text, workspaceColorVar } from "../lib/theme";
 import { defaultPreviewUrlFor } from "../modules/build/previewUrls";
 import type { Block } from "../modules/workspace/LayoutPersistence";
@@ -139,7 +139,12 @@ export function WorkspaceRightRail() {
       </div>
 
       <main className="scrollbar-thin min-h-0 flex-1 overflow-y-auto" style={{ padding: 12 }}>
-        <WorkflowMap workspace={workspace} runs={scopedRuns} liveGroups={scopedLiveGroups} />
+        <WorkflowMap
+          workspace={workspace}
+          runs={scopedRuns}
+          liveGroups={scopedLiveGroups}
+          memoryFileCount={memoryFiles.length}
+        />
         {effectiveTab === "timeline" && (
           <TimelineContent
             runs={scopedRuns}
@@ -178,12 +183,17 @@ function WorkflowMap({
   workspace,
   runs,
   liveGroups,
+  memoryFileCount,
 }: {
   workspace: Workspace | null;
   runs: AgentGraphRunSummary[];
   liveGroups: LiveAgentTaskGroup[];
+  memoryFileCount: number;
 }) {
+  const setRightRailTab = useApp((s) => s.setRightRailTab);
   const signals = workflowSignals(runs, liveGroups);
+  const metrics = workflowMetrics(runs, liveGroups);
+  const focus = workflowFocus(metrics, memoryFileCount);
   const phases = [
     ["Scope", !!workspace, workspace ? workspaceColorVar[workspace.colorName] : workspaceColorVar.blue],
     ["Workspace", !!workspace?.folderPath, workspaceColorVar.blue],
@@ -214,7 +224,68 @@ function WorkflowMap({
           </div>
         ))}
       </div>
+      <div className="grid grid-cols-2 gap-1.5" style={{ marginTop: 8 }}>
+        <WorkflowMetricChip label="Active" value={metrics.activeCount} color={workspaceColorVar.blue} />
+        <WorkflowMetricChip label="Ready" value={metrics.readyCount} color={workspaceColorVar.green} />
+        <WorkflowMetricChip label="Attention" value={metrics.attentionCount} color={workspaceColorVar.orange} />
+        <WorkflowMetricChip label="Checks" value={metrics.checkCount} color={workspaceColorVar.purple} />
+      </div>
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 text-left"
+        title={`Open ${focus.targetTab}`}
+        onClick={() => setRightRailTab(focus.targetTab)}
+        style={{
+          marginTop: 8,
+          padding: 8,
+          borderRadius: 7,
+          background: surface.softPanel,
+          color: text.primary,
+        }}
+      >
+        <focus.Icon size={13} strokeWidth={2.2} color={focus.color} style={{ flex: "0 0 auto" }} />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate" style={{ fontSize: 10, fontWeight: 700 }}>
+            {focus.title}
+          </span>
+          <span className="block truncate" style={{ fontSize: 9, color: text.muted }}>
+            {focus.detail}
+          </span>
+        </span>
+        <Icons.chevronRight size={11} strokeWidth={2.2} color={text.tertiary as string} />
+      </button>
     </section>
+  );
+}
+
+function WorkflowMetricChip({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: number;
+  color: string;
+}) {
+  return (
+    <div
+      className="flex min-w-0 items-center gap-1.5"
+      style={{
+        padding: "5px 7px",
+        borderRadius: 7,
+        background: surface.softPanel,
+      }}
+    >
+      <span style={{ minWidth: 14, fontSize: 11, fontWeight: 800, fontFamily: "var(--font-mono)", color }}>
+        {value}
+      </span>
+      <span
+        className="truncate"
+        style={{ fontSize: 9, fontWeight: 700, color: value > 0 ? text.primary : text.tertiary }}
+      >
+        {label}
+      </span>
+    </div>
   );
 }
 
@@ -1176,6 +1247,14 @@ type WorkflowSignals = {
   shipReady: boolean;
 };
 
+type WorkflowMetrics = {
+  activeCount: number;
+  readyCount: number;
+  attentionCount: number;
+  reviewableCount: number;
+  checkCount: number;
+};
+
 function workflowSignals(runs: AgentGraphRunSummary[], liveGroups: LiveAgentTaskGroup[]): WorkflowSignals {
   const hasRunningRun = runs.some((run) => isRunningStatus(run.status));
   const hasActiveAgents = liveGroups.length > 0 || hasRunningRun;
@@ -1199,6 +1278,91 @@ function workflowSignals(runs: AgentGraphRunSummary[], liveGroups: LiveAgentTask
     hasAttention,
     hasReviewSignals: hasAttention || hasCompletedEvidence || hasCheckSignals,
     shipReady: hasCompletedEvidence && !hasAttention && !hasActiveAgents,
+  };
+}
+
+function workflowMetrics(runs: AgentGraphRunSummary[], liveGroups: LiveAgentTaskGroup[]): WorkflowMetrics {
+  const runningCount = runs.filter((run) => isRunningStatus(run.status)).length;
+  const attentionCount = runs.filter((run) => isAttentionStatus(run.status) || run.gitDirty === true).length;
+  const readyCount = runs.filter(
+    (run) => isCompletedStatus(run.status) && run.gitDirty !== true && isReviewableRun(run)
+  ).length;
+  const reviewableCount = runs.filter(isReviewableRun).length;
+  const checkCount = runs.reduce(
+    (total, run) => total + (run.toolEventCount ?? 0) + (run.taskCount ?? 0),
+    0
+  );
+  return {
+    activeCount: liveGroups.length + runningCount,
+    readyCount,
+    attentionCount,
+    reviewableCount,
+    checkCount,
+  };
+}
+
+function workflowFocus(
+  metrics: WorkflowMetrics,
+  memoryFileCount: number
+): {
+  Icon: (typeof Icons)[keyof typeof Icons];
+  color: string;
+  title: string;
+  detail: string;
+  targetTab: RightRailTab;
+} {
+  if (metrics.attentionCount > 0) {
+    return {
+      Icon: Icons.failedCircle,
+      color: workspaceColorVar.orange,
+      title: `${metrics.attentionCount} attention signal${metrics.attentionCount === 1 ? "" : "s"}`,
+      detail: "Review failed, cancelled, or dirty runs",
+      targetTab: "diff",
+    };
+  }
+  if (metrics.activeCount > 0) {
+    return {
+      Icon: Icons.workflow,
+      color: workspaceColorVar.blue,
+      title: `${metrics.activeCount} active stream${metrics.activeCount === 1 ? "" : "s"}`,
+      detail: "Watch the live timeline",
+      targetTab: "timeline",
+    };
+  }
+  if (metrics.readyCount > 0) {
+    return {
+      Icon: Icons.checkCircle,
+      color: workspaceColorVar.green,
+      title: `${metrics.readyCount} ready for review`,
+      detail: "Open the review packet",
+      targetTab: "diff",
+    };
+  }
+  const reviewSignalCount = Math.max(metrics.checkCount, metrics.reviewableCount);
+  if (reviewSignalCount > 0) {
+    return {
+      Icon: Icons.file,
+      color: workspaceColorVar.purple,
+      title: `${reviewSignalCount} review signal${reviewSignalCount === 1 ? "" : "s"}`,
+      detail: "Inspect recorded evidence",
+      targetTab: "diff",
+    };
+  }
+  if (memoryFileCount > 0) {
+    return {
+      Icon: Icons.brain,
+      color: workspaceColorVar.purple,
+      title: `${memoryFileCount} memory file${memoryFileCount === 1 ? "" : "s"}`,
+      detail: "Review project context",
+      targetTab: "memory",
+    };
+  }
+  return {
+    Icon: Icons.panelRight,
+    color: text.tertiary as string,
+    title: "No review queue yet",
+    detail: "Inspect the current room",
+    targetTab: "details",
   };
 }
 
