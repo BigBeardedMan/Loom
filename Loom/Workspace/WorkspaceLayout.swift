@@ -535,7 +535,7 @@ final class WorkspaceLayout {
         var count = 0
         for blocks in blocksByKind.values {
             for block in blocks where block.kind == .terminal {
-                for session in block.terminalSessions where session.isRunningCLIAgent {
+                for session in block.terminalSessions where session.observeCLIAgentForeground() {
                     count += 1
                 }
             }

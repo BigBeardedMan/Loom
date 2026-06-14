@@ -23,6 +23,8 @@ final class TerminalSession: Identifiable {
     private var transcriptRecorder: TerminalTranscriptRecorder?
     private var pendingTranscriptRestore: TerminalTranscriptRestore?
     private var hasStarted = false
+    private var trackedCLIAgentRun: TrackedCLIAgentRun?
+    private let cliAgentHeartbeatInterval: TimeInterval = 30
 
     init(
         sessionID: UUID = UUID(),
@@ -126,6 +128,7 @@ final class TerminalSession: Identifiable {
     }
 
     func cleanup() {
+        finishTrackedCLIAgentRun(status: "cancelled", eventType: .runCancelled)
         transcriptStore?.close(sessionID: id)
         transcriptRecorder?.close()
         transcriptRecorder = nil
@@ -194,9 +197,111 @@ final class TerminalSession: Identifiable {
         return Self.knownCLIAgents.contains(cmd)
     }
 
+    /// Called by WorkspaceLayout's existing foreground-process poll. It keeps
+    /// the Runs ledger aware of Terminal-launched CLI agents without wrapping
+    /// or proxying the user's PTY.
+    @discardableResult
+    func observeCLIAgentForeground() -> Bool {
+        let command = foregroundCommand
+        guard let command,
+              let source = Self.agentSource(for: command) else {
+            finishTrackedCLIAgentRun(status: "completed", eventType: .runCompleted)
+            return false
+        }
+
+        if trackedCLIAgentRun?.source != source {
+            finishTrackedCLIAgentRun(status: "completed", eventType: .runCompleted)
+            startTrackedCLIAgentRun(source: source, command: command)
+        } else {
+            recordTrackedCLIAgentHeartbeatIfNeeded(command: command)
+        }
+        return true
+    }
+
     /// CLI agents whose foreground state we recognize for the active-session
     /// badge and terminal prompt click-to-position behavior.
     static let knownCLIAgents: Set<String> = ["claude", "codex", "gemini", "lmstudio"]
+
+    private static func agentSource(for command: String) -> AgentSource? {
+        switch command.lowercased() {
+        case "claude":   return .claude
+        case "codex":    return .codex
+        case "gemini":   return .gemini
+        case "lmstudio": return .lmstudio
+        default:         return nil
+        }
+    }
+
+    private func startTrackedCLIAgentRun(source: AgentSource, command: String) {
+        let now = Date()
+        let run = TrackedCLIAgentRun(
+            rootRunID: "terminal-\(UUID().uuidString.lowercased())",
+            source: source,
+            command: command,
+            startedAt: now,
+            lastHeartbeat: now
+        )
+        trackedCLIAgentRun = run
+        appendCLIAgentGraphEvents([
+            makeCLIAgentGraphEvent(.graphCreated, run: run, occurredAt: now, status: "running"),
+            makeCLIAgentGraphEvent(.runStarted, run: run, occurredAt: now, status: "running")
+        ])
+    }
+
+    private func recordTrackedCLIAgentHeartbeatIfNeeded(command: String) {
+        guard var run = trackedCLIAgentRun else { return }
+        let now = Date()
+        guard now.timeIntervalSince(run.lastHeartbeat) >= cliAgentHeartbeatInterval else { return }
+        run.lastHeartbeat = now
+        run.command = command
+        trackedCLIAgentRun = run
+        appendCLIAgentGraphEvents([
+            makeCLIAgentGraphEvent(.runHeartbeat, run: run, occurredAt: now, status: "running")
+        ])
+    }
+
+    fileprivate func finishTrackedCLIAgentRun(status: String, eventType: AgentGraphEventType) {
+        guard let run = trackedCLIAgentRun else { return }
+        trackedCLIAgentRun = nil
+        appendCLIAgentGraphEvents([
+            makeCLIAgentGraphEvent(eventType, run: run, occurredAt: Date(), status: status)
+        ])
+    }
+
+    private func makeCLIAgentGraphEvent(
+        _ type: AgentGraphEventType,
+        run: TrackedCLIAgentRun,
+        occurredAt: Date,
+        status: String
+    ) -> AgentGraphEvent {
+        AgentGraphEvent(
+            type: type,
+            occurredAt: occurredAt,
+            rootRunID: run.rootRunID,
+            runID: run.rootRunID,
+            source: run.source.rawValue,
+            workspacePath: cwd.path,
+            modelLabel: nil,
+            permissionMode: nil,
+            title: "\(run.source.label) terminal run",
+            summary: "\(run.command) in \(tabLabel)",
+            payload: [
+                "status": status,
+                "command": run.command,
+                "terminalSessionID": id.uuidString,
+                "cwd": cwd.path,
+                "startedAt": ISO8601DateFormatter().string(from: run.startedAt)
+            ]
+        )
+    }
+
+    private func appendCLIAgentGraphEvents(_ events: [AgentGraphEvent]) {
+        Task {
+            for event in events {
+                try? await AgentGraphLedger.shared.append(event)
+            }
+        }
+    }
 
     fileprivate static func processName(pid: pid_t) -> String? {
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
@@ -305,6 +410,14 @@ final class TerminalSession: Identifiable {
         let suffixes = ["_API_KEY", "_SECRET_KEY", "_ACCESS_TOKEN", "_AUTH_TOKEN"]
         return suffixes.contains { upper.hasSuffix($0) }
     }
+}
+
+private struct TrackedCLIAgentRun: Hashable {
+    let rootRunID: String
+    let source: AgentSource
+    var command: String
+    let startedAt: Date
+    var lastHeartbeat: Date
 }
 
 /// SwiftUI's mount/unmount during workspace switches briefly hands the view a
@@ -780,5 +893,10 @@ private final class ProcessBridge: NSObject, LocalProcessTerminalViewDelegate {
         }
     }
 
-    func processTerminated(source: TerminalView, exitCode: Int32?) {}
+    func processTerminated(source: TerminalView, exitCode: Int32?) {
+        let session = self.session
+        Task { @MainActor in
+            session?.finishTrackedCLIAgentRun(status: "cancelled", eventType: .runCancelled)
+        }
+    }
 }
