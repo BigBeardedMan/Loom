@@ -2,15 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { Icons } from "../../lib/icons";
 import { useApp } from "../../lib/store";
 import { ipc, type Workspace } from "../../lib/ipc";
+import { defaultPreviewUrlFor } from "./previewUrls";
 
 type Props = { workspace: Workspace; blockId?: string };
 
 const LOAD_TIMEOUT_MS = 8000;
-
-export function defaultPreviewUrlFor(workspace: Workspace, autoIndex: number): string {
-  if (workspace.previewUrl) return workspace.previewUrl;
-  return `http://localhost:${3000 + autoIndex}`;
-}
 
 // Mirrors Loom/Build/PreviewPaneView.swift.
 // URL bar with back/forward/refresh; iframe with white background and a

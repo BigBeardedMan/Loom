@@ -6,7 +6,7 @@ import { LOOM_ENDPOINTS_CHANGED } from "../lib/events";
 import { useRightRailContext, type MemoryFile } from "../lib/railContext";
 import { useApp, type Panel } from "../lib/store";
 import { radius, surface, text, workspaceColorVar } from "../lib/theme";
-import { defaultPreviewUrlFor } from "../modules/build/PreviewPane";
+import { defaultPreviewUrlFor } from "../modules/build/previewUrls";
 import type { Block } from "../modules/workspace/LayoutPersistence";
 
 export function WorkspaceRightRail() {
