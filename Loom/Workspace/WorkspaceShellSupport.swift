@@ -1,3 +1,5 @@
+import AppKit
+import SwiftData
 import SwiftUI
 
 enum WorkspaceRightRailTab: String, CaseIterable, Identifiable {
@@ -37,6 +39,7 @@ enum WorkspaceRightRailTab: String, CaseIterable, Identifiable {
 }
 
 struct WorkspaceRoomRailView: View {
+    @Environment(\.modelContext) private var modelContext
     let workspaces: [Workspace]
     @Binding var selectedWorkspaceID: UUID?
     @Binding var selectedUsageTool: CLITool?
@@ -98,17 +101,28 @@ struct WorkspaceRoomRailView: View {
 
     private func roomButton(_ workspace: Workspace) -> some View {
         let selected = workspace.id == selectedWorkspaceID && selectedUsageTool == nil
+        let hasFolder = !workspace.folderPath.isEmpty
         return Button {
-            selectedUsageTool = nil
-            selectedWorkspaceID = workspace.id
+            selectRoom(workspace)
         } label: {
             VStack(spacing: 4) {
-                Image(systemName: workspace.kind.systemImage)
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(selected ? .white : workspace.color.color)
-                    .frame(width: 34, height: 28)
-                    .background(selected ? workspace.color.color : workspace.color.color.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: workspace.kind.systemImage)
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(selected ? .white : workspace.color.color)
+                        .frame(width: 34, height: 28)
+                        .background(selected ? workspace.color.color : workspace.color.color.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    if hasFolder {
+                        Image(systemName: "folder.fill")
+                            .font(.system(size: 7, weight: .bold))
+                            .foregroundStyle(selected ? workspace.color.color : LoomTheme.primaryText)
+                            .frame(width: 13, height: 13)
+                            .background(selected ? .white : workspace.color.color)
+                            .clipShape(Circle())
+                            .offset(x: 5, y: -5)
+                    }
+                }
                 Text(workspace.kind.label)
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(selected ? LoomTheme.primaryText : LoomTheme.mutedText)
@@ -123,7 +137,65 @@ struct WorkspaceRoomRailView: View {
         }
         .buttonStyle(.plain)
         .pointingHandCursor()
-        .help("Open \(workspace.kind.label)")
+        .help(roomHelp(for: workspace))
+        .accessibilityLabel(roomHelp(for: workspace))
+        .contextMenu {
+            roomContextMenu(for: workspace)
+        }
+    }
+
+    private func selectRoom(_ workspace: Workspace) {
+        selectedUsageTool = nil
+        selectedWorkspaceID = workspace.id
+    }
+
+    @ViewBuilder
+    private func roomContextMenu(for workspace: Workspace) -> some View {
+        let hasFolder = !workspace.folderPath.isEmpty
+        Button(hasFolder ? "Change Folder..." : "Set Folder...") {
+            chooseFolder(for: workspace)
+        }
+        if hasFolder {
+            Button("Reveal in Finder") {
+                revealInFinder(workspace)
+            }
+            Button("Clear Folder", role: .destructive) {
+                clearFolder(for: workspace)
+            }
+        }
+    }
+
+    private func chooseFolder(for workspace: Workspace) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose a folder for \(workspace.kind.label)"
+        if !workspace.folderPath.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: workspace.folderPath)
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        selectRoom(workspace)
+        workspace.folderPath = url.path
+        try? modelContext.save()
+    }
+
+    private func clearFolder(for workspace: Workspace) {
+        selectRoom(workspace)
+        workspace.folderPath = ""
+        try? modelContext.save()
+    }
+
+    private func revealInFinder(_ workspace: Workspace) {
+        guard let url = workspace.folderURL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    private func roomHelp(for workspace: Workspace) -> String {
+        if workspace.folderPath.isEmpty {
+            return "Open \(workspace.kind.label). Right-click to set a folder."
+        }
+        return "Open \(workspace.kind.label): \(workspace.displayFolderPath)"
     }
 
     private func railUtilityButton(
