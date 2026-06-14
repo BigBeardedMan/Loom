@@ -158,6 +158,11 @@ export function useGlobalKeymap() {
         description: "Open Project memory",
         run: () => setRightRailTab("memory"),
       },
+      {
+        combo: "ctrl+alt+8",
+        description: "Open Tools and Models",
+        run: () => setRightRailTab("tools"),
+      },
     ];
 
     // Ctrl+1..9 → jump to workspace n

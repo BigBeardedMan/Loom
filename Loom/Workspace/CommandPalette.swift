@@ -263,6 +263,14 @@ struct CommandPalette: View {
                 systemImage: WorkspaceRightRailTab.memory.systemImage,
                 tint: LoomTheme.purple,
                 action: .openInspector(.memory)
+            ),
+            PaletteItem(
+                id: "workflow:tools-models",
+                title: "Open Tools & Models",
+                subtitle: "Show providers, models, endpoints, and pane tools",
+                systemImage: WorkspaceRightRailTab.tools.systemImage,
+                tint: LoomTheme.blue,
+                action: .openInspector(.tools)
             )
         ])
     }

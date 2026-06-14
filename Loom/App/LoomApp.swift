@@ -190,6 +190,11 @@ struct LoomApp: App {
                     NotificationCenter.default.post(name: .loomRefreshInspectorContext, object: nil)
                 }
                 .keyboardShortcut("7", modifiers: [.command, .option])
+                Button("Open Tools & Models") {
+                    NotificationCenter.default.post(name: .loomOpenInspectorTab, object: WorkspaceRightRailTab.tools.rawValue)
+                    NotificationCenter.default.post(name: .loomRefreshInspectorContext, object: nil)
+                }
+                .keyboardShortcut("8", modifiers: [.command, .option])
                 Divider()
                 ForEach(WorkspaceRightRailTab.allCases) { tab in
                     Button("Show \(tab.label) Inspector") {

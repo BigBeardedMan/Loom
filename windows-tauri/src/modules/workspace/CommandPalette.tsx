@@ -320,6 +320,27 @@ export function CommandPalette() {
                 Read-only context
               </span>
             </Command.Item>
+            <Command.Item
+              value="open tools models providers endpoints pane tools"
+              onSelect={() => {
+                setRightRailTab("tools");
+                closePalette();
+              }}
+              className="flex cursor-pointer items-center gap-2"
+              style={{
+                padding: "7px 14px",
+                fontSize: 13,
+                fontWeight: 500,
+                color: text.muted,
+                borderRadius: 6,
+              }}
+            >
+              <Icons.tools size={12} strokeWidth={1.8} />
+              <span className="flex-1 truncate">Open Tools & Models</span>
+              <span className="font-mono truncate" style={{ fontSize: 11, color: text.tertiary, maxWidth: 220 }}>
+                Providers and pane tools
+              </span>
+            </Command.Item>
           </Command.Group>
 
           {recent.length > 0 && (
