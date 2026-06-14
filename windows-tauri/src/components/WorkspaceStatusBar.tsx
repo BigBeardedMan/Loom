@@ -116,25 +116,17 @@ function runHistorySegment(runs: AgentGraphRunSummary[]): {
 
   const attention = runs.filter((run) => isAttentionStatus(run.status) || run.gitDirty === true).length;
   const running = runs.filter((run) => isRunningStatus(run.status)).length;
-  const ready = runs.filter(
-    (run) =>
-      isCompletedStatus(run.status) &&
-      run.gitDirty !== true &&
-      ((run.toolEventCount ?? 0) > 0 ||
-        (run.taskCount ?? 0) > 0 ||
-        (run.toolNames?.length ?? 0) > 0 ||
-        (run.childRunCount ?? 0) > 0 ||
-        (run.lineageEventCount ?? 0) > 0 ||
-        Boolean(run.gitHead) ||
-        Boolean(run.gitBranch))
-  ).length;
+  const ready = runs.filter((run) => isCompletedStatus(run.status) && run.gitDirty !== true && isReviewableRun(run)).length;
+  const reviewable = runs.filter(isReviewableRun).length;
+  const checks = runs.reduce((total, run) => total + (run.toolEventCount ?? 0) + (run.taskCount ?? 0), 0);
+  const detail = runQueueDetail({ total: runs.length, ready, reviewable, checks });
 
   if (attention > 0) {
     return {
       icon: "failedCircle",
       color: workspaceColorVar.orange,
       label: `${attention} Attention`,
-      detail: `${runs.length} recent runs`,
+      detail,
       targetTab: "diff",
     };
   }
@@ -143,7 +135,7 @@ function runHistorySegment(runs: AgentGraphRunSummary[]): {
       icon: "workflow",
       color: workspaceColorVar.blue,
       label: `${running} Running`,
-      detail: `${runs.length} recent runs`,
+      detail,
       targetTab: "timeline",
     };
   }
@@ -152,7 +144,7 @@ function runHistorySegment(runs: AgentGraphRunSummary[]): {
       icon: "checkCircle",
       color: workspaceColorVar.green,
       label: `${ready} Ready`,
-      detail: `${runs.length} recent runs`,
+      detail,
       targetTab: "diff",
     };
   }
@@ -163,6 +155,41 @@ function runHistorySegment(runs: AgentGraphRunSummary[]): {
     detail: "run history",
     targetTab: "timeline",
   };
+}
+
+function runQueueDetail({
+  total,
+  ready,
+  reviewable,
+  checks,
+}: {
+  total: number;
+  ready: number;
+  reviewable: number;
+  checks: number;
+}): string {
+  return [
+    ready > 0 ? `${ready} ready` : null,
+    checks > 0 ? `${checks} checks` : null,
+    reviewable > 0 ? `${reviewable} reviewable` : null,
+    `${total} recent`,
+  ]
+    .filter(Boolean)
+    .join(" - ");
+}
+
+function isReviewableRun(run: AgentGraphRunSummary): boolean {
+  return Boolean(
+    run.gitBranch ||
+      run.gitDirty !== undefined ||
+      run.gitHead ||
+      (run.toolEventCount ?? 0) > 0 ||
+      (run.taskCount ?? 0) > 0 ||
+      (run.toolNames?.length ?? 0) > 0 ||
+      (run.parentRunIds?.length ?? 0) > 0 ||
+      (run.childRunCount ?? 0) > 0 ||
+      (run.lineageEventCount ?? 0) > 0
+  );
 }
 
 function isCompletedStatus(status: string): boolean {

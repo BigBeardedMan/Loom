@@ -1915,12 +1915,22 @@ struct WorkspaceStatusBar: View {
             && summary.gitDirty != true
             && WorkspaceRightRailAvailability.hasReviewEvidence(summary)
         }.count
+        let reviewable = runSummaries.filter(WorkspaceRightRailAvailability.hasReviewEvidence).count
+        let checkCount = runSummaries.reduce(0) { partial, summary in
+            partial + summary.toolEventCount + summary.taskCount
+        }
+        let detail = runQueueDetail(
+            total: runSummaries.count,
+            ready: ready,
+            reviewable: reviewable,
+            checks: checkCount
+        )
 
         if attention > 0 {
             return (
                 "exclamationmark.triangle.fill",
                 "\(attention) Attention",
-                "\(runSummaries.count) recent runs",
+                detail,
                 LoomTheme.orange,
                 .diff
             )
@@ -1929,7 +1939,7 @@ struct WorkspaceStatusBar: View {
             return (
                 "point.3.connected.trianglepath.dotted",
                 "\(running) Running",
-                "\(runSummaries.count) recent runs",
+                detail,
                 LoomTheme.blue,
                 .timeline
             )
@@ -1938,7 +1948,7 @@ struct WorkspaceStatusBar: View {
             return (
                 "checkmark.seal.fill",
                 "\(ready) Ready",
-                "\(runSummaries.count) recent runs",
+                detail,
                 LoomTheme.green,
                 .diff
             )
@@ -1950,6 +1960,16 @@ struct WorkspaceStatusBar: View {
             LoomTheme.mutedText,
             .timeline
         )
+    }
+
+    private func runQueueDetail(total: Int, ready: Int, reviewable: Int, checks: Int) -> String {
+        let parts = [
+            ready > 0 ? "\(ready) ready" : nil,
+            checks > 0 ? "\(checks) checks" : nil,
+            reviewable > 0 ? "\(reviewable) reviewable" : nil,
+            "\(total) recent"
+        ].compactMap { $0 }
+        return parts.joined(separator: " · ")
     }
 
     private func normalizedPath(_ path: String) -> String {
