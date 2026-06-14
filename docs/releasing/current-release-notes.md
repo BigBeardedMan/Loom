@@ -1,5 +1,9 @@
 ## Changes
 
+- Testing Edition version metadata now moves to 9.0.12 across macOS, Windows/Tauri, and the bundled LM Studio helper.
+- The Hermes-style workroom shell is now more review-ready, with richer workflow context across the status bar, command center, adaptive rails, run history, preview actions, tool/model commands, and review evidence.
+- Windows Testing now catches up with the shell workflow through workspace folder controls, command recall, persisted chat transcripts, graph-ledger normalization, layout-envelope compatibility, and safer scoped terminal output reads.
+- Command reruns now stay disabled when no terminal target exists, avoiding dead rerun affordances in review and workflow surfaces.
 - Testing Edition version metadata now moves to 9.0.9 across macOS, Windows/Tauri, and the bundled LM Studio helper.
 - The Limits tab now opens instantly: it reads the dedicated fast limit sweep instead of waiting behind the full usage rebuild (which can take minutes on Year timeframes with large Codex histories), and it refreshes its meters the moment the tab opens.
 - Testing Edition version metadata now moves to 9.0.8 across macOS, Windows/Tauri, and the bundled LM Studio helper.
