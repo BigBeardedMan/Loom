@@ -1038,18 +1038,106 @@ struct WorkspaceRightRailView: View {
         var inChangedFiles = false
         for rawLine in reviewText.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            if line == "Changed files:" {
+            if isChangedFilesHeader(line) {
                 inChangedFiles = true
                 continue
             }
             guard inChangedFiles else { continue }
             if line.isEmpty { break }
-            guard line.hasPrefix("- ") else { break }
-            let path = String(line.dropFirst(2)).trimmingCharacters(in: .whitespacesAndNewlines)
-            if path.isEmpty || path.hasPrefix("…and") { continue }
+            if line.hasPrefix("```") { break }
+            if line.hasSuffix(":") && !line.hasPrefix("- ") && !line.hasPrefix("* ") { break }
+            guard let path = changedFilePath(from: line) else { break }
             paths.append(path)
         }
         return paths
+    }
+
+    private func isChangedFilesHeader(_ line: String) -> Bool {
+        let stripped = line
+            .trimmingCharacters(in: CharacterSet(charactersIn: "#*_` "))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+            .lowercased()
+        return [
+            "changed files",
+            "files changed",
+            "modified files",
+            "changed paths",
+            "touched files"
+        ].contains(stripped)
+    }
+
+    private func changedFilePath(from line: String) -> String? {
+        let body = changedFileLineBody(line)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return nil }
+        if body.hasPrefix("…and") || body.hasPrefix("...and") { return nil }
+        if let codePath = firstCodeSpan(in: body) {
+            return codePath
+        }
+        let cleaned = stripReviewFileStatus(body)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "`\"' "))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty, !cleaned.hasPrefix("…and"), !cleaned.hasPrefix("...and") else {
+            return nil
+        }
+        return cleaned
+    }
+
+    private func changedFileLineBody(_ line: String) -> String {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
+            return String(trimmed.dropFirst(2))
+        }
+        if let dot = trimmed.firstIndex(of: ".") {
+            let prefix = trimmed[..<dot]
+            let afterDot = trimmed.index(after: dot)
+            if !prefix.isEmpty,
+               prefix.allSatisfy(\.isNumber),
+               afterDot < trimmed.endIndex,
+               trimmed[afterDot].isWhitespace {
+                return String(trimmed[trimmed.index(after: afterDot)...])
+            }
+        }
+        return trimmed
+    }
+
+    private func firstCodeSpan(in text: String) -> String? {
+        guard let start = text.firstIndex(of: "`") else { return nil }
+        let rest = text[text.index(after: start)...]
+        guard let end = rest.firstIndex(of: "`") else { return nil }
+        let value = rest[..<end].trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : String(value)
+    }
+
+    private func stripReviewFileStatus(_ text: String) -> String {
+        let statusPrefixes = ["modified:", "added:", "removed:", "deleted:", "renamed:", "created:"]
+        let lower = text.lowercased()
+        for prefix in statusPrefixes where lower.hasPrefix(prefix) {
+            return reviewFilePathCandidate(String(text.dropFirst(prefix.count)))
+        }
+        let parts = text.split(maxSplits: 1, omittingEmptySubsequences: true, whereSeparator: \.isWhitespace)
+        if parts.count == 2,
+           isGitReviewStatusToken(parts[0]) {
+            return reviewFilePathCandidate(String(parts[1]))
+        }
+        return text
+    }
+
+    private func isGitReviewStatusToken(_ token: Substring) -> Bool {
+        if token.hasPrefix("R"), token.dropFirst().allSatisfy(\.isNumber) {
+            return true
+        }
+        let allowed = CharacterSet(charactersIn: "MADRCU?!")
+        return token.count <= 2 && token.unicodeScalars.allSatisfy { allowed.contains($0) }
+    }
+
+    private func reviewFilePathCandidate(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let arrowRange = trimmed.range(of: " -> ") {
+            return String(trimmed[arrowRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return trimmed
     }
 
     private func normalizedPath(_ path: String) -> String {

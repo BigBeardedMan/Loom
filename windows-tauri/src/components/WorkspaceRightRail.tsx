@@ -1127,18 +1127,65 @@ function changedFilesInReviewText(textValue: string): string[] {
   let inChangedFiles = false;
   for (const rawLine of textValue.split("\n")) {
     const line = rawLine.trim();
-    if (line === "Changed files:") {
+    if (isChangedFilesHeader(line)) {
       inChangedFiles = true;
       continue;
     }
     if (!inChangedFiles) continue;
     if (!line) break;
-    if (!line.startsWith("- ")) break;
-    const path = line.slice(2).trim();
-    if (!path || path.startsWith("…and")) continue;
+    if (line.startsWith("```")) break;
+    if (line.endsWith(":") && !line.startsWith("- ") && !line.startsWith("* ")) break;
+    const path = changedFilePath(line);
+    if (!path) break;
     files.push(path);
   }
   return files;
+}
+
+function isChangedFilesHeader(line: string): boolean {
+  const stripped = line.replace(/^[#*_`\s]+|[:*_`\s]+$/g, "").trim().toLowerCase();
+  return ["changed files", "files changed", "modified files", "changed paths", "touched files"].includes(stripped);
+}
+
+function changedFilePath(line: string): string | null {
+  const body = changedFileLineBody(line).trim();
+  if (!body || body.startsWith("…and") || body.startsWith("...and")) return null;
+  const codePath = firstCodeSpan(body);
+  if (codePath) return codePath;
+  const cleaned = stripReviewFileStatus(body).replace(/^[`"'\s]+|[`"'\s]+$/g, "").trim();
+  if (!cleaned || cleaned.startsWith("…and") || cleaned.startsWith("...and")) return null;
+  return cleaned;
+}
+
+function changedFileLineBody(line: string): string {
+  const trimmed = line.trim();
+  if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) return trimmed.slice(2);
+  return trimmed.replace(/^\d+\.\s+/, "");
+}
+
+function firstCodeSpan(textValue: string): string | null {
+  const match = textValue.match(/`([^`]+)`/);
+  return match?.[1]?.trim() || null;
+}
+
+function stripReviewFileStatus(textValue: string): string {
+  const statusPrefix = textValue.match(/^(modified|added|removed|deleted|renamed|created):\s*(.+)$/i);
+  if (statusPrefix?.[2]) return reviewFilePathCandidate(statusPrefix[2]);
+  const parts = textValue.trim().split(/\s+/, 2);
+  if (parts.length === 2 && isGitReviewStatusToken(parts[0])) {
+    return reviewFilePathCandidate(textValue.trim().slice(parts[0].length));
+  }
+  return textValue;
+}
+
+function isGitReviewStatusToken(token: string): boolean {
+  return /^R\d*$/.test(token) || (/^[MADRCU?!]{1,2}$/.test(token) && token.length <= 2);
+}
+
+function reviewFilePathCandidate(textValue: string): string {
+  const trimmed = textValue.trim();
+  const arrowIndex = trimmed.indexOf(" -> ");
+  return arrowIndex >= 0 ? trimmed.slice(arrowIndex + 4).trim() : trimmed;
 }
 
 function reviewPathBaseName(path: string): string {
