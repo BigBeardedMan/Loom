@@ -578,8 +578,11 @@ struct WorkspaceView: View {
     }
 
     private func openInspector(_ tab: WorkspaceRightRailTab) {
-        let target = availableInspectorTabs.contains(tab) ? tab : (availableInspectorTabs.first ?? .details)
-        rightRailTabRaw = target.rawValue
+        // Store the requested tab even if the current room cannot show it yet.
+        // Workflow commands switch rooms and open the rail in quick succession;
+        // clamping here would preserve the old room's fallback tab instead of
+        // letting the destination room resolve the requested inspector.
+        rightRailTabRaw = tab.rawValue
         if !isRightRailVisible {
             withAnimation(.easeInOut(duration: 0.18)) {
                 isRightRailVisible = true

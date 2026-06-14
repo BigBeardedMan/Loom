@@ -46,6 +46,9 @@ struct KanbanPaneView: View {
         .task(id: normalizedWorkspacePath ?? "all") {
             await refreshRunHistory()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .loomRefreshRuns)) { _ in
+            Task { await refreshRunHistory() }
+        }
         .confirmationDialog(
             "Clear all task data?",
             isPresented: $confirmClearAll,

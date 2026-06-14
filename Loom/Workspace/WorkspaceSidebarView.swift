@@ -56,6 +56,9 @@ struct WorkspaceSidebarView: View {
         .task(id: reviewRunsTaskKey) {
             await refreshReviewRuns()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .loomRefreshRuns)) { _ in
+            Task { await refreshReviewRuns() }
+        }
         .onChange(of: workspaces.map(\.id)) { _, _ in
             ensureSelection()
         }
@@ -851,7 +854,10 @@ struct WorkspaceSidebarView: View {
             return
         }
         let summaries = (try? await AgentGraphLedger.shared.summaries()) ?? []
-        reviewRunSummaries = scopedReviewSummaries(summaries)
+        let scoped = scopedReviewSummaries(summaries)
+        reviewRunSummaries = selectedKind == .review
+            ? scoped.filter(WorkspaceRightRailAvailability.hasReviewEvidence)
+            : scoped
     }
 
     private func scopedReviewSummaries(_ summaries: [AgentGraphRunSummary]) -> [AgentGraphRunSummary] {
