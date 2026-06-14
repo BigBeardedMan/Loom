@@ -573,7 +573,7 @@ function MemoryContent({ memoryFiles, runs }: { memoryFiles: MemoryFile[]; runs:
         ) : (
           memoryFiles.map((file) => (
             <section key={file.id} style={sectionBox}>
-              <RailRow icon="brain" color={workspaceColorVar.purple} title={file.name} detail={file.path} />
+              <RailRow icon="brain" color={workspaceColorVar.purple} title={file.name} detail={file.relativePath} />
               <p style={{ marginTop: 6, fontSize: 10, lineHeight: 1.45, color: text.muted }}>
                 {file.excerpt}
               </p>

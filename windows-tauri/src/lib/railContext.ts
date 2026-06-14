@@ -2,15 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { railTabsForContext } from "./commands";
 import { LOOM_REFRESH_RUNS } from "./events";
 import { ipc, type AgentGraphRunSummary, type LiveAgentTaskGroup, type Workspace } from "./ipc";
+import { loadWorkspaceMemoryFiles, type MemoryFile } from "./projectMemory";
 import type { Block } from "../modules/workspace/LayoutPersistence";
 
-export type MemoryFile = {
-  id: string;
-  name: string;
-  path: string;
-  excerpt: string;
-  characterCount: number;
-};
+export type { MemoryFile } from "./projectMemory";
 
 export function useRightRailContext(workspace: Workspace | null, blocks: Pick<Block, "kind">[]) {
   const [runs, setRuns] = useState<AgentGraphRunSummary[]>([]);
@@ -30,7 +25,7 @@ export function useRightRailContext(workspace: Workspace | null, blocks: Pick<Bl
 
   useEffect(() => {
     let active = true;
-    loadMemoryFiles(workspace).then((files) => {
+    loadWorkspaceMemoryFiles(workspace).then((files) => {
       if (active) setMemoryFiles(files);
     });
     return () => {
@@ -68,36 +63,6 @@ export function filterLiveGroupsForWorkspace(liveGroups: LiveAgentTaskGroup[], w
   });
 }
 
-async function loadMemoryFiles(workspace: Workspace | null): Promise<MemoryFile[]> {
-  if (!workspace?.folderPath) return [];
-  const names = ["CLAUDE.md", "AGENTS.md", "GUIDE.md", "README.md"];
-  const files = await Promise.all(
-    names.map(async (name) => {
-      const path = joinPath(workspace.folderPath, name);
-      try {
-        const raw = await ipc.fs.read(path);
-        const trimmed = raw.trim();
-        if (!trimmed) return null;
-        return {
-          id: path,
-          name,
-          path,
-          characterCount: trimmed.length,
-          excerpt: trimmed.length > 420 ? `${trimmed.slice(0, 420)}...` : trimmed,
-        };
-      } catch {
-        return null;
-      }
-    })
-  );
-  return files.filter((file): file is MemoryFile => Boolean(file));
-}
-
 function normalizedWorkspacePath(path?: string | null): string {
   return path?.trim().replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase() ?? "";
-}
-
-function joinPath(root: string, name: string): string {
-  const sep = root.includes("\\") ? "\\" : "/";
-  return `${root.replace(/[\\/]+$/, "")}${sep}${name}`;
 }

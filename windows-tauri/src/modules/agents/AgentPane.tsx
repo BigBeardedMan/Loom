@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Icons } from "../../lib/icons";
 import { LOOM_ENDPOINTS_CHANGED } from "../../lib/events";
+import { formatWorkspaceMemoryForPrompt } from "../../lib/projectMemory";
 import { useApp } from "../../lib/store";
 import {
   ipc,
@@ -70,7 +71,6 @@ const VENDORS: { value: Vendor; label: string }[] = [
 ];
 
 const LOCAL_HTTP_VENDORS = new Set<Vendor>(["ollama", "lmstudio", "openai-compat"]);
-const MEMORY_CANDIDATES = ["CLAUDE.md", "AGENTS.md", "GUIDE.md", "README.md"];
 const MAX_MEMORY_FILE_CHARS = 1800;
 const MAX_MEMORY_TOTAL_CHARS = 5000;
 
@@ -1278,25 +1278,10 @@ async function buildWorkspacePrompt(workspace: Workspace): Promise<WorkspaceProm
 
 async function loadProjectMemory(workspace: Workspace): Promise<string> {
   if (!workspace.folderPath) return "";
-  const sections: string[] = [];
-  let totalLength = 0;
-  for (const name of MEMORY_CANDIDATES) {
-    const path = joinWorkspacePath(workspace.folderPath, name);
-    try {
-      const raw = await ipc.fs.read(path);
-      const trimmed = raw.trim();
-      if (!trimmed) continue;
-      const body = truncateText(trimmed, MAX_MEMORY_FILE_CHARS);
-      const section = `## ${name}\n\n${body}`;
-      sections.push(section);
-      totalLength += section.length;
-      if (totalLength >= MAX_MEMORY_TOTAL_CHARS) break;
-    } catch {
-      // Missing memory files are expected.
-    }
-  }
-  const joined = sections.join("\n\n");
-  return truncateText(joined, MAX_MEMORY_TOTAL_CHARS, "\n\n...(truncated)");
+  return formatWorkspaceMemoryForPrompt(workspace, {
+    maxPerFileChars: MAX_MEMORY_FILE_CHARS,
+    maxTotalChars: MAX_MEMORY_TOTAL_CHARS,
+  });
 }
 
 function workspaceRoleInstruction(workspace: Workspace): string {
@@ -1347,15 +1332,6 @@ function workspaceKindLabel(kind: Workspace["kindRaw"]): string {
     default:
       return kind;
   }
-}
-
-function joinWorkspacePath(root: string, name: string): string {
-  const sep = root.includes("\\") ? "\\" : "/";
-  return `${root.replace(/[\\/]+$/, "")}${sep}${name}`;
-}
-
-function truncateText(textValue: string, max: number, suffix = "..."): string {
-  return textValue.length > max ? `${textValue.slice(0, max)}${suffix}` : textValue;
 }
 
 function buildChatMessages(turns: Turn[], prompt: string): ChatApiMessage[] {

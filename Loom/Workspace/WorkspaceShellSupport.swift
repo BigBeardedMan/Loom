@@ -794,7 +794,7 @@ struct WorkspaceRightRailView: View {
             } else {
                 ForEach(memoryFiles) { file in
                     VStack(alignment: .leading, spacing: 5) {
-                        railRow(icon: "brain.head.profile", tint: LoomTheme.purple, title: file.name, detail: file.path)
+                        railRow(icon: "brain.head.profile", tint: LoomTheme.purple, title: file.name, detail: file.relativePath)
                         Text(file.excerpt)
                             .font(.system(size: 10))
                             .foregroundStyle(LoomTheme.mutedText)
@@ -1242,10 +1242,10 @@ struct WorkspaceRightRailView: View {
             railActionButton(title: "Copy", systemImage: "doc.on.doc", help: "Copy memory file path") {
                 copyPath(file.path)
             }
-            railActionButton(title: "Open", systemImage: "doc.text", help: "Open \(file.name)") {
+            railActionButton(title: "Open", systemImage: "doc.text", help: "Open \(file.relativePath)") {
                 openPath(file.path)
             }
-            railActionButton(title: "Reveal", systemImage: "folder", help: "Reveal \(file.name) in Finder") {
+            railActionButton(title: "Reveal", systemImage: "folder", help: "Reveal \(file.relativePath) in Finder") {
                 revealPath(file.path)
             }
         }
@@ -2302,39 +2302,20 @@ struct WorkspaceStatusBar: View {
 struct WorkspaceMemoryFile: Identifiable, Hashable {
     let id: String
     let name: String
+    let relativePath: String
     let path: String
     let excerpt: String
     let characterCount: Int
 
     static func load(from folderPath: String?) -> [WorkspaceMemoryFile] {
-        guard let folderPath, !folderPath.isEmpty else { return [] }
-        let root = URL(fileURLWithPath: folderPath)
-        let names = ["CLAUDE.md", "AGENTS.md", "GUIDE.md", "README.md"]
-        return names.compactMap { name in
-            let url = root.appendingPathComponent(name)
-            guard FileManager.default.fileExists(atPath: url.path),
-                  let handle = try? FileHandle(forReadingFrom: url) else {
-                return nil
-            }
-            defer { try? handle.close() }
-            let data = (try? handle.read(upToCount: 2048)) ?? Data()
-            let raw = String(decoding: data, as: UTF8.self)
-            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return nil }
-            let excerpt: String
-            if trimmed.count > 420 {
-                let end = trimmed.index(trimmed.startIndex, offsetBy: 420)
-                excerpt = String(trimmed[..<end]) + "..."
-            } else {
-                excerpt = trimmed
-            }
-            let fileSize = ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? NSNumber)?.intValue
+        ProjectMemoryDiscovery.discover(in: folderPath).map { document in
             return WorkspaceMemoryFile(
-                id: url.path,
-                name: name,
-                path: url.path,
-                excerpt: excerpt,
-                characterCount: fileSize ?? trimmed.count
+                id: document.url.path,
+                name: document.name,
+                relativePath: document.relativePath,
+                path: document.url.path,
+                excerpt: document.excerpt,
+                characterCount: document.characterCount
             )
         }
     }

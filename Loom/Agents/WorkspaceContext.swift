@@ -90,9 +90,9 @@ final class WorkspaceContext {
     }
 
     /// Capture the current state for prompt composition. Reads project memory
-    /// (CLAUDE.md / AGENTS.md / GUIDE.md / README.md) from the workspace
-    /// folder on demand so the agent can ground its reply in the project the
-    /// user is sitting in.
+    /// (CLAUDE.md / AGENTS.md / GUIDE.md / README.md, root first and then
+    /// shallow project docs) from the workspace folder on demand so the agent
+    /// can ground its reply in the project the user is sitting in.
     func snapshot() -> Snapshot {
         let body = readActiveTabBody?() ?? ""
         let siblings = readSiblingTabs?() ?? []
@@ -108,43 +108,8 @@ final class WorkspaceContext {
         )
     }
 
-    /// Files we look at — in priority order — when searching for project
-    /// memory inside a workspace's folder. CLAUDE.md / AGENTS.md are the
-    /// agent-targeted memories; GUIDE.md / README.md are the human ones.
-    private static let memoryCandidates = ["CLAUDE.md", "AGENTS.md", "GUIDE.md", "README.md"]
-    private static let maxPerFileChars = 1800
-    private static let maxTotalChars = 5000
-
     private static func loadProjectMemory(from folderPath: String) -> String? {
         guard !folderPath.isEmpty else { return nil }
-        let folder = URL(fileURLWithPath: folderPath)
-        let fm = FileManager.default
-        var sections: [String] = []
-        var totalLen = 0
-        for name in memoryCandidates {
-            let url = folder.appendingPathComponent(name)
-            guard fm.fileExists(atPath: url.path) else { continue }
-            guard let raw = try? String(contentsOf: url, encoding: .utf8) else { continue }
-            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { continue }
-            let body = truncate(trimmed, max: maxPerFileChars)
-            let section = "## \(name)\n\n\(body)"
-            sections.append(section)
-            totalLen += section.count
-            if totalLen >= maxTotalChars { break }
-        }
-        guard !sections.isEmpty else { return nil }
-        var joined = sections.joined(separator: "\n\n")
-        if joined.count > maxTotalChars {
-            let cap = joined.index(joined.startIndex, offsetBy: maxTotalChars)
-            joined = String(joined[..<cap]) + "\n\n…(truncated)"
-        }
-        return joined
-    }
-
-    private static func truncate(_ text: String, max: Int) -> String {
-        guard text.count > max else { return text }
-        let cap = text.index(text.startIndex, offsetBy: max)
-        return String(text[..<cap]) + "…"
+        return ProjectMemoryDiscovery.promptMemory(from: folderPath)
     }
 }
