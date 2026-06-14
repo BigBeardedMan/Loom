@@ -79,7 +79,11 @@ targets:
     preBuildScripts:
       - name: Sweep iCloud shadow duplicates
         script: |
-          /usr/bin/find "$SRCROOT/Loom" \( -name "* 2.*" -o -name "* 3.*" \) -delete 2>/dev/null || true
+          if [ -x "$SRCROOT/bin/sweep-icloud-shadows.sh" ]; then
+            "$SRCROOT/bin/sweep-icloud-shadows.sh" "$SRCROOT" --quiet || true
+          else
+            /usr/bin/find "$SRCROOT/Loom" \( -name "* 2.*" -o -name "* 3.*" \) -delete 2>/dev/null || true
+          fi
         runOnlyWhenInstalling: false
         basedOnDependencyAnalysis: false
     postBuildScripts:

@@ -111,6 +111,11 @@ fi
 
 cd "$PROJECT_ROOT"
 
+if [[ -x "${PROJECT_ROOT}/bin/sweep-icloud-shadows.sh" ]]; then
+  echo "==> sweep iCloud shadow duplicates"
+  "${PROJECT_ROOT}/bin/sweep-icloud-shadows.sh" "$PROJECT_ROOT" --quiet
+fi
+
 # Release signing is intentionally not committed to the repo. Prefer explicit
 # env vars for CI/manual overrides, then Keychain, then the local bootstrap
 # files used on this Mac. Never print secret values.

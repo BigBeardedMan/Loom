@@ -6,6 +6,7 @@ DerivedData/
 .swiftpm/
 .loom/
 Loom.xcodeproj/
+Loom [0-9]*.xcodeproj/
 LoomTestingEdition.xcodeproj/
 LoomTestingEdition [0-9]*.xcodeproj/
 *.xcworkspace/xcuserdata/

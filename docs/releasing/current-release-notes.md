@@ -1,5 +1,6 @@
 ## Changes
 
+- Testing release hygiene now sweeps Finder/iCloud duplicate Xcode project bundles at the repo root before Testing Edition release packaging.
 - Testing Edition version metadata now moves to 9.0.12 across macOS, Windows/Tauri, and the bundled LM Studio helper.
 - The Hermes-style workroom shell is now more review-ready, with richer workflow context across the status bar, command center, adaptive rails, run history, preview actions, tool/model commands, and review evidence.
 - Windows Testing now catches up with the shell workflow through workspace folder controls, command recall, persisted chat transcripts, graph-ledger normalization, layout-envelope compatibility, and safer scoped terminal output reads.
