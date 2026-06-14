@@ -480,7 +480,7 @@ function WorkspaceRow({
         background: selected
           ? "color-mix(in srgb, " + color + ", transparent 84%)"
           : "transparent",
-        border: `1px solid ${selected ? "color-mix(in srgb, " + color + ", transparent 55%)" : "transparent"}`,
+        border: "1px solid transparent",
         color: selected ? text.primary : text.muted,
       }}
       title={workspace.folderPath || workspace.name}
@@ -566,8 +566,10 @@ function RunSummaryRow({
       style={{
         padding: "7px 9px",
         borderRadius: radius.row,
-        background: "color-mix(in srgb, " + surface.softPanel + ", transparent 58%)",
-        border: `1px solid ${review && dirty ? "color-mix(in srgb, var(--color-ws-orange) 45%, transparent)" : surface.hairline}`,
+        background: review && dirty
+          ? "color-mix(in srgb, var(--color-ws-orange) 10%, transparent)"
+          : "color-mix(in srgb, " + surface.softPanel + ", transparent 72%)",
+        border: `1px solid ${review && dirty ? "color-mix(in srgb, var(--color-ws-orange) 35%, transparent)" : "transparent"}`,
       }}
       title={run.ledgerPath}
     >
@@ -630,8 +632,8 @@ function UsageRow({
         borderRadius: radius.row,
         background: selected
           ? "color-mix(in srgb, " + color + ", transparent 84%)"
-          : "color-mix(in srgb, " + surface.softPanel + ", transparent 62%)",
-        border: `1px solid ${selected ? "color-mix(in srgb, " + color + ", transparent 52%)" : surface.hairline}`,
+          : "transparent",
+        border: "1px solid transparent",
         color: text.primary,
       }}
       title={`Open ${toolLabel(tool)}`}
@@ -690,8 +692,8 @@ function TerminalBlockRow({
       style={{
         padding: "6px 9px",
         borderRadius: radius.row,
-        background: "color-mix(in srgb, " + surface.softPanel + ", transparent 58%)",
-        border: `1px solid ${surface.hairline}`,
+        background: "color-mix(in srgb, " + surface.softPanel + ", transparent 72%)",
+        border: "1px solid transparent",
       }}
       onDoubleClick={onRenameStart}
       title="Double-click to rename"
@@ -757,8 +759,8 @@ function IdeaRow({ note, onDeleted }: { note: IdeaNote; onDeleted: () => void })
       style={{
         padding: "6px 9px",
         borderRadius: radius.row,
-        background: "color-mix(in srgb, " + surface.softPanel + ", transparent 58%)",
-        border: `1px solid ${surface.hairline}`,
+        background: "color-mix(in srgb, " + surface.softPanel + ", transparent 72%)",
+        border: "1px solid transparent",
       }}
     >
       <Icons.lightbulb size={12} strokeWidth={2.2} color="var(--color-ws-pink)" />
@@ -821,8 +823,8 @@ function TranscriptRow({
       style={{
         padding: "6px 9px",
         borderRadius: radius.row,
-        background: "color-mix(in srgb, " + surface.softPanel + ", transparent 58%)",
-        border: `1px solid ${surface.hairline}`,
+        background: "color-mix(in srgb, " + surface.softPanel + ", transparent 72%)",
+        border: "1px solid transparent",
         cursor: "pointer",
       }}
     >

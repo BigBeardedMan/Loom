@@ -1,5 +1,8 @@
 ## Changes
 
+- Testing Edition shell chrome is substantially quieter on macOS and Windows, with flatter room/sidebar/right/status rails, a calmer top bar, fewer inactive pills, and lighter pane shadows.
+- Runs and Review workflow context now appears only when useful instead of occupying every right-rail tab.
+- Testing Edition version metadata now moves to 9.0.15 across macOS, Windows/Tauri, and the bundled LM Studio helper.
 - Workspace docs now describe the four-room Testing Edition shell, including the Runs workspace, chat-only panes, adaptive right rail, and the visible Runs pane naming.
 - The macOS and Windows top-bar update pill now says **Update Available**, matching the status bar and the Testing Edition updater docs.
 - Read-only project memory now includes shallow workspace docs on macOS and Windows, so files like `docs/GUIDE.md` or package-level `README.md` can appear in the Memory rail and agent context without scanning dependency folders.

@@ -5,9 +5,9 @@ import SwiftUI
 /// is "first-class" — set Appearance in Settings to System, Light, or Dark.
 /// Accent colors stay constant since the brand reads on either background.
 enum LoomTheme {
-    static let panelRadius: CGFloat = 12
-    static let rowRadius: CGFloat = 8
-    static let controlRadius: CGFloat = 7
+    static let panelRadius: CGFloat = 8
+    static let rowRadius: CGFloat = 6
+    static let controlRadius: CGFloat = 6
 
     static var background: LinearGradient {
         LinearGradient(
@@ -27,29 +27,29 @@ enum LoomTheme {
     )
 
     static let panel = adaptive(
-        light: Color(red: 0.99, green: 0.99, blue: 1.0).opacity(0.96),
-        dark:  Color(red: 0.055, green: 0.06, blue: 0.07).opacity(0.92)
+        light: Color(red: 0.992, green: 0.993, blue: 0.996).opacity(0.94),
+        dark:  Color(red: 0.045, green: 0.049, blue: 0.056).opacity(0.9)
     )
 
     static let chrome = adaptive(
-        light: Color(red: 0.98, green: 0.985, blue: 0.995).opacity(0.88),
-        dark:  Color(red: 0.048, green: 0.052, blue: 0.06).opacity(0.9)
+        light: Color(red: 0.972, green: 0.976, blue: 0.986).opacity(0.74),
+        dark:  Color(red: 0.038, green: 0.042, blue: 0.049).opacity(0.72)
     )
 
     static let softPanel = adaptive(
-        light: Color(red: 0.95, green: 0.95, blue: 0.97).opacity(0.94),
-        dark:  Color(red: 0.085, green: 0.09, blue: 0.105).opacity(0.9)
+        light: Color(red: 0.943, green: 0.948, blue: 0.96).opacity(0.68),
+        dark:  Color(red: 0.082, green: 0.087, blue: 0.1).opacity(0.62)
     )
 
     /// Slightly darker than `panel` — used for headers and inset content.
     static let inset = adaptive(
-        light: Color(red: 0.93, green: 0.94, blue: 0.96).opacity(0.6),
-        dark:  Color.black.opacity(0.18)
+        light: Color(red: 0.93, green: 0.938, blue: 0.952).opacity(0.44),
+        dark:  Color.black.opacity(0.13)
     )
 
     static let hairline = adaptive(
-        light: Color.black.opacity(0.10),
-        dark:  Color.white.opacity(0.12)
+        light: Color.black.opacity(0.085),
+        dark:  Color.white.opacity(0.095)
     )
 
     static let primaryText = adaptive(
@@ -72,18 +72,18 @@ enum LoomTheme {
     static let terminalSurface = Color(red: 0.018, green: 0.022, blue: 0.026)
 
     static let shellRail = adaptive(
-        light: Color(red: 0.955, green: 0.96, blue: 0.975).opacity(0.92),
-        dark:  Color(red: 0.035, green: 0.04, blue: 0.05).opacity(0.92)
+        light: Color(red: 0.948, green: 0.954, blue: 0.968).opacity(0.64),
+        dark:  Color(red: 0.03, green: 0.034, blue: 0.042).opacity(0.64)
     )
 
     static let shellInspector = adaptive(
-        light: Color(red: 0.975, green: 0.98, blue: 0.99).opacity(0.95),
-        dark:  Color(red: 0.048, green: 0.052, blue: 0.062).opacity(0.94)
+        light: Color(red: 0.972, green: 0.977, blue: 0.988).opacity(0.7),
+        dark:  Color(red: 0.041, green: 0.045, blue: 0.054).opacity(0.7)
     )
 
     static let shellStatus = adaptive(
-        light: Color(red: 0.94, green: 0.95, blue: 0.97).opacity(0.84),
-        dark:  Color.black.opacity(0.22)
+        light: Color(red: 0.94, green: 0.95, blue: 0.97).opacity(0.42),
+        dark:  Color.black.opacity(0.12)
     )
 
     // Brand accents — constant across modes.
@@ -96,7 +96,7 @@ enum LoomTheme {
     static let yellow = Color(red: 0.96, green: 0.77, blue: 0.20)
 
     static func panelShadow(active: Bool = false) -> Color {
-        .black.opacity(active ? 0.34 : 0.18)
+        .black.opacity(active ? 0.26 : 0.08)
     }
 
     static func sectionLabel(_ title: String) -> some View {
@@ -168,10 +168,10 @@ struct LoomIconButton: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(isActive ? .white : tint)
                 .frame(width: 26, height: 24)
-                .background(isActive ? tint : LoomTheme.softPanel.opacity(0.72))
+                .background(isActive ? tint : Color.clear)
                 .overlay(
                     RoundedRectangle(cornerRadius: LoomTheme.controlRadius)
-                        .stroke(isActive ? tint.opacity(0.6) : LoomTheme.hairline, lineWidth: 1)
+                        .stroke(isActive ? tint.opacity(0.5) : Color.clear, lineWidth: 1)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: LoomTheme.controlRadius))
         }

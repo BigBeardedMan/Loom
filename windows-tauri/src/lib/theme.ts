@@ -36,9 +36,9 @@ export const surface = {
   terminal: "var(--color-loom-terminal)",
   bgFrom: "var(--color-loom-bg-from)",
   bgTo: "var(--color-loom-bg-to)",
-  shellRail: "color-mix(in srgb, var(--color-loom-bg-from) 78%, var(--color-loom-panel))",
-  shellInspector: "color-mix(in srgb, var(--color-loom-panel) 92%, var(--color-loom-bg-from))",
-  shellStatus: "color-mix(in srgb, var(--color-loom-inset) 82%, transparent)",
+  shellRail: "color-mix(in srgb, var(--color-loom-bg-from) 86%, var(--color-loom-panel))",
+  shellInspector: "color-mix(in srgb, var(--color-loom-panel) 70%, var(--color-loom-bg-from))",
+  shellStatus: "color-mix(in srgb, var(--color-loom-inset) 58%, transparent)",
 };
 
 export const text = {
@@ -48,9 +48,9 @@ export const text = {
 };
 
 export const radius = {
-  panel: 12,
-  row: 8,
-  control: 7,
+  panel: 8,
+  row: 6,
+  control: 6,
 };
 
 export const shadow = {
@@ -79,8 +79,8 @@ export const workspaceDot = {
 };
 
 export const cockpit = {
-  gap: 12,
-  outerPadding: 12,
+  gap: 10,
+  outerPadding: 8,
   minBlockWidth: 140,
   minBlockHeight: 160,
   roomRailWidth: 62,
@@ -89,7 +89,7 @@ export const cockpit = {
 
 export const topbar = {
   height: 38,
-  gap: 10,
+  gap: 8,
 };
 
 export const modal = {

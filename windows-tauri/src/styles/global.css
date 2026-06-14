@@ -6,10 +6,10 @@
 
   --color-loom-bg-from: #050607;
   --color-loom-bg-to: #090a0b;
-  --color-loom-panel: rgba(14, 15, 18, 0.92);
-  --color-loom-soft-panel: rgba(22, 25, 32, 0.9);
-  --color-loom-inset: rgba(0, 0, 0, 0.18);
-  --color-loom-hairline: rgba(255, 255, 255, 0.12);
+  --color-loom-panel: rgba(12, 13, 16, 0.9);
+  --color-loom-soft-panel: rgba(22, 25, 32, 0.62);
+  --color-loom-inset: rgba(0, 0, 0, 0.13);
+  --color-loom-hairline: rgba(255, 255, 255, 0.095);
   --color-loom-terminal: #04050a;
   --color-loom-text: rgba(255, 255, 255, 0.94);
   --color-loom-text-muted: rgba(255, 255, 255, 0.55);
@@ -23,12 +23,12 @@
   --color-ws-purple: #9e66f2;
   --color-loom-accent: var(--color-ws-blue);
 
-  --radius-panel: 12px;
-  --radius-row: 8px;
-  --radius-control: 7px;
+  --radius-panel: 8px;
+  --radius-row: 6px;
+  --radius-control: 6px;
 
-  --shadow-panel: 0 10px 22px rgba(0, 0, 0, 0.30);
-  --shadow-panel-drag: 0 18px 34px rgba(0, 0, 0, 0.55);
+  --shadow-panel: 0 5px 12px rgba(0, 0, 0, 0.18);
+  --shadow-panel-drag: 0 14px 28px rgba(0, 0, 0, 0.42);
   --shadow-pill: 0 4px 10px rgba(59, 219, 117, 0.44);
 
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Segoe UI Variable",
@@ -40,10 +40,10 @@
 :root[data-theme="light"] {
   --color-loom-bg-from: #f7f7fa;
   --color-loom-bg-to: #edf0f5;
-  --color-loom-panel: rgba(252, 252, 255, 0.96);
-  --color-loom-soft-panel: rgba(242, 242, 248, 0.94);
-  --color-loom-inset: rgba(237, 240, 245, 0.6);
-  --color-loom-hairline: rgba(0, 0, 0, 0.1);
+  --color-loom-panel: rgba(253, 253, 255, 0.94);
+  --color-loom-soft-panel: rgba(240, 242, 246, 0.68);
+  --color-loom-inset: rgba(237, 240, 245, 0.44);
+  --color-loom-hairline: rgba(0, 0, 0, 0.085);
   --color-loom-terminal: #04050a;
   --color-loom-text: rgba(0, 0, 0, 0.92);
   --color-loom-text-muted: rgba(0, 0, 0, 0.55);

@@ -152,14 +152,10 @@ struct WorkspaceRoomRailView: View {
                 action: openSettings
             )
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, 8)
         .frame(maxHeight: .infinity)
-        .background(LoomTheme.shellRail)
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(LoomTheme.hairline, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .background(LoomTheme.shellRail.opacity(0.6))
+        .overlay(Rectangle().fill(LoomTheme.hairline.opacity(0.65)).frame(width: 1), alignment: .trailing)
     }
 
     private func roomButton(_ workspace: Workspace) -> some View {
@@ -172,29 +168,29 @@ struct WorkspaceRoomRailView: View {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: workspace.kind.systemImage)
                         .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(selected ? .white : workspace.color.color)
+                        .foregroundStyle(selected ? workspace.color.color : LoomTheme.mutedText)
                         .frame(width: 34, height: 28)
-                        .background(selected ? workspace.color.color : workspace.color.color.opacity(0.12))
+                        .background(selected ? workspace.color.color.opacity(0.12) : Color.clear)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                     if hasFolder {
                         Image(systemName: "folder.fill")
                             .font(.system(size: 7, weight: .bold))
-                            .foregroundStyle(selected ? workspace.color.color : LoomTheme.primaryText)
+                            .foregroundStyle(selected ? workspace.color.color : LoomTheme.tertiaryText)
                             .frame(width: 13, height: 13)
-                            .background(selected ? .white : workspace.color.color)
+                            .background(selected ? LoomTheme.panel : workspace.color.color.opacity(0.18))
                             .clipShape(Circle())
                             .offset(x: 5, y: -5)
                     }
                 }
                 Text(workspace.kind.label)
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(selected ? LoomTheme.primaryText : LoomTheme.mutedText)
+                    .foregroundStyle(selected ? LoomTheme.primaryText : LoomTheme.tertiaryText)
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
             }
             .frame(width: 52)
             .padding(.vertical, 5)
-            .background(selected ? LoomTheme.softPanel.opacity(0.75) : Color.clear)
+            .background(selected ? LoomTheme.softPanel.opacity(0.42) : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
@@ -270,9 +266,9 @@ struct WorkspaceRoomRailView: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(isActive ? .white : LoomTheme.mutedText)
+                .foregroundStyle(isActive ? LoomTheme.blue : LoomTheme.mutedText)
                 .frame(width: 34, height: 30)
-                .background(isActive ? LoomTheme.blue : LoomTheme.softPanel.opacity(0.58))
+                .background(isActive ? LoomTheme.blue.opacity(0.12) : Color.clear)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
@@ -302,15 +298,11 @@ struct WorkspaceRightRailView: View {
         VStack(spacing: 0) {
             header
             tabStrip
-            Divider().overlay(LoomTheme.hairline)
+            Divider().overlay(LoomTheme.hairline.opacity(0.7))
             content
         }
         .background(LoomTheme.shellInspector)
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(LoomTheme.hairline, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(Rectangle().fill(LoomTheme.hairline.opacity(0.65)).frame(width: 1), alignment: .leading)
         .task(id: refreshKey) {
             await refreshRailData()
         }
@@ -366,10 +358,7 @@ struct WorkspaceRightRailView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 9) {
-            Image(systemName: "rectangle.3.group.bubble.left")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(workspace?.color.color ?? LoomTheme.blue)
+        HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(workspace?.kind.label ?? "Inspector")
                     .font(.system(size: 12, weight: .semibold))
@@ -405,9 +394,9 @@ struct WorkspaceRightRailView: View {
                     } label: {
                         Image(systemName: tab.systemImage)
                             .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(effectiveTab == tab ? .white : LoomTheme.mutedText)
+                            .foregroundStyle(effectiveTab == tab ? LoomTheme.blue : LoomTheme.mutedText)
                             .frame(width: 26, height: 24)
-                            .background(effectiveTab == tab ? LoomTheme.blue : LoomTheme.softPanel.opacity(0.5))
+                            .background(effectiveTab == tab ? LoomTheme.blue.opacity(0.12) : Color.clear)
                             .clipShape(RoundedRectangle(cornerRadius: 7))
                     }
                     .buttonStyle(.plain)
@@ -424,7 +413,9 @@ struct WorkspaceRightRailView: View {
     private var content: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                workflowMap
+                if shouldShowWorkflowMap {
+                    workflowMap
+                }
                 switch effectiveTab {
                 case .timeline: timelineContent
                 case .files: filesContent
@@ -437,6 +428,13 @@ struct WorkspaceRightRailView: View {
             }
             .padding(12)
         }
+    }
+
+    private var shouldShowWorkflowMap: Bool {
+        workspace?.kind == .runs
+        || workspace?.kind == .review
+        || !scopedLiveAgentGroups.isEmpty
+        || !scopedRunSummaries.isEmpty
     }
 
     private var workflowMap: some View {
@@ -467,14 +465,7 @@ struct WorkspaceRightRailView: View {
                     .frame(maxWidth: .infinity)
                 }
             }
-            LazyVGrid(
-                columns: [
-                    GridItem(.flexible(), spacing: 6),
-                    GridItem(.flexible(), spacing: 6)
-                ],
-                alignment: .leading,
-                spacing: 6
-            ) {
+            HStack(spacing: 8) {
                 workflowMetricChip("Active", value: metrics.activeCount, tint: LoomTheme.blue)
                 workflowMetricChip("Ready", value: metrics.readyCount, tint: LoomTheme.green)
                 workflowMetricChip("Attention", value: metrics.attentionCount, tint: LoomTheme.orange)
@@ -503,8 +494,7 @@ struct WorkspaceRightRailView: View {
                         .font(.system(size: 8, weight: .bold))
                         .foregroundStyle(LoomTheme.tertiaryText)
                 }
-                .padding(8)
-                .background(LoomTheme.softPanel.opacity(0.5))
+                .padding(.vertical, 4)
                 .clipShape(RoundedRectangle(cornerRadius: 7))
                 .contentShape(RoundedRectangle(cornerRadius: 7))
             }
@@ -512,9 +502,7 @@ struct WorkspaceRightRailView: View {
             .pointingHandCursor()
             .help("Open \(focus.targetTab.label)")
         }
-        .padding(10)
-        .background(LoomTheme.inset)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .padding(.vertical, 4)
     }
 
     private func workflowMetricChip(_ label: String, value: Int, tint: Color) -> some View {
@@ -529,11 +517,7 @@ struct WorkspaceRightRailView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
         }
-        .padding(.horizontal, 7)
-        .padding(.vertical, 5)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(LoomTheme.softPanel.opacity(0.44))
-        .clipShape(RoundedRectangle(cornerRadius: 7))
     }
 
     private var timelineContent: some View {
@@ -1927,7 +1911,7 @@ struct WorkspaceStatusBar: View {
     let showUsageTool: (CLITool) -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             statusSegment(
                 icon: workspace?.kind.systemImage ?? "rectangle.stack",
                 title: workspace?.name ?? "No workspace",
@@ -1936,30 +1920,29 @@ struct WorkspaceStatusBar: View {
                 action: { openInspector(.details) }
             )
 
-            statusSegment(
-                icon: "rectangle.split.3x1",
-                title: "\(blocks.count) panes",
-                detail: selectedBlock?.displayTitle ?? "No selection",
-                tint: LoomTheme.mutedText,
-                action: { openInspector(.details) }
-            )
+            statusDivider
 
-            statusSegment(
-                icon: "point.3.connected.trianglepath.dotted",
-                title: "\(scopedLiveAgentGroups.count) live runs",
-                detail: liveRunDetail,
-                tint: scopedLiveAgentGroups.isEmpty ? LoomTheme.mutedText : LoomTheme.green,
-                action: { openInspector(.timeline) }
-            )
+            if let selectedBlock {
+                statusSegment(
+                    icon: selectedBlock.kind.systemImage,
+                    title: selectedBlock.displayTitle,
+                    detail: selectedBlock.kind.label,
+                    tint: panelTint(selectedBlock.kind),
+                    action: { openInspector(.details) }
+                )
+                statusDivider
+            }
 
-            let runs = runHistoryStatus
-            statusSegment(
-                icon: runs.icon,
-                title: runs.title,
-                detail: runs.detail,
-                tint: runs.tint,
-                action: { openInspector(runs.targetTab) }
-            )
+            if let runSignal = runSignalStatus {
+                statusSegment(
+                    icon: runSignal.icon,
+                    title: runSignal.title,
+                    detail: runSignal.detail,
+                    tint: runSignal.tint,
+                    action: { openInspector(runSignal.targetTab) }
+                )
+                statusDivider
+            }
 
             statusSegment(
                 icon: "server.rack",
@@ -1970,15 +1953,19 @@ struct WorkspaceStatusBar: View {
             )
 
             let permission = permissionStatus
-            statusSegment(
-                icon: permission.icon,
-                title: permission.title,
-                detail: permission.detail,
-                tint: permission.tint,
-                action: { openInspector(.tools) }
-            )
+            if permission.shouldSurface {
+                statusDivider
+                statusSegment(
+                    icon: permission.icon,
+                    title: permission.title,
+                    detail: permission.detail,
+                    tint: permission.tint,
+                    action: { openInspector(.tools) }
+                )
+            }
 
             if let warning = usageWarningStatus {
+                statusDivider
                 statusSegment(
                     icon: "exclamationmark.triangle.fill",
                     title: warning.title,
@@ -1994,23 +1981,20 @@ struct WorkspaceStatusBar: View {
             Spacer()
 
             let update = updateStatus
-            statusSegment(
-                icon: update.icon,
-                title: update.title,
-                detail: update.detail,
-                tint: update.tint,
-                action: runUpdateAction
-            )
-
-            statusSegment(
-                icon: rightRailTab.systemImage,
-                title: rightRailTab.label,
-                detail: "Inspector",
-                tint: LoomTheme.blue,
-                action: { openInspector(rightRailTab) }
-            )
+            if update.shouldSurface {
+                statusSegment(
+                    icon: update.icon,
+                    title: update.title,
+                    detail: update.detail,
+                    tint: update.tint,
+                    action: runUpdateAction
+                )
+            } else {
+                runningVersionLabel
+            }
 
             if dictation.state.isActive {
+                statusDivider
                 statusSegment(
                     icon: "mic.fill",
                     title: dictation.state.label,
@@ -2020,14 +2004,10 @@ struct WorkspaceStatusBar: View {
                 )
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
         .background(LoomTheme.shellStatus)
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(LoomTheme.hairline, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(Rectangle().fill(LoomTheme.hairline.opacity(0.65)).frame(height: 1), alignment: .top)
     }
 
     private var liveRunDetail: String? {
@@ -2126,6 +2106,26 @@ struct WorkspaceStatusBar: View {
         )
     }
 
+    private var runSignalStatus: (
+        icon: String,
+        title: String,
+        detail: String?,
+        tint: Color,
+        targetTab: WorkspaceRightRailTab
+    )? {
+        if !scopedLiveAgentGroups.isEmpty {
+            return (
+                "point.3.connected.trianglepath.dotted",
+                "\(scopedLiveAgentGroups.count) live",
+                liveRunDetail,
+                LoomTheme.green,
+                .timeline
+            )
+        }
+        guard !runSummaries.isEmpty else { return nil }
+        return runHistoryStatus
+    }
+
     private func runQueueDetail(total: Int, ready: Int, reviewable: Int, checks: Int) -> String {
         let parts = [
             ready > 0 ? "\(ready) ready" : nil,
@@ -2158,7 +2158,7 @@ struct WorkspaceStatusBar: View {
         AgentPermissionMode(rawValue: permissionModeRaw) ?? .confirm
     }
 
-    private var permissionStatus: (icon: String, title: String, detail: String, tint: Color) {
+    private var permissionStatus: (icon: String, title: String, detail: String, tint: Color, shouldSurface: Bool) {
         let mode = permissionMode
         let bashEnabled = allowBash || mode == .bypassPermissions
         let tint: Color
@@ -2174,7 +2174,8 @@ struct WorkspaceStatusBar: View {
             mode.systemImage,
             mode.label,
             bashEnabled ? "Bash on" : "Bash off",
-            tint
+            tint,
+            mode != .confirm || bashEnabled
         )
     }
 
@@ -2208,22 +2209,49 @@ struct WorkspaceStatusBar: View {
         )
     }
 
-    private var updateStatus: (icon: String, title: String, detail: String?, tint: Color) {
+    private var updateStatus: (icon: String, title: String, detail: String?, tint: Color, shouldSurface: Bool) {
         if updates.isApplying {
-            return ("arrow.triangle.2.circlepath.circle.fill", "Applying Update", "Relaunching", LoomTheme.green)
+            return ("arrow.triangle.2.circlepath.circle.fill", "Applying Update", "Relaunching", LoomTheme.green, true)
         }
         if let staged = updates.available {
-            return ("arrow.down.circle.fill", "Update Available", staged.displayLabel, LoomTheme.green)
+            return ("arrow.down.circle.fill", "Update Available", staged.displayLabel, LoomTheme.green, true)
         }
         if updates.isFetchingRemote {
             let running = UpdateService.runningVersionTriple()
-            return ("arrow.clockwise.circle", "Checking Updates", "\(running.version) (\(running.build))", LoomTheme.blue)
+            return ("arrow.clockwise.circle", "Checking Updates", "\(running.version) (\(running.build))", LoomTheme.blue, true)
         }
         if updates.lastRemoteError != nil {
-            return ("exclamationmark.triangle.fill", "Update Check Failed", "Help > Check", LoomTheme.orange)
+            return ("exclamationmark.triangle.fill", "Update Check Failed", "Help > Check", LoomTheme.orange, true)
         }
         let running = UpdateService.runningVersionTriple()
-        return ("checkmark.seal.fill", "Up To Date", "\(running.version) (\(running.build))", LoomTheme.mutedText)
+        return ("checkmark.seal.fill", "Up To Date", "\(running.version) (\(running.build))", LoomTheme.mutedText, false)
+    }
+
+    private var runningVersionLabel: some View {
+        let running = UpdateService.runningVersionTriple()
+        return Text("v\(running.version)")
+            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .foregroundStyle(LoomTheme.tertiaryText)
+            .help("Loom Testing Edition \(running.version) (\(running.build))")
+    }
+
+    private var statusDivider: some View {
+        Rectangle()
+            .fill(LoomTheme.hairline.opacity(0.55))
+            .frame(width: 1, height: 12)
+    }
+
+    private func panelTint(_ kind: PanelKind) -> Color {
+        switch kind {
+        case .terminal: return LoomTheme.green
+        case .editor: return LoomTheme.blue
+        case .tasks: return LoomTheme.orange
+        case .chat: return LoomTheme.blue
+        case .agent: return LoomTheme.purple
+        case .notes: return LoomTheme.yellow
+        case .preview: return LoomTheme.pink
+        case .commands: return LoomTheme.blue
+        }
     }
 
     private func isCompletedStatus(_ status: String) -> Bool {
@@ -2284,7 +2312,7 @@ struct WorkspaceStatusBar: View {
                 .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(tint)
             Text(title)
-                .font(.system(size: 10, weight: .semibold))
+                .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(LoomTheme.primaryText)
                 .lineLimit(1)
             if let detail, !detail.isEmpty {

@@ -40,7 +40,7 @@ struct WorkspaceSidebarView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             if showsWorkspaceSection {
                 workspaceSection
                 Divider().overlay(LoomTheme.hairline)
@@ -49,8 +49,8 @@ struct WorkspaceSidebarView: View {
             Divider().overlay(LoomTheme.hairline)
             sessionsSection
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 12)
         .frame(maxHeight: .infinity, alignment: .top)
         .task { seedIfEmpty() }
         .task(id: reviewRunsTaskKey) {
@@ -132,11 +132,7 @@ struct WorkspaceSidebarView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(isSelected ? ws.color.color.opacity(0.12) : LoomTheme.softPanel.opacity(0.42))
-        .overlay(
-            RoundedRectangle(cornerRadius: LoomTheme.rowRadius)
-                .stroke(isSelected ? ws.color.color.opacity(0.52) : LoomTheme.hairline, lineWidth: 1)
-        )
+        .background(isSelected ? ws.color.color.opacity(0.10) : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: LoomTheme.rowRadius))
         .contentShape(RoundedRectangle(cornerRadius: LoomTheme.rowRadius))
         .onTapGesture {
@@ -193,17 +189,17 @@ struct WorkspaceSidebarView: View {
             HStack(spacing: 10) {
                 Image(systemName: tool.systemImage)
                     .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(isSelected ? .white : tool.brandColor)
+                    .foregroundStyle(tool.brandColor)
                     .frame(width: 18)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(tool.label)
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(isSelected ? .white : LoomTheme.primaryText)
+                        .foregroundStyle(LoomTheme.primaryText)
                         .lineLimit(1)
                     Text(usageSummary(for: resolved, warning: hasWarning))
                         .font(.system(size: 10))
-                        .foregroundStyle(isSelected ? .white.opacity(0.78) : LoomTheme.mutedText)
+                        .foregroundStyle(LoomTheme.mutedText)
                         .lineLimit(1)
                 }
 
@@ -212,20 +208,16 @@ struct WorkspaceSidebarView: View {
                 if hasWarning {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(isSelected ? .white : LoomTheme.orange)
+                        .foregroundStyle(LoomTheme.orange)
                 } else if resolved.activeSessions > 0 {
                     Text(resolved.activeSessions.formatted())
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundStyle(isSelected ? .white : LoomTheme.green)
+                        .foregroundStyle(LoomTheme.green)
                 }
             }
             .padding(.horizontal, 9)
             .padding(.vertical, 7)
-            .background(isSelected ? tool.brandColor : LoomTheme.softPanel.opacity(0.42))
-            .overlay(
-                RoundedRectangle(cornerRadius: LoomTheme.rowRadius)
-                    .stroke(isSelected ? tool.brandColor.opacity(0.58) : LoomTheme.hairline, lineWidth: 1)
-            )
+            .background(isSelected ? tool.brandColor.opacity(0.16) : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: LoomTheme.rowRadius))
         }
         .buttonStyle(.plain)
@@ -378,7 +370,7 @@ struct WorkspaceSidebarView: View {
             .foregroundStyle(LoomTheme.mutedText)
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
-            .background(LoomTheme.softPanel.opacity(0.45))
+            .background(LoomTheme.softPanel.opacity(0.28))
             .clipShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
@@ -534,11 +526,7 @@ struct WorkspaceSidebarView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .background(LoomTheme.softPanel.opacity(0.5))
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(LoomTheme.hairline, lineWidth: 1)
-        )
+        .background(LoomTheme.softPanel.opacity(0.28))
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .contentShape(RoundedRectangle(cornerRadius: 6))
         .onTapGesture(perform: primaryAction)
@@ -594,11 +582,7 @@ struct WorkspaceSidebarView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
-        .background(LoomTheme.softPanel.opacity(0.6))
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(LoomTheme.hairline, lineWidth: 1)
-        )
+        .background(LoomTheme.softPanel.opacity(0.28))
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .contentShape(RoundedRectangle(cornerRadius: 6))
         .onTapGesture(count: 2) { startSessionRename(block) }
@@ -707,11 +691,7 @@ struct WorkspaceSidebarView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
-        .background(LoomTheme.softPanel.opacity(0.6))
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(LoomTheme.hairline, lineWidth: 1)
-        )
+        .background(LoomTheme.softPanel.opacity(0.28))
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .contentShape(RoundedRectangle(cornerRadius: 6))
         .onTapGesture(count: 2) { startNoteRename(note) }
@@ -831,11 +811,7 @@ struct WorkspaceSidebarView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 7)
-        .background(LoomTheme.softPanel.opacity(0.5))
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(LoomTheme.hairline, lineWidth: 1)
-        )
+        .background(LoomTheme.softPanel.opacity(0.28))
         .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 

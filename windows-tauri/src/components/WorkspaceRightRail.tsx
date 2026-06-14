@@ -76,6 +76,12 @@ export function WorkspaceRightRail() {
     };
   }, [effectiveTab, reviewableRunKey]);
 
+  const showWorkflowMap =
+    workspace?.kindRaw === "runs" ||
+    workspace?.kindRaw === "review" ||
+    scopedRuns.length > 0 ||
+    scopedLiveGroups.length > 0;
+
   return (
     <aside
       className="loom-right-rail flex h-full flex-col overflow-hidden"
@@ -83,8 +89,7 @@ export function WorkspaceRightRail() {
         width: "var(--loom-inspector-width, 308px)",
         flex: "0 0 var(--loom-inspector-width, 308px)",
         background: surface.shellInspector,
-        border: `1px solid ${surface.hairline}`,
-        borderRadius: 10,
+        borderLeft: `1px solid ${surface.hairline}`,
       }}
     >
       <header
@@ -94,7 +99,6 @@ export function WorkspaceRightRail() {
           borderBottom: `1px solid ${surface.hairline}`,
         }}
       >
-        <Icons.layers size={14} color={workspace ? workspaceColorVar[workspace.colorName] : workspaceColorVar.blue} />
         <div className="min-w-0 flex-1">
           <div className="truncate" style={{ fontSize: 12, fontWeight: 700, color: text.primary }}>
             {workspace?.name ?? "Inspector"}
@@ -128,8 +132,8 @@ export function WorkspaceRightRail() {
                 borderRadius: 7,
                 display: "grid",
                 placeItems: "center",
-                background: active ? workspaceColorVar.blue : surface.softPanel,
-                color: active ? "#fff" : text.muted,
+                background: active ? "color-mix(in srgb, " + workspaceColorVar.blue + " 12%, transparent)" : "transparent",
+                color: active ? workspaceColorVar.blue : text.muted,
               }}
             >
               <Icon size={12} strokeWidth={2.2} />
@@ -139,12 +143,14 @@ export function WorkspaceRightRail() {
       </div>
 
       <main className="scrollbar-thin min-h-0 flex-1 overflow-y-auto" style={{ padding: 12 }}>
-        <WorkflowMap
-          workspace={workspace}
-          runs={scopedRuns}
-          liveGroups={scopedLiveGroups}
-          memoryFileCount={memoryFiles.length}
-        />
+        {showWorkflowMap && (
+          <WorkflowMap
+            workspace={workspace}
+            runs={scopedRuns}
+            liveGroups={scopedLiveGroups}
+            memoryFileCount={memoryFiles.length}
+          />
+        )}
         {effectiveTab === "timeline" && (
           <TimelineContent
             runs={scopedRuns}
@@ -776,10 +782,10 @@ function RailActionButton({
       onClick={onClick}
       className="flex items-center gap-1"
       style={{
-        padding: "4px 8px",
+        padding: "4px 6px",
         borderRadius: 7,
-        border: `1px solid ${surface.hairline}`,
-        background: "color-mix(in srgb, " + surface.softPanel + ", transparent 35%)",
+        border: "1px solid transparent",
+        background: "transparent",
         color: text.muted,
         fontSize: 9,
         fontWeight: 700,
@@ -791,9 +797,10 @@ function RailActionButton({
 }
 
 const sectionBox: CSSProperties = {
-  padding: 10,
+  padding: "8px 0",
   borderRadius: radius.row,
-  background: surface.inset,
+  background: "transparent",
+  borderTop: `1px solid ${surface.hairline}`,
 };
 
 function defaultBlockTitle(block: Block): string {

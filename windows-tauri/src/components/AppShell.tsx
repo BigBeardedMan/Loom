@@ -55,9 +55,15 @@ export function AppShell() {
           openInspector={setRightRailTab}
           openSettings={openSettings}
         />
-        <LoomPanel noShadow className="loom-shell-sidebar-panel">
+        <aside
+          className="loom-shell-sidebar-panel flex flex-col overflow-hidden"
+          style={{
+            background: surface.shellRail,
+            borderRight: `1px solid ${surface.hairline}`,
+          }}
+        >
           <WorkspaceSidebar />
-        </LoomPanel>
+        </aside>
         <LoomPanel noShadow className="flex-1 min-w-0 min-h-0">
           <WorkspaceView />
         </LoomPanel>
@@ -108,9 +114,8 @@ function RoomRail({
       style={{
         width: cockpit.roomRailWidth,
         padding: "10px 5px",
-        borderRadius: 10,
-        border: `1px solid ${surface.hairline}`,
-        background: surface.shellRail,
+        borderRight: `1px solid ${surface.hairline}`,
+        background: "color-mix(in srgb, " + surface.shellRail + ", transparent 38%)",
         gap: 8,
       }}
     >
@@ -127,7 +132,7 @@ function RoomRail({
             style={{
               padding: "5px 3px",
               borderRadius: 8,
-              background: selected ? surface.softPanel : "transparent",
+              background: selected ? "color-mix(in srgb, " + workspaceColorVar[workspace.colorName] + " 12%, transparent)" : "transparent",
             }}
           >
             <span
@@ -138,8 +143,8 @@ function RoomRail({
                 display: "grid",
                 placeItems: "center",
                 position: "relative",
-                background: selected ? workspaceColorVar[workspace.colorName] : `color-mix(in srgb, ${workspaceColorVar[workspace.colorName]} 16%, transparent)`,
-                color: selected ? "#fff" : workspaceColorVar[workspace.colorName],
+                background: selected ? `color-mix(in srgb, ${workspaceColorVar[workspace.colorName]} 12%, transparent)` : "transparent",
+                color: selected ? workspaceColorVar[workspace.colorName] : text.muted,
               }}
             >
               <Icon size={14} strokeWidth={2.2} />
@@ -155,15 +160,15 @@ function RoomRail({
                     borderRadius: 999,
                     display: "grid",
                     placeItems: "center",
-                    background: selected ? "#fff" : workspaceColorVar[workspace.colorName],
-                    color: selected ? workspaceColorVar[workspace.colorName] : surface.shellRail,
+                    background: selected ? surface.panel : `color-mix(in srgb, ${workspaceColorVar[workspace.colorName]} 18%, transparent)`,
+                    color: selected ? workspaceColorVar[workspace.colorName] : text.tertiary,
                   }}
                 >
                   <Icons.folderFill size={7} strokeWidth={2.4} />
                 </span>
               )}
             </span>
-            <span className="truncate" style={{ maxWidth: 54, fontSize: 9, fontWeight: 700, color: selected ? text.primary : text.muted }}>
+            <span className="truncate" style={{ maxWidth: 54, fontSize: 9, fontWeight: 700, color: selected ? text.primary : text.tertiary }}>
               {meta.label}
             </span>
           </button>
@@ -201,8 +206,8 @@ function RailUtilityButton({
         borderRadius: 8,
         display: "grid",
         placeItems: "center",
-        background: active ? workspaceColorVar.blue : surface.softPanel,
-        color: active ? "#fff" : text.muted,
+        background: active ? "color-mix(in srgb, " + workspaceColorVar.blue + " 12%, transparent)" : "transparent",
+        color: active ? workspaceColorVar.blue : text.muted,
       }}
     >
       <Icon size={13} strokeWidth={2.2} />

@@ -11,9 +11,8 @@ type Props = {
   noShadow?: boolean;
 };
 
-// Mirrors LoomPanel view in Loom/Workspace/WorkspaceView.swift (lines 480-560).
-// 12 px rounded panel with hairline border and macOS-spec drop shadow.
-// Drag state swaps shadow + adds scale + glow border.
+// Mirrors LoomPanel in Loom/Workspace/WorkspaceView.swift.
+// Idle panes stay quiet; drag/drop/selection states carry the visible emphasis.
 export function LoomPanel({
   children,
   className = "",

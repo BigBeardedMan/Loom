@@ -71,7 +71,7 @@ struct WorkspaceView: View {
             LoomTheme.background
                 .ignoresSafeArea()
 
-            VStack(spacing: 8) {
+            VStack(spacing: 6) {
                 topBar
 
                 GeometryReader { proxy in
@@ -79,7 +79,7 @@ struct WorkspaceView: View {
                     let inspectorWidth = min(308, max(276, proxy.size.width * 0.24))
                     let compactInspectorWidth = min(324, max(260, proxy.size.width - 34))
                     ZStack(alignment: .topTrailing) {
-                        HStack(alignment: .top, spacing: 12) {
+                        HStack(alignment: .top, spacing: 10) {
                             roomRail
                                 .frame(width: 62)
 
@@ -125,7 +125,7 @@ struct WorkspaceView: View {
                     showUsageTool: { selectedUsageTool = $0 }
                 )
             }
-            .padding(10)
+            .padding(8)
 
             if let session = transcriptPreview {
                 transcriptPreviewOverlay(session)
@@ -205,9 +205,8 @@ struct WorkspaceView: View {
     // MARK: - Top bar
 
     private var topBar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             brandButton
-            verticalHairline
             commandPaletteButton
             workspaceIdentity
 
@@ -233,15 +232,9 @@ struct WorkspaceView: View {
                 updatePill
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(LoomTheme.chrome)
-        .overlay(
-            RoundedRectangle(cornerRadius: LoomTheme.panelRadius)
-                .stroke(LoomTheme.hairline, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: LoomTheme.panelRadius))
-        .shadow(color: .black.opacity(0.10), radius: 12, x: 0, y: 5)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 3)
+        .overlay(Rectangle().fill(LoomTheme.hairline.opacity(0.65)).frame(height: 1), alignment: .bottom)
         .animation(.easeInOut(duration: 0.18), value: updates.available)
         .sheet(isPresented: $showCommandPalette) {
             CommandPalette(
@@ -260,31 +253,22 @@ struct WorkspaceView: View {
         Button {
             openURL(URL(string: "https://github.com/BigBeardedMan/Loom")!)
         } label: {
-            HStack(spacing: 8) {
-                LoomLogoMark(size: 24)
-                Text("Loom Testing")
-                    .font(.system(size: 13, weight: .semibold))
+            HStack(spacing: 7) {
+                LoomLogoMark(size: 22)
+                Text("Loom")
+                    .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(LoomTheme.primaryText)
+                Text("Testing")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(LoomTheme.tertiaryText)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(LoomTheme.softPanel.opacity(0.58))
-            .overlay(
-                RoundedRectangle(cornerRadius: LoomTheme.rowRadius)
-                    .stroke(LoomTheme.hairline, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: LoomTheme.rowRadius))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 4)
         }
         .buttonStyle(.plain)
         .pointingHandCursor()
         .help("Open Loom Testing Edition on GitHub")
         .accessibilityLabel("Loom Testing Edition, open on GitHub")
-    }
-
-    private var verticalHairline: some View {
-        Rectangle()
-            .fill(LoomTheme.hairline)
-            .frame(width: 1, height: 28)
     }
 
     @ViewBuilder
@@ -338,14 +322,9 @@ struct WorkspaceView: View {
                     .foregroundStyle(LoomTheme.tertiaryText)
             }
             .foregroundStyle(LoomTheme.mutedText)
-            .padding(.horizontal, 9)
+            .padding(.horizontal, 7)
             .padding(.vertical, 5)
-            .background(LoomTheme.softPanel.opacity(0.54))
-            .overlay(
-                RoundedRectangle(cornerRadius: LoomTheme.controlRadius)
-                    .stroke(LoomTheme.hairline, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: LoomTheme.controlRadius))
+            .contentShape(RoundedRectangle(cornerRadius: LoomTheme.controlRadius))
         }
         .buttonStyle(.plain)
         .pointingHandCursor()
@@ -411,25 +390,28 @@ struct WorkspaceView: View {
         Button {
             dictation.toggle()
         } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: dictation.state == .idle ? 0 : 6) {
                 Image(systemName: dictation.state.isError
                     ? "exclamationmark.triangle.fill"
                     : (dictation.state.isActive ? "mic.fill" : "mic"))
                     .font(.system(size: 11, weight: .bold))
-                Text(dictationButtonTitle)
-                    .font(.system(size: 12, weight: .semibold))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                if dictation.state != .idle {
+                    Text(dictationButtonTitle)
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
             }
             .foregroundStyle(dictation.state.isActive || dictation.state.isError ? .white : LoomTheme.primaryText)
-            .padding(.horizontal, 10)
+            .frame(minWidth: dictation.state == .idle ? 26 : 0, minHeight: 24)
+            .padding(.horizontal, dictation.state == .idle ? 0 : 10)
             .padding(.vertical, 6)
             .background(dictation.state.isError
                 ? Color.red.opacity(0.9)
-                : (dictation.state.isActive ? LoomTheme.purple : LoomTheme.softPanel.opacity(0.66)))
+                : (dictation.state.isActive ? LoomTheme.purple : Color.clear))
             .overlay(Capsule().stroke(dictation.state.isError
                 ? Color.red.opacity(0.5)
-                : (dictation.state.isActive ? LoomTheme.purple.opacity(0.5) : LoomTheme.hairline), lineWidth: 1))
+                : (dictation.state.isActive ? LoomTheme.purple.opacity(0.5) : Color.clear), lineWidth: 1))
             .clipShape(Capsule())
             .overlay(alignment: .topTrailing) {
                 if dictation.state.isActive {
@@ -482,11 +464,8 @@ struct WorkspaceView: View {
                 addBlockButton(panel)
             }
         }
-        .padding(.horizontal, 5)
-        .padding(.vertical, 4)
-        .background(LoomTheme.softPanel.opacity(0.56))
-        .overlay(Capsule().stroke(LoomTheme.hairline, lineWidth: 1))
-        .clipShape(Capsule())
+        .padding(.horizontal, 2)
+        .padding(.vertical, 2)
     }
 
     private func addBlockButton(_ panel: PanelKind) -> some View {
@@ -505,11 +484,9 @@ struct WorkspaceView: View {
                     .font(.system(size: 11, weight: .semibold))
             }
             .foregroundStyle(canAddBlock ? LoomTheme.primaryText : LoomTheme.mutedText.opacity(0.55))
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 7)
             .padding(.vertical, 4)
-            .background(canAddBlock ? LoomTheme.panel.opacity(0.7) : LoomTheme.softPanel.opacity(0.34))
-            .overlay(Capsule().stroke(LoomTheme.hairline, lineWidth: 1))
-            .clipShape(Capsule())
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .pointingHandCursor()
@@ -626,14 +603,14 @@ struct WorkspaceView: View {
 
     private var leftRail: some View {
         @Bindable var bindable = layout
-        return LoomPanel {
-            WorkspaceSidebarView(
-                showsWorkspaceSection: false,
-                selectedWorkspaceID: $bindable.selectedWorkspaceID,
-                selectedUsageTool: $selectedUsageTool,
-                transcriptPreview: $transcriptPreview
-            )
-        }
+        return WorkspaceSidebarView(
+            showsWorkspaceSection: false,
+            selectedWorkspaceID: $bindable.selectedWorkspaceID,
+            selectedUsageTool: $selectedUsageTool,
+            transcriptPreview: $transcriptPreview
+        )
+        .background(LoomTheme.shellRail)
+        .overlay(Rectangle().fill(LoomTheme.hairline.opacity(0.65)).frame(width: 1), alignment: .trailing)
     }
 
     private func transcriptPreviewOverlay(_ session: TerminalTranscriptSession) -> some View {
@@ -1204,9 +1181,9 @@ struct LoomPanel<Content: View>: View {
         .clipShape(RoundedRectangle(cornerRadius: LoomTheme.panelRadius))
         .shadow(
             color: LoomTheme.panelShadow(active: isDragging),
-            radius: isDragging ? 24 : 10,
+            radius: isDragging ? 20 : 5,
             x: 0,
-            y: isDragging ? 16 : 5
+            y: isDragging ? 14 : 2
         )
         .scaleEffect(isDragging ? 1.015 : 1)
         .animation(.easeOut(duration: 0.18), value: isDragging)
@@ -1229,12 +1206,10 @@ struct LoomPanel<Content: View>: View {
         let bar = HStack(spacing: 8) {
             if let systemImage {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 5)
-                        .fill(LoomTheme.orange.opacity(0.14))
-                        .frame(width: 22, height: 20)
                     Image(systemName: systemImage)
                         .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(LoomTheme.orange)
+                        .foregroundStyle(LoomTheme.mutedText)
+                        .frame(width: 18, height: 18)
                 }
             }
             titleText(title)
@@ -1251,8 +1226,6 @@ struct LoomPanel<Content: View>: View {
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(LoomTheme.mutedText)
                         .frame(width: 22, height: 20)
-                        .background(LoomTheme.softPanel.opacity(0.5))
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
                         .contentShape(RoundedRectangle(cornerRadius: 5))
                 }
                 .buttonStyle(.plain)
@@ -1261,9 +1234,9 @@ struct LoomPanel<Content: View>: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(LoomTheme.inset)
-        .overlay(Divider().overlay(LoomTheme.hairline), alignment: .bottom)
+        .padding(.vertical, 7)
+        .background(LoomTheme.chrome.opacity(0.42))
+        .overlay(Divider().overlay(LoomTheme.hairline.opacity(0.7)), alignment: .bottom)
         .contentShape(Rectangle())
 
         // Drag is disabled while renaming so typing doesn't fight the gesture.
