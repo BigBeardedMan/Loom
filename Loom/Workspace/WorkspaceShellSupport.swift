@@ -300,7 +300,7 @@ struct WorkspaceRightRailView: View {
         return liveAgentTasks.groups.filter { group in
             guard let workspacePath = group.workspacePath,
                   !workspacePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return false
+                return true
             }
             let candidate = normalizedPath(workspacePath)
             return candidate == root || candidate.hasPrefix(root + "/")
@@ -1452,7 +1452,7 @@ struct WorkspaceStatusBar: View {
         return liveAgentTasks.groups.filter { group in
             guard let workspacePath = group.workspacePath,
                   !workspacePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return false
+                return true
             }
             let candidate = normalizedPath(workspacePath)
             return candidate == root || candidate.hasPrefix(root + "/")

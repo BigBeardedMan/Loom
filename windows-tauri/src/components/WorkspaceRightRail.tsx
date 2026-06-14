@@ -1098,14 +1098,14 @@ function filterLiveGroupsForWorkspace(liveGroups: LiveAgentTaskGroup[], workspac
   if (!workspace?.folderPath) return liveGroups;
   const root = normalizedPath(workspace.folderPath);
   return liveGroups.filter((group) => {
-    if (!group.workspacePath) return false;
     const candidate = normalizedPath(group.workspacePath);
+    if (!candidate) return true;
     return candidate === root || candidate.startsWith(`${root}/`) || candidate.startsWith(`${root}\\`);
   });
 }
 
-function normalizedPath(path: string): string {
-  return path.trim().replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+function normalizedPath(path?: string | null): string {
+  return path?.trim().replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase() ?? "";
 }
 
 function liveGroupTitle(group: LiveAgentTaskGroup): string {

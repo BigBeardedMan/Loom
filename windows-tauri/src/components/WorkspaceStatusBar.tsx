@@ -99,7 +99,8 @@ function filterLiveGroupsForWorkspace(
   if (!root) return liveGroups;
   return liveGroups.filter((group) => {
     const candidate = normalizedPath(group.workspacePath);
-    return Boolean(candidate && (candidate === root || candidate.startsWith(`${root}/`) || candidate.startsWith(`${root}\\`)));
+    if (!candidate) return true;
+    return candidate === root || candidate.startsWith(`${root}/`) || candidate.startsWith(`${root}\\`);
   });
 }
 

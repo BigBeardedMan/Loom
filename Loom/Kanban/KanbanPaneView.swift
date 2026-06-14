@@ -692,7 +692,7 @@ struct KanbanPaneView: View {
     private func liveGroupIsInScope(_ group: LiveAgentTaskGroup, root: String) -> Bool {
         guard let workspacePath = group.workspacePath,
               !workspacePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return false
+            return true
         }
         let candidate = URL(fileURLWithPath: workspacePath).standardizedFileURL.path
         return candidate == root || candidate.hasPrefix(root + "/")
