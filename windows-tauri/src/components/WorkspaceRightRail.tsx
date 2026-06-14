@@ -457,7 +457,10 @@ function DiffContent({
           <Muted>No changed-file list has been recorded yet.</Muted>
         ) : (
           changedFiles.slice(0, 8).map((path) => (
-            <RailRow key={path} icon="file" color={workspaceColorVar.blue} title={reviewPathBaseName(path)} detail={path} />
+            <section key={path} style={sectionBox}>
+              <RailRow icon="file" color={workspaceColorVar.blue} title={reviewPathBaseName(path)} detail={path} />
+              <ChangedFileActions path={path} workspace={workspace} />
+            </section>
           ))
         )}
       </RailSection>
@@ -626,8 +629,34 @@ function PreviewActions({ url, label }: { url: string; label: string }) {
   );
 }
 
+function ChangedFileActions({ path, workspace }: { path: string; workspace: Workspace | null }) {
+  const resolved = resolveReviewPath(workspace, path);
+  const label = reviewPathBaseName(path);
+  const copyPath = () => void navigator.clipboard?.writeText(resolved);
+  const openPath = () => void ipc.shell.open(resolved);
+  const revealPath = () => void ipc.fs.reveal(resolved);
+
+  return (
+    <div className="flex items-center gap-1.5" style={{ marginTop: 7 }}>
+      <RailActionButton title={`Copy ${label} path`} onClick={copyPath}>
+        <Icons.copy size={11} strokeWidth={2.2} />
+        Copy
+      </RailActionButton>
+      <RailActionButton title={`Open ${label}`} onClick={openPath}>
+        <Icons.file size={11} strokeWidth={2.2} />
+        Open
+      </RailActionButton>
+      <RailActionButton title={`Reveal ${label}`} onClick={revealPath}>
+        <Icons.folderOpen size={11} strokeWidth={2.2} />
+        Reveal
+      </RailActionButton>
+    </div>
+  );
+}
+
 function MemoryFileActions({ file }: { file: MemoryFile }) {
   const copyPath = () => void navigator.clipboard?.writeText(file.path);
+  const openPath = () => void ipc.shell.open(file.path);
   const revealPath = () => void ipc.fs.reveal(file.path);
 
   return (
@@ -635,6 +664,10 @@ function MemoryFileActions({ file }: { file: MemoryFile }) {
       <RailActionButton title={`Copy ${file.name} path`} onClick={copyPath}>
         <Icons.copy size={11} strokeWidth={2.2} />
         Copy
+      </RailActionButton>
+      <RailActionButton title={`Open ${file.name}`} onClick={openPath}>
+        <Icons.file size={11} strokeWidth={2.2} />
+        Open
       </RailActionButton>
       <RailActionButton title={`Reveal ${file.name}`} onClick={revealPath}>
         <Icons.folderOpen size={11} strokeWidth={2.2} />
@@ -1031,6 +1064,19 @@ function changedFilesInReviewText(textValue: string): string[] {
 function reviewPathBaseName(path: string): string {
   const trimmed = path.replace(/[\\/]+$/, "");
   return trimmed.split(/[\\/]/).pop() || trimmed;
+}
+
+function resolveReviewPath(workspace: Workspace | null, path: string): string {
+  const trimmed = path.trim();
+  if (!trimmed || isAbsoluteLikePath(trimmed) || trimmed.startsWith("~")) return trimmed;
+  const root = workspace?.folderPath?.replace(/[\\/]+$/, "");
+  if (!root) return trimmed;
+  const separator = root.includes("\\") ? "\\" : "/";
+  return `${root}${separator}${trimmed.replace(/^[\\/]+/, "")}`;
+}
+
+function isAbsoluteLikePath(path: string): boolean {
+  return /^([A-Za-z]:[\\/]|\\\\|\/)/.test(path);
 }
 
 function isReviewableRun(run: AgentGraphRunSummary): boolean {

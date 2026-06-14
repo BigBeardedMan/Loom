@@ -678,12 +678,7 @@ struct WorkspaceRightRailView: View {
                 railMuted("No changed-file list has been recorded yet.")
             } else {
                 ForEach(changedFiles.prefix(8), id: \.self) { path in
-                    railRow(
-                        icon: "doc.text",
-                        tint: LoomTheme.blue,
-                        title: URL(fileURLWithPath: path).lastPathComponent,
-                        detail: path
-                    )
+                    changedFileCard(for: path)
                 }
             }
 
@@ -1050,6 +1045,37 @@ struct WorkspaceRightRailView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
+    private func changedFileCard(for path: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            railRow(
+                icon: "doc.text",
+                tint: LoomTheme.blue,
+                title: reviewPathBaseName(path),
+                detail: path
+            )
+            changedFileActions(path: path)
+        }
+        .padding(9)
+        .background(LoomTheme.inset)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func changedFileActions(path: String) -> some View {
+        let url = reviewFileURL(for: path)
+        let label = reviewPathBaseName(path)
+        return HStack(spacing: 6) {
+            railActionButton(title: "Copy", systemImage: "doc.on.doc", help: "Copy \(label) path") {
+                copyPath(url.path)
+            }
+            railActionButton(title: "Open", systemImage: "doc.text", help: "Open \(label)") {
+                openPath(url.path)
+            }
+            railActionButton(title: "Reveal", systemImage: "folder", help: "Reveal \(label) in Finder") {
+                revealReviewFile(url)
+            }
+        }
+    }
+
     private func previewActions(url: String, label: String) -> some View {
         HStack(spacing: 6) {
             railActionButton(title: "Copy", systemImage: "doc.on.doc", help: "Copy \(label) preview URL") {
@@ -1110,9 +1136,42 @@ struct WorkspaceRightRailView: View {
         NSWorkspace.shared.open(URL(fileURLWithPath: path))
     }
 
+    private func revealReviewFile(_ url: URL) {
+        if FileManager.default.fileExists(atPath: url.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+            return
+        }
+        let parent = url.deletingLastPathComponent()
+        if FileManager.default.fileExists(atPath: parent.path) {
+            NSWorkspace.shared.open(parent)
+        }
+    }
+
     private func openURLString(_ rawURL: String) {
         guard let url = URL(string: rawURL) else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    private func reviewFileURL(for path: String) -> URL {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        let expanded = (trimmed as NSString).expandingTildeInPath
+        if expanded.hasPrefix("/") {
+            return URL(fileURLWithPath: expanded)
+        }
+        if let folderPath = workspace?.folderPath, !folderPath.isEmpty {
+            return URL(fileURLWithPath: folderPath, isDirectory: true).appendingPathComponent(expanded)
+        }
+        return URL(fileURLWithPath: expanded)
+    }
+
+    private func reviewPathBaseName(_ path: String) -> String {
+        let trimmed = path
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/\\"))
+        let parts = trimmed.split { character in
+            character == "/" || character == "\\"
+        }
+        return parts.last.map(String.init) ?? trimmed
     }
 
     private func railRow(icon: String, tint: Color, title: String, detail: String) -> some View {
