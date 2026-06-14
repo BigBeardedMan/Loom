@@ -27,7 +27,7 @@ export function WorkspaceRightRail() {
   const [endpoints, setEndpoints] = useState<LocalEndpoint[]>([]);
 
   const reviewableRuns = useMemo(() => scopedRuns.filter(isReviewableRun), [scopedRuns]);
-  const reviewableRunKey = reviewableRuns.slice(0, 6).map((run) => run.id).join("|");
+  const reviewableRunKey = reviewableRuns.slice(0, 8).map((run) => run.id).join("|");
   const effectiveTab = railTabs.some((tab) => tab.tab === selectedTab) ? selectedTab : railTabs[0]?.tab ?? "details";
 
   const refreshProviders = () => {
@@ -49,7 +49,7 @@ export function WorkspaceRightRail() {
 
   useEffect(() => {
     if (effectiveTab !== "diff" || reviewableRuns.length === 0) return;
-    const missing = reviewableRuns.slice(0, 6).filter((run) => !eventsByRun[run.id]);
+    const missing = reviewableRuns.slice(0, 8).filter((run) => !eventsByRun[run.id]);
     if (missing.length === 0) return;
 
     let active = true;
@@ -1108,6 +1108,20 @@ function changedFilesFromReviewEvents(
     .flatMap((run) => eventsByRun[run.id] ?? [])
     .sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt));
   for (const event of events) {
+    const payloadFileTexts = [
+      event.payload?.changedFiles,
+      event.payload?.changed_files,
+      event.payload?.filesChanged,
+      event.payload?.modifiedFiles,
+      event.payload?.changedPaths,
+    ].filter((value): value is string => Boolean(value));
+    for (const textValue of payloadFileTexts) {
+      for (const path of changedFilePathsFromInlineBody(textValue)) {
+        if (seen.has(path)) continue;
+        seen.add(path);
+        files.push(path);
+      }
+    }
     const texts = [event.payload?.reviewSummary, event.payload?.review, event.summary].filter(
       (value): value is string => Boolean(value)
     );
@@ -1127,6 +1141,11 @@ function changedFilesInReviewText(textValue: string): string[] {
   let inChangedFiles = false;
   for (const rawLine of textValue.split("\n")) {
     const line = rawLine.trim();
+    const inlinePaths = inlineChangedFiles(line);
+    if (inlinePaths.length > 0) {
+      files.push(...inlinePaths);
+      continue;
+    }
     if (isChangedFilesHeader(line)) {
       inChangedFiles = true;
       continue;
@@ -1143,8 +1162,27 @@ function changedFilesInReviewText(textValue: string): string[] {
 }
 
 function isChangedFilesHeader(line: string): boolean {
-  const stripped = line.replace(/^[#*_`\s]+|[:*_`\s]+$/g, "").trim().toLowerCase();
+  const stripped = line
+    .replace(/^[#*_`\s]+|[:*_`\s]+$/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s*\(\d+\)$/, "");
   return ["changed files", "files changed", "modified files", "changed paths", "touched files"].includes(stripped);
+}
+
+function inlineChangedFiles(line: string): string[] {
+  const colonIndex = line.indexOf(":");
+  if (colonIndex < 0) return [];
+  if (!isChangedFilesHeader(line.slice(0, colonIndex))) return [];
+  return changedFilePathsFromInlineBody(line.slice(colonIndex + 1));
+}
+
+function changedFilePathsFromInlineBody(body: string): string[] {
+  const trimmed = body.trim();
+  if (!trimmed || ["none", "n/a", "no changes"].includes(trimmed.toLowerCase())) return [];
+  const spans = codeSpans(trimmed);
+  if (spans.length > 0) return spans;
+  return trimmed.split(/[,\n]/).map(changedFilePath).filter((path): path is string => Boolean(path));
 }
 
 function changedFilePath(line: string): string | null {
@@ -1164,8 +1202,13 @@ function changedFileLineBody(line: string): string {
 }
 
 function firstCodeSpan(textValue: string): string | null {
-  const match = textValue.match(/`([^`]+)`/);
-  return match?.[1]?.trim() || null;
+  return codeSpans(textValue)[0] ?? null;
+}
+
+function codeSpans(textValue: string): string[] {
+  return Array.from(textValue.matchAll(/`([^`]+)`/g))
+    .map((match) => match[1]?.trim())
+    .filter((value): value is string => Boolean(value));
 }
 
 function stripReviewFileStatus(textValue: string): string {

@@ -361,7 +361,7 @@ struct WorkspaceRightRailView: View {
     }
 
     private var reviewEvidenceTaskKey: String {
-        let ids = reviewableRunSummaries.prefix(6).map(\.id).joined(separator: ",")
+        let ids = reviewableRunSummaries.prefix(8).map(\.id).joined(separator: ",")
         return "\(effectiveTab.rawValue):\(ids)"
     }
 
@@ -869,7 +869,7 @@ struct WorkspaceRightRailView: View {
 
     private func prefetchReviewEvidenceIfNeeded() async {
         guard effectiveTab == .diff else { return }
-        for summary in reviewableRunSummaries.prefix(6) where eventsByRunID[summary.id] == nil {
+        for summary in reviewableRunSummaries.prefix(8) where eventsByRunID[summary.id] == nil {
             let events = (try? await AgentGraphLedger.shared.events(rootRunID: summary.id)) ?? []
             eventsByRunID[summary.id] = events.sorted { $0.occurredAt < $1.occurredAt }
         }
@@ -1019,6 +1019,18 @@ struct WorkspaceRightRailView: View {
         var files: [String] = []
         var seen: Set<String> = []
         for event in loadedReviewEvents {
+            let payloadFileTexts = [
+                event.payload["changedFiles"],
+                event.payload["changed_files"],
+                event.payload["filesChanged"],
+                event.payload["modifiedFiles"],
+                event.payload["changedPaths"]
+            ].compactMap { $0 }
+            for text in payloadFileTexts {
+                for path in changedFilePaths(fromInlineBody: text) where seen.insert(path).inserted {
+                    files.append(path)
+                }
+            }
             let texts = [
                 event.payload["reviewSummary"],
                 event.payload["review"],
@@ -1038,6 +1050,11 @@ struct WorkspaceRightRailView: View {
         var inChangedFiles = false
         for rawLine in reviewText.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            let inlinePaths = inlineChangedFiles(in: line)
+            if !inlinePaths.isEmpty {
+                paths.append(contentsOf: inlinePaths)
+                continue
+            }
             if isChangedFilesHeader(line) {
                 inChangedFiles = true
                 continue
@@ -1058,13 +1075,37 @@ struct WorkspaceRightRailView: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: ":"))
             .lowercased()
+        let withoutCount = stripped.replacingOccurrences(
+            of: #"\s*\(\d+\)$"#,
+            with: "",
+            options: .regularExpression
+        )
         return [
             "changed files",
             "files changed",
             "modified files",
             "changed paths",
             "touched files"
-        ].contains(stripped)
+        ].contains(withoutCount)
+    }
+
+    private func inlineChangedFiles(in line: String) -> [String] {
+        guard let colon = line.firstIndex(of: ":") else { return [] }
+        let header = String(line[..<colon])
+        guard isChangedFilesHeader(header) else { return [] }
+        return changedFilePaths(fromInlineBody: String(line[line.index(after: colon)...]))
+    }
+
+    private func changedFilePaths(fromInlineBody body: String) -> [String] {
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let lower = trimmed.lowercased()
+        if ["none", "n/a", "no changes"].contains(lower) { return [] }
+        let spans = codeSpans(in: trimmed)
+        if !spans.isEmpty { return spans }
+        return trimmed
+            .components(separatedBy: CharacterSet(charactersIn: ",\n"))
+            .compactMap { changedFilePath(from: String($0)) }
     }
 
     private func changedFilePath(from line: String) -> String? {
@@ -1103,11 +1144,20 @@ struct WorkspaceRightRailView: View {
     }
 
     private func firstCodeSpan(in text: String) -> String? {
-        guard let start = text.firstIndex(of: "`") else { return nil }
-        let rest = text[text.index(after: start)...]
-        guard let end = rest.firstIndex(of: "`") else { return nil }
-        let value = rest[..<end].trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty ? nil : String(value)
+        codeSpans(in: text).first
+    }
+
+    private func codeSpans(in text: String) -> [String] {
+        var spans: [String] = []
+        var cursor = text.startIndex
+        while let start = text[cursor...].firstIndex(of: "`") {
+            let restStart = text.index(after: start)
+            guard let end = text[restStart...].firstIndex(of: "`") else { break }
+            let value = text[restStart..<end].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty { spans.append(String(value)) }
+            cursor = text.index(after: end)
+        }
+        return spans
     }
 
     private func stripReviewFileStatus(_ text: String) -> String {
