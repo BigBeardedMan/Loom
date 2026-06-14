@@ -114,7 +114,7 @@ export function WorkspaceRightRail() {
 
   return (
     <aside
-      className="flex h-full flex-col overflow-hidden"
+      className="loom-right-rail flex h-full flex-col overflow-hidden"
       style={{
         width: "var(--loom-inspector-width, 308px)",
         flex: "0 0 var(--loom-inspector-width, 308px)",

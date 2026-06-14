@@ -41,7 +41,7 @@ export function AppShell() {
       }}
     >
       <Titlebar />
-      <div className="flex flex-1 min-h-0" style={{ gap: cockpit.gap }}>
+      <div className="loom-shell-workspace-row flex flex-1 min-h-0" style={{ gap: cockpit.gap }}>
         <RoomRail
           selectedUsageTool={selectedUsageTool}
           onUsageToggle={() => setUsageTool(selectedUsageTool ? null : "claude")}
@@ -54,13 +54,24 @@ export function AppShell() {
           openInspector={setRightRailTab}
           openSettings={openSettings}
         />
-        <LoomPanel noShadow style={{ width: 248, flex: "none" }}>
+        <LoomPanel noShadow className="loom-shell-sidebar-panel">
           <WorkspaceSidebar />
         </LoomPanel>
         <LoomPanel noShadow className="flex-1 min-w-0 min-h-0">
           <WorkspaceView />
         </LoomPanel>
-        {isRightRailVisible && <WorkspaceRightRail />}
+        {isRightRailVisible && (
+          <>
+            <button
+              type="button"
+              className="loom-right-rail-scrim"
+              aria-label="Hide inspector"
+              title="Hide inspector"
+              onClick={toggleRightRail}
+            />
+            <WorkspaceRightRail />
+          </>
+        )}
       </div>
       <WorkspaceStatusBar />
     </div>

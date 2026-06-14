@@ -153,3 +153,42 @@ button:not(:disabled) {
 .xterm-viewport {
   background: transparent !important;
 }
+
+.loom-shell-workspace-row {
+  position: relative;
+  min-width: 0;
+}
+
+.loom-shell-sidebar-panel {
+  flex: none;
+  width: 248px;
+}
+
+.loom-right-rail-scrim {
+  display: none;
+}
+
+@media (max-width: 1180px) {
+  .loom-shell-sidebar-panel {
+    width: 214px;
+  }
+
+  .loom-right-rail-scrim {
+    position: absolute;
+    inset: 0;
+    z-index: 29;
+    display: block;
+    padding: 0;
+    background: rgba(0, 0, 0, 0.22);
+  }
+
+  .loom-right-rail {
+    position: absolute;
+    inset: 0 0 0 auto;
+    z-index: 30;
+    width: min(324px, calc(100% - 34px)) !important;
+    max-width: calc(100% - 34px);
+    flex-basis: auto !important;
+    box-shadow: -8px 8px 22px rgba(0, 0, 0, 0.22);
+  }
+}
