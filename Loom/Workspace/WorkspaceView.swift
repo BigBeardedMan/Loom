@@ -117,7 +117,8 @@ struct WorkspaceView: View {
                     workspace: selectedWorkspace,
                     blocks: layout.blocks,
                     selectedBlock: selectedBlock,
-                    rightRailTab: effectiveRightRailTab
+                    rightRailTab: effectiveRightRailTab,
+                    openInspector: openInspector
                 )
             }
             .padding(10)

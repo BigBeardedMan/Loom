@@ -16,8 +16,11 @@ export function WorkspaceStatusBar() {
   const activeBlockId = useApp((s) => s.activeBlockId);
   const activeBlock = layout?.blocks.find((b) => b.id === activeBlockId) ?? null;
   const rightRailTab = useApp((s) => s.rightRailTab);
+  const setRightRailTab = useApp((s) => s.setRightRailTab);
   const updatePill = useApp((s) => s.updatePill);
   const updateStatus = useApp((s) => s.updateStatus);
+  const setUpdatePill = useApp((s) => s.setUpdatePill);
+  const setUpdateStatus = useApp((s) => s.setUpdateStatus);
   const [liveGroups, setLiveGroups] = useState<LiveAgentTaskGroup[]>([]);
   const [agents, setAgents] = useState<AgentDescriptor[]>([]);
   const [endpoints, setEndpoints] = useState<LocalEndpoint[]>([]);
@@ -43,6 +46,26 @@ export function WorkspaceStatusBar() {
     ipc.endpoints.list().then(setEndpoints).catch(() => setEndpoints([]));
   };
 
+  const checkForUpdates = async () => {
+    let currentVersion = updateStatus.version ?? null;
+    try {
+      currentVersion = await ipc.appVersion();
+    } catch {}
+    setUpdateStatus({ state: "checking", version: currentVersion });
+    try {
+      const info = await ipc.update.check();
+      if (info) {
+        setUpdatePill({ version: info.version });
+        setUpdateStatus({ state: "available", version: info.version });
+      } else {
+        setUpdatePill(null);
+        setUpdateStatus({ state: "upToDate", version: currentVersion });
+      }
+    } catch {
+      setUpdateStatus({ state: "failed", version: currentVersion });
+    }
+  };
+
   useEffect(() => {
     refreshProviders();
     window.addEventListener(LOOM_ENDPOINTS_CHANGED, refreshProviders);
@@ -60,13 +83,13 @@ export function WorkspaceStatusBar() {
         background: surface.shellStatus,
       }}
     >
-      <StatusSegment icon="layers" color={workspace ? workspaceColorVar[workspace.colorName] : workspaceColorVar.blue} label={workspace?.name ?? "No workspace"} detail={workspace?.folderPath || workspace?.kindRaw} />
-      <StatusSegment icon="panelRight" color={workspaceColorVar.blue} label={`${layout?.blocks.length ?? 0} panes`} detail={activeBlock ? blockTitle(activeBlock) : "No selection"} />
-      <StatusSegment icon="workflow" color={scopedLiveGroups.length ? workspaceColorVar.green : text.tertiary} label={`${scopedLiveGroups.length} live runs`} detail={liveRunDetail(scopedLiveGroups)} />
-      <StatusSegment icon="server" color={endpoints.length ? workspaceColorVar.purple : text.tertiary} label={agents[0]?.name || "Default agent"} detail={agents[0]?.model || `${endpoints.length} local endpoints`} />
+      <StatusSegment icon="layers" color={workspace ? workspaceColorVar[workspace.colorName] : workspaceColorVar.blue} label={workspace?.name ?? "No workspace"} detail={workspace?.folderPath || workspace?.kindRaw} onClick={() => setRightRailTab("details")} />
+      <StatusSegment icon="panelRight" color={workspaceColorVar.blue} label={`${layout?.blocks.length ?? 0} panes`} detail={activeBlock ? blockTitle(activeBlock) : "No selection"} onClick={() => setRightRailTab("details")} />
+      <StatusSegment icon="workflow" color={scopedLiveGroups.length ? workspaceColorVar.green : text.tertiary} label={`${scopedLiveGroups.length} live runs`} detail={liveRunDetail(scopedLiveGroups)} onClick={() => setRightRailTab("timeline")} />
+      <StatusSegment icon="server" color={endpoints.length ? workspaceColorVar.purple : text.tertiary} label={agents[0]?.name || "Default agent"} detail={agents[0]?.model || `${endpoints.length} local endpoints`} onClick={() => setRightRailTab("tools")} />
       <div className="flex-1" />
-      <StatusSegment icon={updateSegment.icon} color={updateSegment.color} label={updateSegment.label} detail={updateSegment.detail} />
-      <StatusSegment icon="panelRight" color={workspaceColorVar.blue} label={rightRailTabLabel(effectiveRightRailTab)} detail="inspector" />
+      <StatusSegment icon={updateSegment.icon} color={updateSegment.color} label={updateSegment.label} detail={updateSegment.detail} onClick={() => void checkForUpdates()} />
+      <StatusSegment icon="panelRight" color={workspaceColorVar.blue} label={rightRailTabLabel(effectiveRightRailTab)} detail="inspector" onClick={() => setRightRailTab(effectiveRightRailTab)} />
     </footer>
   );
 }
@@ -129,15 +152,17 @@ function StatusSegment({
   color,
   label,
   detail,
+  onClick,
 }: {
   icon: keyof typeof Icons;
   color: string;
   label: string;
   detail?: string | null;
+  onClick?: () => void;
 }) {
   const Icon = Icons[icon];
-  return (
-    <div className="flex min-w-0 items-center gap-1.5" style={{ color: text.primary }}>
+  const content = (
+    <>
       <Icon size={11} strokeWidth={2.2} color={color} style={{ flex: "0 0 auto" }} />
       <span className="truncate" style={{ maxWidth: 180, fontSize: 10, fontWeight: 700 }}>
         {label}
@@ -147,6 +172,30 @@ function StatusSegment({
           {detail}
         </span>
       )}
+    </>
+  );
+
+  const style = {
+    color: text.primary,
+    minWidth: 0,
+    cursor: onClick ? "pointer" : undefined,
+    border: 0,
+    background: "transparent",
+    padding: 0,
+    font: "inherit",
+  } as const;
+
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} title={detail ? `${label} - ${detail}` : label} className="flex items-center gap-1.5" style={style}>
+        {content}
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1.5" style={style}>
+      {content}
     </div>
   );
 }

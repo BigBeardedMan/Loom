@@ -1445,6 +1445,7 @@ struct WorkspaceStatusBar: View {
     let blocks: [WorkspaceBlock]
     let selectedBlock: WorkspaceBlock?
     let rightRailTab: WorkspaceRightRailTab
+    let openInspector: (WorkspaceRightRailTab) -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -1452,28 +1453,32 @@ struct WorkspaceStatusBar: View {
                 icon: workspace?.kind.systemImage ?? "rectangle.stack",
                 title: workspace?.name ?? "No workspace",
                 detail: workspace?.displayFolderPath.isEmpty == false ? workspace?.displayFolderPath : workspace?.kind.label,
-                tint: workspace?.color.color ?? LoomTheme.blue
+                tint: workspace?.color.color ?? LoomTheme.blue,
+                action: { openInspector(.details) }
             )
 
             statusSegment(
                 icon: "rectangle.split.3x1",
                 title: "\(blocks.count) panes",
                 detail: selectedBlock?.displayTitle ?? "No selection",
-                tint: LoomTheme.mutedText
+                tint: LoomTheme.mutedText,
+                action: { openInspector(.details) }
             )
 
             statusSegment(
                 icon: "point.3.connected.trianglepath.dotted",
                 title: "\(scopedLiveAgentGroups.count) live runs",
                 detail: liveRunDetail,
-                tint: scopedLiveAgentGroups.isEmpty ? LoomTheme.mutedText : LoomTheme.green
+                tint: scopedLiveAgentGroups.isEmpty ? LoomTheme.mutedText : LoomTheme.green,
+                action: { openInspector(.timeline) }
             )
 
             statusSegment(
                 icon: "server.rack",
                 title: agentRegistry.selectedAgent.vendor.label,
                 detail: modelDetail,
-                tint: endpointStore.endpoints.isEmpty ? LoomTheme.mutedText : LoomTheme.purple
+                tint: endpointStore.endpoints.isEmpty ? LoomTheme.mutedText : LoomTheme.purple,
+                action: { openInspector(.tools) }
             )
 
             Spacer()
@@ -1483,18 +1488,26 @@ struct WorkspaceStatusBar: View {
                 icon: update.icon,
                 title: update.title,
                 detail: update.detail,
-                tint: update.tint
+                tint: update.tint,
+                action: runUpdateAction
             )
 
             statusSegment(
                 icon: rightRailTab.systemImage,
                 title: rightRailTab.label,
                 detail: "Inspector",
-                tint: LoomTheme.blue
+                tint: LoomTheme.blue,
+                action: { openInspector(rightRailTab) }
             )
 
             if dictation.state.isActive {
-                statusSegment(icon: "mic.fill", title: dictation.state.label, detail: dictation.liveTranscript, tint: LoomTheme.purple)
+                statusSegment(
+                    icon: "mic.fill",
+                    title: dictation.state.label,
+                    detail: dictation.liveTranscript,
+                    tint: LoomTheme.purple,
+                    action: { dictation.toggle() }
+                )
             }
         }
         .padding(.horizontal, 10)
@@ -1566,7 +1579,37 @@ struct WorkspaceStatusBar: View {
         return ("checkmark.seal.fill", "Up To Date", "\(running.version) (\(running.build))", LoomTheme.mutedText)
     }
 
-    private func statusSegment(icon: String, title: String, detail: String?, tint: Color) -> some View {
+    private func runUpdateAction() {
+        if updates.available != nil {
+            updates.applyAndRelaunch()
+            return
+        }
+        Task {
+            await updates.checkRemoteAndAnnounce()
+        }
+    }
+
+    @ViewBuilder
+    private func statusSegment(
+        icon: String,
+        title: String,
+        detail: String?,
+        tint: Color,
+        action: (() -> Void)? = nil
+    ) -> some View {
+        if let action {
+            Button(action: action) {
+                statusSegmentContent(icon: icon, title: title, detail: detail, tint: tint)
+            }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .help(detail?.isEmpty == false ? "\(title) · \(detail ?? "")" : title)
+        } else {
+            statusSegmentContent(icon: icon, title: title, detail: detail, tint: tint)
+        }
+    }
+
+    private func statusSegmentContent(icon: String, title: String, detail: String?, tint: Color) -> some View {
         HStack(spacing: 6) {
             Image(systemName: icon)
                 .font(.system(size: 9, weight: .bold))
