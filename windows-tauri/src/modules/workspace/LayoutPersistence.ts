@@ -98,15 +98,21 @@ export function defaultLayout(kind: WorkspaceKind): Layout {
 function migrateLegacyBlock(raw: unknown): Block | null {
   if (typeof raw !== "object" || raw === null) return null;
   const r = raw as Record<string, unknown>;
-  if (typeof r.id !== "string" || !isPanelKind(r.kind)) return null;
+  if (!isPanelKind(r.kind)) return null;
   const block: Block = {
-    id: r.id,
+    id: typeof r.id === "string" ? r.id : uuid(),
     kind: r.kind,
   };
   if (typeof r.customTitle === "string") block.customTitle = r.customTitle;
   if (typeof r.fullRowSpan === "boolean") block.fullRowSpan = r.fullRowSpan;
-  if (typeof r.terminalCount === "number") block.terminalCount = r.terminalCount;
-  if (r.terminalAxis === "h" || r.terminalAxis === "v") block.terminalAxis = r.terminalAxis;
+  if (typeof r.spansFullRow === "boolean") block.fullRowSpan = r.spansFullRow;
+  if (typeof r.terminalCount === "number") {
+    block.terminalCount = r.terminalCount;
+  } else if (Array.isArray(r.terminalCwds) && r.terminalCwds.length > 0) {
+    block.terminalCount = Math.max(1, Math.min(4, r.terminalCwds.length));
+  }
+  const terminalAxis = normalizeTerminalAxis(r.terminalAxis ?? r.terminalSplitAxis);
+  if (terminalAxis) block.terminalAxis = terminalAxis;
   if (typeof r.autoChatIndex === "number") block.autoChatIndex = r.autoChatIndex;
   if (typeof r.autoPreviewIndex === "number") block.autoPreviewIndex = r.autoPreviewIndex;
   if (typeof r.pin === "string") {
@@ -125,6 +131,26 @@ function migrateLegacyBlock(raw: unknown): Block | null {
   return block;
 }
 
+function normalizeTerminalAxis(raw: unknown): Block["terminalAxis"] | null {
+  if (raw === "h" || raw === "horizontal") return "h";
+  if (raw === "v" || raw === "vertical") return "v";
+  return null;
+}
+
+function blocksFromParsedLayout(parsed: unknown, kind: WorkspaceKind): unknown[] | null {
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const r = parsed as Record<string, unknown>;
+  if (Array.isArray(r.blocks)) return r.blocks;
+  if (typeof r.blocksByKind !== "object" || r.blocksByKind === null) return null;
+  const blocksByKind = r.blocksByKind as Record<string, unknown>;
+  const keys = kind === "review" || kind === "build" ? ["review", "build"] : [kind];
+  for (const key of keys) {
+    const blocks = blocksByKind[key];
+    if (Array.isArray(blocks)) return blocks;
+  }
+  return null;
+}
+
 export async function loadLayout(
   workspaceId: string,
   kind: WorkspaceKind
@@ -132,9 +158,10 @@ export async function loadLayout(
   const raw = await ipc.workspace.getLayout(workspaceId).catch(() => null);
   if (!raw) return defaultLayout(kind);
   try {
-    const parsed = JSON.parse(raw) as { blocks?: unknown[] };
-    if (Array.isArray(parsed.blocks) && parsed.blocks.length > 0) {
-      const migrated = parsed.blocks
+    const parsed = JSON.parse(raw) as unknown;
+    const blocks = blocksFromParsedLayout(parsed, kind);
+    if (blocks && blocks.length > 0) {
+      const migrated = blocks
         .map(migrateLegacyBlock)
         .filter((b): b is Block => b !== null);
       if (migrated.length > 0) return { blocks: migrated };
