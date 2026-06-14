@@ -968,16 +968,20 @@ struct WorkspaceStatusBar: View {
 
             Spacer()
 
+            let update = updateStatus
+            statusSegment(
+                icon: update.icon,
+                title: update.title,
+                detail: update.detail,
+                tint: update.tint
+            )
+
             statusSegment(
                 icon: rightRailTab.systemImage,
                 title: rightRailTab.label,
                 detail: "Inspector",
                 tint: LoomTheme.blue
             )
-
-            if updates.available != nil {
-                statusSegment(icon: "arrow.down.circle.fill", title: "Update available", detail: updates.available?.displayLabel, tint: LoomTheme.green)
-            }
 
             if dictation.state.isActive {
                 statusSegment(icon: "mic.fill", title: dictation.state.label, detail: dictation.liveTranscript, tint: LoomTheme.purple)
@@ -1013,6 +1017,24 @@ struct WorkspaceStatusBar: View {
             return "No local endpoints"
         }
         return "\(endpointStore.endpoints.count) local endpoints"
+    }
+
+    private var updateStatus: (icon: String, title: String, detail: String?, tint: Color) {
+        if updates.isApplying {
+            return ("arrow.triangle.2.circlepath.circle.fill", "Applying Update", "Relaunching", LoomTheme.green)
+        }
+        if let staged = updates.available {
+            return ("arrow.down.circle.fill", "Update Available", staged.displayLabel, LoomTheme.green)
+        }
+        if updates.isFetchingRemote {
+            let running = UpdateService.runningVersionTriple()
+            return ("arrow.clockwise.circle", "Checking Updates", "\(running.version) (\(running.build))", LoomTheme.blue)
+        }
+        if updates.lastRemoteError != nil {
+            return ("exclamationmark.triangle.fill", "Update Check Failed", "Help > Check", LoomTheme.orange)
+        }
+        let running = UpdateService.runningVersionTriple()
+        return ("checkmark.seal.fill", "Up To Date", "\(running.version) (\(running.build))", LoomTheme.mutedText)
     }
 
     private func statusSegment(icon: String, title: String, detail: String?, tint: Color) -> some View {
