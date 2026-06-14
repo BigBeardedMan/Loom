@@ -3,6 +3,7 @@ import { Icons } from "../../lib/icons";
 import { useApp } from "../../lib/store";
 import {
   ipc,
+  type AgentGraphRunSummary,
   type CliToolUsage,
   type IdeaNote,
   type SessionInfo,
@@ -38,6 +39,7 @@ export function WorkspaceSidebar() {
   const [usage, setUsage] = useState<Partial<Record<Tool, CliToolUsage>>>({});
   const [usageLoading, setUsageLoading] = useState(false);
   const [notes, setNotes] = useState<IdeaNote[]>([]);
+  const [runSummaries, setRunSummaries] = useState<AgentGraphRunSummary[]>([]);
   const [closed, setClosed] = useState<TerminalTranscriptSession[]>([]);
   const [deleted, setDeleted] = useState<TerminalTranscriptSession[]>([]);
   const [showDeleted, setShowDeleted] = useState(false);
@@ -80,6 +82,12 @@ export function WorkspaceSidebar() {
     if (workspace.kindRaw === "ideas") {
       ipc.notes.list(workspace.id).then(setNotes).catch(() => setNotes([]));
     }
+    if (workspace.kindRaw === "runs" || workspace.kindRaw === "review" || workspace.kindRaw === "build") {
+      ipc.agentGraph
+        .list()
+        .then((runs) => setRunSummaries(filterRunsForWorkspace(runs, workspace.folderPath)))
+        .catch(() => setRunSummaries([]));
+    }
     const [recentClosed, recentDeleted] = await Promise.all([
       ipc.terminalTranscripts.recent("closed", workspace.id, 5).catch(() => []),
       ipc.terminalTranscripts.recent("deleted", workspace.id, 0).catch(() => []),
@@ -93,7 +101,7 @@ export function WorkspaceSidebar() {
     const id = setInterval(refreshSidebarData, 2500);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace?.id, workspace?.kindRaw]);
+  }, [workspace?.id, workspace?.kindRaw, workspace?.folderPath]);
 
   const restoreTranscript = async (session: TerminalTranscriptSession) => {
     const restore = await ipc.terminalTranscripts.restore(
@@ -211,10 +219,21 @@ export function WorkspaceSidebar() {
               </div>
             )}
           </div>
-        ) : workspace?.kindRaw === "review" || workspace?.kindRaw === "build" ? (
+        ) : workspace?.kindRaw === "runs" || workspace?.kindRaw === "review" || workspace?.kindRaw === "build" ? (
           <div className="flex min-h-0 flex-1 flex-col">
-            <SectionHeader title="Sessions" />
-            <EmptyHint label="Review workspaces don't have sessions yet." />
+            <SectionHeader
+              title={workspace.kindRaw === "runs" ? "Run History" : "Review Runs"}
+              trailing={<CountBadge value={runSummaries.length} color="var(--color-ws-orange)" />}
+            />
+            {runSummaries.length === 0 ? (
+              <EmptyHint label="No run history for this workspace yet." />
+            ) : (
+              <div className="scrollbar-thin flex min-h-0 flex-col gap-1 overflow-y-auto">
+                {runSummaries.slice(0, 12).map((run) => (
+                  <RunSummaryRow key={run.id} run={run} />
+                ))}
+              </div>
+            )}
           </div>
         ) : showDeleted ? (
           <div className="flex min-h-0 flex-1 flex-col">
@@ -462,6 +481,34 @@ function WorkspaceRow({
         <CountBadge value={sessionCount} color="var(--color-ws-green)" />
       )}
     </button>
+  );
+}
+
+function RunSummaryRow({ run }: { run: AgentGraphRunSummary }) {
+  return (
+    <div
+      className="flex items-center gap-2"
+      style={{
+        padding: "6px 9px",
+        borderRadius: radius.row,
+        background: "color-mix(in srgb, " + surface.softPanel + ", transparent 58%)",
+        border: `1px solid ${surface.hairline}`,
+      }}
+      title={run.ledgerPath}
+    >
+      {runStatusIcon(run.status)}
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate" style={{ fontSize: 11, fontWeight: 650, color: text.primary }}>
+          {run.title || run.id}
+        </span>
+        <span
+          className="truncate"
+          style={{ fontSize: 10, color: text.tertiary, fontFamily: "var(--font-mono)" }}
+        >
+          {runSummaryMeta(run)}
+        </span>
+      </span>
+    </div>
   );
 }
 
@@ -901,6 +948,49 @@ function countSessions(sessions: SessionInfo[], folderPath: string): number {
     const cwd = (s.cwd ?? "").toLowerCase();
     return cwd === fp || cwd.startsWith(fp + "\\") || cwd.startsWith(fp + "/");
   }).length;
+}
+
+function filterRunsForWorkspace(
+  runs: AgentGraphRunSummary[],
+  folderPath?: string | null
+): AgentGraphRunSummary[] {
+  const root = normalizedPath(folderPath);
+  if (!root) return runs;
+  return runs.filter((run) => {
+    const workspace = normalizedPath(run.workspacePath);
+    return Boolean(workspace && (workspace === root || workspace.startsWith(`${root}/`)));
+  });
+}
+
+function normalizedPath(path?: string | null): string | null {
+  const value = path?.trim();
+  if (!value) return null;
+  return value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+function runStatusIcon(status: string): ReactNode {
+  switch (status.toLowerCase()) {
+    case "completed":
+      return <Icons.checkCircle size={12} strokeWidth={2.2} color="var(--color-ws-green)" />;
+    case "failed":
+      return <Icons.failedCircle size={12} strokeWidth={2.2} color="var(--color-ws-orange)" />;
+    case "cancelled":
+      return <Icons.close size={12} strokeWidth={2.4} color="var(--color-ws-orange)" />;
+    default:
+      return <Icons.workflow size={12} strokeWidth={2.2} color="var(--color-ws-blue)" />;
+  }
+}
+
+function runSummaryMeta(run: AgentGraphRunSummary): string {
+  return [
+    run.source || run.modelLabel || "run",
+    run.status,
+    shortAgo(run.lastActivity),
+    run.gitBranch,
+    (run.toolEventCount ?? 0) > 0 ? `${run.toolEventCount} tools` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function displayPath(path: string): string {
