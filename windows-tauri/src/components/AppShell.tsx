@@ -122,7 +122,7 @@ function RoomRail({
           <button
             key={workspace.id}
             onClick={() => selectWorkspace(workspace.id)}
-            title={meta.label}
+            title={workspace.folderPath ? `${meta.label}: ${workspace.folderPath}` : meta.label}
             className="flex w-full flex-col items-center gap-1"
             style={{
               padding: "5px 3px",
@@ -137,11 +137,31 @@ function RoomRail({
                 borderRadius: 8,
                 display: "grid",
                 placeItems: "center",
+                position: "relative",
                 background: selected ? workspaceColorVar[workspace.colorName] : `color-mix(in srgb, ${workspaceColorVar[workspace.colorName]} 16%, transparent)`,
                 color: selected ? "#fff" : workspaceColorVar[workspace.colorName],
               }}
             >
               <Icon size={14} strokeWidth={2.2} />
+              {workspace.folderPath && (
+                <span
+                  aria-hidden="true"
+                  style={{
+                    position: "absolute",
+                    right: -5,
+                    top: -5,
+                    width: 13,
+                    height: 13,
+                    borderRadius: 999,
+                    display: "grid",
+                    placeItems: "center",
+                    background: selected ? "#fff" : workspaceColorVar[workspace.colorName],
+                    color: selected ? workspaceColorVar[workspace.colorName] : surface.shellRail,
+                  }}
+                >
+                  <Icons.folderFill size={7} strokeWidth={2.4} />
+                </span>
+              )}
             </span>
             <span className="truncate" style={{ maxWidth: 54, fontSize: 9, fontWeight: 700, color: selected ? text.primary : text.muted }}>
               {meta.label}

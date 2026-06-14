@@ -75,6 +75,7 @@ type AppState = {
   ) => Promise<Workspace>;
   deleteWorkspace: (id: string) => Promise<void>;
   renameWorkspace: (id: string, name: string) => Promise<void>;
+  setWorkspaceFolder: (id: string, folderPath: string) => Promise<void>;
   addBlock: (kind: Panel) => Promise<void>;
   restoreTerminalBlock: (restore: TerminalTranscriptRestore) => Promise<void>;
   removeBlock: (id: string) => Promise<void>;
@@ -301,6 +302,14 @@ export const useApp = create<AppState>((set, get) => ({
     const trimmed = name.trim();
     if (!trimmed) return;
     const updated = await ipc.workspace.update(id, { name: trimmed }).catch(() => null);
+    if (!updated) return;
+    set((s) => ({
+      workspaces: s.workspaces.map((w) => (w.id === id ? updated : w)),
+    }));
+  },
+
+  setWorkspaceFolder: async (id, folderPath) => {
+    const updated = await ipc.workspace.update(id, { folderPath }).catch(() => null);
     if (!updated) return;
     set((s) => ({
       workspaces: s.workspaces.map((w) => (w.id === id ? updated : w)),

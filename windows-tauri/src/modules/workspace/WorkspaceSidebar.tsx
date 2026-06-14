@@ -33,6 +33,7 @@ export function WorkspaceSidebar() {
   const removeBlock = useApp((s) => s.removeBlock);
   const updateBlock = useApp((s) => s.updateBlock);
   const restoreTerminalBlock = useApp((s) => s.restoreTerminalBlock);
+  const setWorkspaceFolder = useApp((s) => s.setWorkspaceFolder);
   const selectedUsageTool = useApp((s) => s.selectedUsageTool);
   const setUsageTool = useApp((s) => s.setUsageTool);
   const timeframe = useApp((s) => s.usageTimeframe);
@@ -134,6 +135,20 @@ export function WorkspaceSidebar() {
     await refreshSidebarData();
   };
 
+  const chooseWorkspaceFolder = async (target: Workspace) => {
+    const folder = await ipc.fs.pickFolder().catch(() => null);
+    if (!folder) return;
+    await setWorkspaceFolder(target.id, folder);
+    await refreshSidebarData();
+  };
+
+  const clearWorkspaceFolder = async (target: Workspace) => {
+    if (!target.folderPath) return;
+    if (!confirm(`Clear folder for ${target.name || "this workspace"}?`)) return;
+    await setWorkspaceFolder(target.id, "");
+    await refreshSidebarData();
+  };
+
   return (
     <aside
       className="flex h-full flex-col"
@@ -155,6 +170,11 @@ export function WorkspaceSidebar() {
                 selected={ws.id === selectedId && !selectedUsageTool}
                 sessionCount={countSessions(sessions, ws.folderPath)}
                 onSelect={() => selectWorkspace(ws.id)}
+                onChooseFolder={() => chooseWorkspaceFolder(ws)}
+                onRevealFolder={() => {
+                  if (ws.folderPath) void ipc.fs.reveal(ws.folderPath);
+                }}
+                onClearFolder={() => clearWorkspaceFolder(ws)}
               />
             ))
           )}
@@ -428,18 +448,31 @@ function WorkspaceRow({
   selected,
   sessionCount,
   onSelect,
+  onChooseFolder,
+  onRevealFolder,
+  onClearFolder,
 }: {
   workspace: Workspace;
   selected: boolean;
   sessionCount: number;
   onSelect: () => void;
+  onChooseFolder: () => void;
+  onRevealFolder: () => void;
+  onClearFolder: () => void;
 }) {
   const color = workspaceColorVar[workspace.colorName as WorkspaceColor];
   const KindIcon = kindIconFor(workspace.kindRaw);
   const name = workspace.name.trim() || workspaceKindFallback(workspace.kindRaw);
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        onSelect();
+      }}
       className="group flex w-full items-center gap-2 text-left transition-colors"
       style={{
         padding: `${sidebar.rowPaddingV}px ${sidebar.rowPaddingH}px`,
@@ -490,7 +523,23 @@ function WorkspaceRow({
       {sessionCount > 0 && (
         <CountBadge value={sessionCount} color="var(--color-ws-green)" />
       )}
-    </button>
+      <span className="flex flex-none items-center gap-1 opacity-70 transition-opacity group-hover:opacity-100">
+        {workspace.folderPath ? (
+          <>
+            <TinyIconButton title="Reveal workspace folder" onClick={onRevealFolder}>
+              <Icons.folderOpen size={10} strokeWidth={2.2} />
+            </TinyIconButton>
+            <TinyIconButton title="Clear workspace folder" onClick={onClearFolder}>
+              <Icons.close size={10} strokeWidth={2.2} />
+            </TinyIconButton>
+          </>
+        ) : (
+          <TinyIconButton title="Set workspace folder" onClick={onChooseFolder}>
+            <Icons.folderOpen size={10} strokeWidth={2.2} />
+          </TinyIconButton>
+        )}
+      </span>
+    </div>
   );
 }
 
