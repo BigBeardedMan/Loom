@@ -1,9 +1,9 @@
 import SwiftUI
 
 enum WorkspaceRightRailTab: String, CaseIterable, Identifiable {
-    case timeline
     case files
     case preview
+    case timeline
     case tools
     case diff
     case memory
@@ -193,9 +193,10 @@ struct WorkspaceRightRailView: View {
     }
 
     private var availableTabs: [WorkspaceRightRailTab] {
-        var tabs: [WorkspaceRightRailTab] = [.timeline]
+        var tabs: [WorkspaceRightRailTab] = []
         if workspace?.folderPath.isEmpty == false { tabs.append(.files) }
         if blocks.contains(where: { $0.kind == .preview }) || selectedBlock?.kind == .preview { tabs.append(.preview) }
+        tabs.append(.timeline)
         tabs.append(.tools)
         if workspace?.kind == .review || workspace?.kind == .runs || scopedRunSummaries.contains(where: { $0.gitBranch != nil || $0.gitDirty != nil || $0.toolEventCount > 0 }) {
             tabs.append(.diff)

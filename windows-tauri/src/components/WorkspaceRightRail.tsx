@@ -8,9 +8,9 @@ import { defaultPreviewUrlFor } from "../modules/build/PreviewPane";
 import type { Block } from "../modules/workspace/LayoutPersistence";
 
 const RAIL_TABS: { id: RightRailTab; label: string; icon: keyof typeof Icons }[] = [
-  { id: "timeline", label: "Timeline", icon: "workflow" },
   { id: "files", label: "Files", icon: "folderFill" },
   { id: "preview", label: "Preview", icon: "eye" },
+  { id: "timeline", label: "Timeline", icon: "workflow" },
   { id: "tools", label: "Tools", icon: "tools" },
   { id: "diff", label: "Diff", icon: "diff" },
   { id: "memory", label: "Memory", icon: "brain" },
@@ -1048,9 +1048,9 @@ function availableRailTabs(
     if (tab && !tabs.some((item) => item.id === id)) tabs.push(tab);
   };
 
-  add("timeline");
   if (workspace?.folderPath) add("files");
   if (blocks.some((block) => block.kind === "preview")) add("preview");
+  add("timeline");
   add("tools");
   if (
     workspace?.kindRaw === "review" ||

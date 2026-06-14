@@ -20,7 +20,7 @@ struct WorkspaceView: View {
     @State private var selectedUsageTool: CLITool? = nil
     @State private var transcriptPreview: TerminalTranscriptSession?
     @AppStorage("loom.shell.rightRailVisible") private var isRightRailVisible: Bool = true
-    @AppStorage("loom.shell.rightRailTab") private var rightRailTabRaw: String = WorkspaceRightRailTab.timeline.rawValue
+    @AppStorage("loom.shell.rightRailTab") private var rightRailTabRaw: String = WorkspaceRightRailTab.files.rawValue
     @State private var rightRailRefreshNonce: Int = 0
     @State private var selectedBlockID: UUID?
 
@@ -51,6 +51,10 @@ struct WorkspaceView: View {
 
     private var rightRailTab: WorkspaceRightRailTab {
         WorkspaceRightRailTab(rawValue: rightRailTabRaw) ?? .timeline
+    }
+
+    private var effectiveRightRailTab: WorkspaceRightRailTab {
+        availableInspectorTabs.contains(rightRailTab) ? rightRailTab : availableInspectorTabs.first ?? .details
     }
 
     private var rightRailTabBinding: Binding<WorkspaceRightRailTab> {
@@ -100,7 +104,7 @@ struct WorkspaceView: View {
                     workspace: selectedWorkspace,
                     blocks: layout.blocks,
                     selectedBlock: selectedBlock,
-                    rightRailTab: rightRailTab
+                    rightRailTab: effectiveRightRailTab
                 )
             }
             .padding(10)
@@ -487,7 +491,7 @@ struct WorkspaceView: View {
             selectedWorkspaceID: $bindable.selectedWorkspaceID,
             selectedUsageTool: $selectedUsageTool,
             isRightRailVisible: isRightRailVisible,
-            activeInspectorTab: rightRailTab,
+            activeInspectorTab: effectiveRightRailTab,
             toggleRightRail: {
                 toggleRightRail()
             },
@@ -497,11 +501,12 @@ struct WorkspaceView: View {
     }
 
     private var availableInspectorTabs: [WorkspaceRightRailTab] {
-        var tabs: [WorkspaceRightRailTab] = [.timeline]
+        var tabs: [WorkspaceRightRailTab] = []
         if selectedWorkspace?.folderPath.isEmpty == false { tabs.append(.files) }
         if layout.blocks.contains(where: { $0.kind == .preview }) || selectedBlock?.kind == .preview {
             tabs.append(.preview)
         }
+        tabs.append(.timeline)
         tabs.append(.tools)
         if selectedWorkspace?.kind == .review || selectedWorkspace?.kind == .runs {
             tabs.append(.diff)

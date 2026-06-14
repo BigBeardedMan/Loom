@@ -14,9 +14,9 @@ import { ipc, type CommandRecord, type SessionInfo } from "../../lib/ipc";
 import { ADD_BLOCK_COMMANDS, PANEL_META, panelsForKind } from "../../lib/commands";
 
 const INSPECTOR_COMMANDS: { tab: RightRailTab; label: string; icon: keyof typeof Icons }[] = [
-  { tab: "timeline", label: "Timeline", icon: "workflow" },
   { tab: "files", label: "Files", icon: "folderFill" },
   { tab: "preview", label: "Preview", icon: "eye" },
+  { tab: "timeline", label: "Timeline", icon: "workflow" },
   { tab: "tools", label: "Tools", icon: "tools" },
   { tab: "diff", label: "Diff", icon: "diff" },
   { tab: "memory", label: "Memory", icon: "brain" },

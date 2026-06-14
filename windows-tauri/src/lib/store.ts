@@ -38,9 +38,9 @@ type UpdateStatus = {
   version?: string | null;
 };
 export type RightRailTab =
-  | "timeline"
   | "files"
   | "preview"
+  | "timeline"
   | "tools"
   | "diff"
   | "memory"
@@ -111,9 +111,9 @@ const RIGHT_RAIL_VISIBLE_KEY = "loom.shell.rightRailVisible";
 const RIGHT_RAIL_TAB_KEY = "loom.shell.rightRailTab";
 
 const RIGHT_RAIL_TABS = new Set<RightRailTab>([
-  "timeline",
   "files",
   "preview",
+  "timeline",
   "tools",
   "diff",
   "memory",
@@ -126,7 +126,7 @@ function storedRightRailVisible(): boolean {
 
 function storedRightRailTab(): RightRailTab {
   const raw = localStorage.getItem(RIGHT_RAIL_TAB_KEY) as RightRailTab | null;
-  return raw && RIGHT_RAIL_TABS.has(raw) ? raw : "timeline";
+  return raw && RIGHT_RAIL_TABS.has(raw) ? raw : "files";
 }
 
 const MAC_WORKSPACE_SEEDS: Array<{

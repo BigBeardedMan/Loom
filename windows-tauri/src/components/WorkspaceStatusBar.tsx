@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Icons } from "../lib/icons";
-import { ipc, type AgentDescriptor, type LiveAgentTaskGroup, type LocalEndpoint } from "../lib/ipc";
+import { ipc, type AgentDescriptor, type LiveAgentTaskGroup, type LocalEndpoint, type Workspace } from "../lib/ipc";
 import { PANEL_META } from "../lib/commands";
 import { useApp, type RightRailTab } from "../lib/store";
 import { surface, text, workspaceColorVar } from "../lib/theme";
@@ -20,6 +20,7 @@ export function WorkspaceStatusBar() {
   const [agents, setAgents] = useState<AgentDescriptor[]>([]);
   const [endpoints, setEndpoints] = useState<LocalEndpoint[]>([]);
   const updateSegment = updateStatusSegment(updateStatus, updatePill);
+  const effectiveRightRailTab = effectiveStatusRailTab(rightRailTab, workspace, layout?.blocks ?? []);
 
   useEffect(() => {
     const tick = () => ipc.liveTasks.list().then(setLiveGroups).catch(() => {});
@@ -50,7 +51,7 @@ export function WorkspaceStatusBar() {
       <StatusSegment icon="server" color={endpoints.length ? workspaceColorVar.purple : text.tertiary} label={agents[0]?.name || "Default agent"} detail={agents[0]?.model || `${endpoints.length} local endpoints`} />
       <div className="flex-1" />
       <StatusSegment icon={updateSegment.icon} color={updateSegment.color} label={updateSegment.label} detail={updateSegment.detail} />
-      <StatusSegment icon="panelRight" color={workspaceColorVar.blue} label={rightRailLabel(rightRailTab)} detail="inspector" />
+      <StatusSegment icon="panelRight" color={workspaceColorVar.blue} label={rightRailLabel(effectiveRightRailTab)} detail="inspector" />
     </footer>
   );
 }
@@ -91,6 +92,17 @@ function rightRailLabel(tab: RightRailTab): string {
     case "details":
       return "Details";
   }
+}
+
+function effectiveStatusRailTab(tab: RightRailTab, workspace: Workspace | null, blocks: Block[]): RightRailTab {
+  const available: RightRailTab[] = [];
+  if (workspace?.folderPath) available.push("files");
+  if (blocks.some((block) => block.kind === "preview")) available.push("preview");
+  available.push("timeline", "tools");
+  if (workspace?.kindRaw === "review" || workspace?.kindRaw === "runs") available.push("diff");
+  if (workspace?.folderPath) available.push("memory");
+  available.push("details");
+  return available.includes(tab) ? tab : available[0] ?? "details";
 }
 
 function blockTitle(block: Block): string {
