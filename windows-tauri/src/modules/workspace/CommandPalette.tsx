@@ -9,19 +9,9 @@ import {
   type WorkspaceColor,
 } from "../../lib/theme";
 import { Icons } from "../../lib/icons";
-import { useApp, type RightRailTab } from "../../lib/store";
+import { useApp } from "../../lib/store";
 import { ipc, type CommandRecord, type SessionInfo } from "../../lib/ipc";
-import { ADD_BLOCK_COMMANDS, PANEL_META, panelsForKind } from "../../lib/commands";
-
-const INSPECTOR_COMMANDS: { tab: RightRailTab; label: string; icon: keyof typeof Icons }[] = [
-  { tab: "files", label: "Files", icon: "folderFill" },
-  { tab: "preview", label: "Preview", icon: "eye" },
-  { tab: "timeline", label: "Timeline", icon: "workflow" },
-  { tab: "tools", label: "Tools", icon: "tools" },
-  { tab: "diff", label: "Diff", icon: "diff" },
-  { tab: "memory", label: "Memory", icon: "brain" },
-  { tab: "details", label: "Details", icon: "panelRight" },
-];
+import { ADD_BLOCK_COMMANDS, PANEL_META, panelsForKind, railTabsForContext } from "../../lib/commands";
 
 // Mirrors Loom/Workspace/CommandPalette.swift.
 // 560x420 sheet, .regularMaterial backdrop, sectioned list with selection ring.
@@ -31,6 +21,7 @@ export function CommandPalette() {
   const workspaces = useApp((s) => s.workspaces);
   const selectedWorkspaceId = useApp((s) => s.selectedWorkspaceId);
   const selectWorkspace = useApp((s) => s.selectWorkspace);
+  const layout = useApp((s) => s.layout);
   const openSettings = useApp((s) => s.openSettings);
   const addBlock = useApp((s) => s.addBlock);
   const isRightRailVisible = useApp((s) => s.isRightRailVisible);
@@ -38,6 +29,10 @@ export function CommandPalette() {
   const setRightRailTab = useApp((s) => s.setRightRailTab);
   const [recent, setRecent] = useState<CommandRecord[]>([]);
   const selectedWorkspace = workspaces.find((w) => w.id === selectedWorkspaceId);
+  const inspectorCommands = railTabsForContext({
+    workspace: selectedWorkspace ?? null,
+    blocks: layout?.blocks ?? [],
+  });
 
   useEffect(() => {
     if (!isOpen) return;
@@ -280,7 +275,7 @@ export function CommandPalette() {
               <Icons.refresh size={12} strokeWidth={1.8} />
               Refresh Runs
             </Command.Item>
-            {INSPECTOR_COMMANDS.map(({ tab, label, icon }) => {
+            {inspectorCommands.map(({ tab, label, icon }) => {
               const Icon = Icons[icon];
               return (
                 <Command.Item

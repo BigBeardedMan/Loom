@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Icons } from "../lib/icons";
-import { ipc, type AgentDescriptor, type LiveAgentTaskGroup, type LocalEndpoint, type Workspace } from "../lib/ipc";
-import { PANEL_META } from "../lib/commands";
-import { useApp, type RightRailTab } from "../lib/store";
+import { ipc, type AgentDescriptor, type LiveAgentTaskGroup, type LocalEndpoint } from "../lib/ipc";
+import { effectiveRailTab, PANEL_META, rightRailTabLabel } from "../lib/commands";
+import { useApp } from "../lib/store";
 import { surface, text, workspaceColorVar } from "../lib/theme";
 import type { Block } from "../modules/workspace/LayoutPersistence";
 
@@ -20,7 +20,7 @@ export function WorkspaceStatusBar() {
   const [agents, setAgents] = useState<AgentDescriptor[]>([]);
   const [endpoints, setEndpoints] = useState<LocalEndpoint[]>([]);
   const updateSegment = updateStatusSegment(updateStatus, updatePill);
-  const effectiveRightRailTab = effectiveStatusRailTab(rightRailTab, workspace, layout?.blocks ?? []);
+  const effectiveRightRailTab = effectiveRailTab(rightRailTab, { workspace, blocks: layout?.blocks ?? [] });
 
   useEffect(() => {
     const tick = () => ipc.liveTasks.list().then(setLiveGroups).catch(() => {});
@@ -51,7 +51,7 @@ export function WorkspaceStatusBar() {
       <StatusSegment icon="server" color={endpoints.length ? workspaceColorVar.purple : text.tertiary} label={agents[0]?.name || "Default agent"} detail={agents[0]?.model || `${endpoints.length} local endpoints`} />
       <div className="flex-1" />
       <StatusSegment icon={updateSegment.icon} color={updateSegment.color} label={updateSegment.label} detail={updateSegment.detail} />
-      <StatusSegment icon="panelRight" color={workspaceColorVar.blue} label={rightRailLabel(effectiveRightRailTab)} detail="inspector" />
+      <StatusSegment icon="panelRight" color={workspaceColorVar.blue} label={rightRailTabLabel(effectiveRightRailTab)} detail="inspector" />
     </footer>
   );
 }
@@ -73,36 +73,6 @@ function updateStatusSegment(
     case "upToDate":
       return { icon: "checkCircle", color: text.tertiary, label: "Up To Date", detail: status.version };
   }
-}
-
-function rightRailLabel(tab: RightRailTab): string {
-  switch (tab) {
-    case "timeline":
-      return "Timeline";
-    case "files":
-      return "Files";
-    case "preview":
-      return "Preview";
-    case "tools":
-      return "Tools";
-    case "diff":
-      return "Diff";
-    case "memory":
-      return "Memory";
-    case "details":
-      return "Details";
-  }
-}
-
-function effectiveStatusRailTab(tab: RightRailTab, workspace: Workspace | null, blocks: Block[]): RightRailTab {
-  const available: RightRailTab[] = [];
-  if (workspace?.folderPath) available.push("files");
-  if (blocks.some((block) => block.kind === "preview")) available.push("preview");
-  available.push("timeline", "tools");
-  if (workspace?.kindRaw === "review" || workspace?.kindRaw === "runs") available.push("diff");
-  if (workspace?.folderPath) available.push("memory");
-  available.push("details");
-  return available.includes(tab) ? tab : available[0] ?? "details";
 }
 
 function blockTitle(block: Block): string {

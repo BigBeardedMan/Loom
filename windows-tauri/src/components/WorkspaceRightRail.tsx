@@ -1,21 +1,11 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { Icons } from "../lib/icons";
 import { ipc, type AgentDescriptor, type AgentGraphEvent, type AgentGraphRunSummary, type LiveAgentTaskGroup, type LocalEndpoint, type Workspace } from "../lib/ipc";
-import { PANEL_META } from "../lib/commands";
-import { useApp, type Panel, type RightRailTab } from "../lib/store";
+import { PANEL_META, railTabsForContext } from "../lib/commands";
+import { useApp, type Panel } from "../lib/store";
 import { radius, surface, text, workspaceColorVar } from "../lib/theme";
 import { defaultPreviewUrlFor } from "../modules/build/PreviewPane";
 import type { Block } from "../modules/workspace/LayoutPersistence";
-
-const RAIL_TABS: { id: RightRailTab; label: string; icon: keyof typeof Icons }[] = [
-  { id: "files", label: "Files", icon: "folderFill" },
-  { id: "preview", label: "Preview", icon: "eye" },
-  { id: "timeline", label: "Timeline", icon: "workflow" },
-  { id: "tools", label: "Tools", icon: "tools" },
-  { id: "diff", label: "Diff", icon: "diff" },
-  { id: "memory", label: "Memory", icon: "brain" },
-  { id: "details", label: "Details", icon: "panelRight" },
-];
 
 type MemoryFile = {
   id: string;
@@ -47,10 +37,10 @@ export function WorkspaceRightRail() {
   const reviewableRuns = useMemo(() => scopedRuns.filter(isReviewableRun), [scopedRuns]);
   const reviewableRunKey = reviewableRuns.slice(0, 6).map((run) => run.id).join("|");
   const railTabs = useMemo(
-    () => availableRailTabs(workspace, layout?.blocks ?? [], scopedRuns, memoryFiles),
-    [workspace?.id, workspace?.folderPath, workspace?.kindRaw, layout?.blocks, scopedRuns, memoryFiles]
+    () => railTabsForContext({ workspace, blocks: layout?.blocks ?? [], runs: scopedRuns, hasMemoryFiles: memoryFiles.length > 0 }),
+    [workspace?.id, workspace?.folderPath, workspace?.kindRaw, layout?.blocks, scopedRuns, memoryFiles.length]
   );
-  const effectiveTab = railTabs.some((tab) => tab.id === selectedTab) ? selectedTab : railTabs[0]?.id ?? "details";
+  const effectiveTab = railTabs.some((tab) => tab.tab === selectedTab) ? selectedTab : railTabs[0]?.tab ?? "details";
 
   const refreshRuns = () => {
     ipc.agentGraph.list().then(setRuns).catch(() => setRuns([]));
@@ -151,11 +141,11 @@ export function WorkspaceRightRail() {
       <div className="flex gap-1 overflow-x-auto" style={{ padding: "8px 10px", borderBottom: `1px solid ${surface.hairline}` }}>
         {railTabs.map((tab) => {
           const Icon = Icons[tab.icon];
-          const active = effectiveTab === tab.id;
+          const active = effectiveTab === tab.tab;
           return (
             <button
-              key={tab.id}
-              onClick={() => setSelectedTab(tab.id)}
+              key={tab.tab}
+              onClick={() => setSelectedTab(tab.tab)}
               title={tab.label}
               aria-label={tab.label}
               style={{
@@ -1033,35 +1023,6 @@ function isAttentionStatus(status: string): boolean {
 
 function isRunningStatus(status: string): boolean {
   return ["running", "pending", "in_progress", "in-progress"].includes(status.toLowerCase());
-}
-
-function availableRailTabs(
-  workspace: Workspace | null,
-  blocks: Block[],
-  runs: AgentGraphRunSummary[],
-  memoryFiles: MemoryFile[]
-) {
-  const tabs: typeof RAIL_TABS = [];
-  const byId = new Map(RAIL_TABS.map((tab) => [tab.id, tab]));
-  const add = (id: RightRailTab) => {
-    const tab = byId.get(id);
-    if (tab && !tabs.some((item) => item.id === id)) tabs.push(tab);
-  };
-
-  if (workspace?.folderPath) add("files");
-  if (blocks.some((block) => block.kind === "preview")) add("preview");
-  add("timeline");
-  add("tools");
-  if (
-    workspace?.kindRaw === "review" ||
-    workspace?.kindRaw === "runs" ||
-    runs.some((run) => run.gitBranch || run.gitDirty !== undefined || (run.toolEventCount ?? 0) > 0)
-  ) {
-    add("diff");
-  }
-  if (workspace?.folderPath || memoryFiles.length > 0) add("memory");
-  add("details");
-  return tabs;
 }
 
 function filterRunsForWorkspace(runs: AgentGraphRunSummary[], workspace: Workspace | null): AgentGraphRunSummary[] {
