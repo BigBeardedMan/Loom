@@ -11,8 +11,9 @@ auto-update pipeline, the release flow, and the underlying architecture.
 > **Windows port:** This guide describes the macOS build. The Windows port at
 > `windows-tauri/` mirrors the same feature surface on a Tauri 2 + Rust + React
 > stack. Same workspaces, terminals, agents, kanban, and notes. Setup lives in
-> [`windows-tauri/README.md`](../windows-tauri/README.md), VM-side test path in
-> [`windows-tauri/TESTING.md`](../windows-tauri/TESTING.md).
+> [`windows-tauri/README.md`](https://github.com/BigBeardedMan/Loom/blob/loom-testing-edition/windows-tauri/README.md),
+> VM-side test path in
+> [`windows-tauri/TESTING.md`](https://github.com/BigBeardedMan/Loom/blob/loom-testing-edition/windows-tauri/TESTING.md).
 
 This guide is generated and maintained alongside the app. The hosted MkDocs
 version of these chapters lives at
@@ -41,7 +42,7 @@ version of these chapters lives at
 7. [Agent Providers](#7-agent-providers)
    1. [Claude Code (Default)](#71-claude-code-default)
    2. [Anthropic API (Direct)](#72-anthropic-api-direct)
-   3. [Local LLMs (Ollama and OpenAI compatible)](#73-local-llms-ollama-and-openai-compatible)
+   3. [Local LLMs (Ollama, LM Studio, and OpenAI compatible)](#73-local-llms-ollama-lm-studio-and-openai-compatible)
    4. [Custom Providers](#74-custom-providers)
 8. [Live Agent Tasks](#8-live-agent-tasks)
 9. [Task Handoff](#9-task-handoff)
@@ -67,7 +68,7 @@ version of these chapters lives at
     1. [File Paths](#161-file-paths)
     2. [Keychain Keys](#162-keychain-keys)
     3. [UserDefaults Keys](#163-userdefaults-keys)
-17. [Releasing a New Build](#17-releasing-a-new-build)
+17. [Releasing a Testing Edition Build](#17-releasing-a-testing-edition-build)
 18. [Building from Source](#18-building-from-source)
 19. [Troubleshooting](#19-troubleshooting)
 20. [Roadmap](#20-roadmap)

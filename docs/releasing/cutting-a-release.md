@@ -40,6 +40,16 @@ not enough.
 Every running Testing Edition install picks the new build up through the
 Testing Edition update pill after the pre-release is published.
 
+## Docs validation
+
+When release notes or workflow docs change, validate the MkDocs site with the
+same dependency entrypoint CI uses:
+
+```bash
+python3 -m pip install -r requirements-docs.txt
+python3 -m mkdocs build --strict
+```
+
 ## What can go wrong
 
 - **`error: tag testing-X.Y.Z already exists locally`** — you forgot to bump `MARKETING_VERSION`. Bump it, commit, retry.
