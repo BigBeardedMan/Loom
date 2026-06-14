@@ -351,6 +351,7 @@ struct WorkspaceRightRailView: View {
         let expanded = expandedRunID == summary.id
         let events = eventsByRunID[summary.id] ?? []
         let recentEvents = Array(events.suffix(5).reversed())
+        let evidence = ledgerEvidence(from: events)
 
         return VStack(alignment: .leading, spacing: 0) {
             Button {
@@ -390,6 +391,18 @@ struct WorkspaceRightRailView: View {
                                 tint: eventTint(event.type),
                                 title: event.type.rawValue,
                                 detail: eventDetail(event)
+                            )
+                        }
+                    }
+
+                    if !evidence.isEmpty {
+                        railSectionTitle("Evidence")
+                        ForEach(evidence) { item in
+                            railRow(
+                                icon: item.icon,
+                                tint: item.tint,
+                                title: item.title,
+                                detail: item.detail
                             )
                         }
                     }
@@ -820,6 +833,125 @@ struct WorkspaceRightRailView: View {
         return "\(detail) · \(relativeTime)"
     }
 
+    private func ledgerEvidence(from events: [AgentGraphEvent]) -> [LedgerEvidence] {
+        let newest = events.sorted { $0.occurredAt > $1.occurredAt }
+        var evidence: [LedgerEvidence] = []
+
+        if let event = newest.first(where: { compactPayload($0, keys: ["reviewSummary", "review"]) != nil }),
+           let detail = compactPayload(event, keys: ["reviewSummary", "review"]) {
+            evidence.append(LedgerEvidence(
+                id: "review",
+                icon: "doc.text.magnifyingglass",
+                tint: LoomTheme.purple,
+                title: "Review ready",
+                detail: detail
+            ))
+        }
+
+        if let event = newest.first(where: { $0.type == .toolCompleted && $0.payload["status"] == "failed" }) {
+            let tool = event.payload["tool"] ?? event.title ?? "Tool"
+            evidence.append(LedgerEvidence(
+                id: "failed-tool",
+                icon: "exclamationmark.triangle.fill",
+                tint: LoomTheme.orange,
+                title: "\(tool) failed",
+                detail: compact(event.summary ?? event.payload["status"] ?? "Tool needs attention.")
+            ))
+        }
+
+        if let event = newest.first(where: { ($0.payload["tool"] ?? $0.title) == "preview_snapshot" }) {
+            evidence.append(LedgerEvidence(
+                id: "preview",
+                icon: "globe",
+                tint: LoomTheme.pink,
+                title: "Preview check",
+                detail: compact(event.summary ?? event.payload["status"] ?? "Preview snapshot recorded.")
+            ))
+        }
+
+        if let event = newest.first(where: { isHandoffEvent($0.type) }) {
+            evidence.append(LedgerEvidence(
+                id: "handoff",
+                icon: "arrowshape.turn.up.right",
+                tint: eventTint(event.type),
+                title: handoffTitle(event.type),
+                detail: compact(event.summary ?? event.payload["reviewSummary"] ?? event.title ?? "Handoff signal recorded.")
+            ))
+        }
+
+        if let event = newest.first(where: { hasGitEvidence($0) }) {
+            let gitParts = [
+                event.payload["gitBranch"],
+                event.payload["gitHead"],
+                event.payload["gitDirty"].map { $0 == "true" ? "dirty" : "clean" }
+            ].compactMap { $0 }
+            evidence.append(LedgerEvidence(
+                id: "git",
+                icon: "arrow.triangle.branch",
+                tint: event.payload["gitDirty"] == "true" ? LoomTheme.orange : LoomTheme.green,
+                title: "Git state",
+                detail: gitParts.joined(separator: " · ")
+            ))
+        }
+
+        if let event = newest.first(where: { $0.type == .attentionRequested || $0.type == .andonPaused || $0.type == .runFailed }) {
+            evidence.append(LedgerEvidence(
+                id: "attention",
+                icon: "exclamationmark.triangle.fill",
+                tint: LoomTheme.orange,
+                title: "Attention needed",
+                detail: compact(event.summary ?? event.title ?? event.payload["status"] ?? event.type.rawValue)
+            ))
+        }
+
+        return Array(evidence.prefix(5))
+    }
+
+    private func compactPayload(_ event: AgentGraphEvent, keys: [String]) -> String? {
+        for key in keys {
+            if let value = event.payload[key] {
+                let compacted = compact(value)
+                if !compacted.isEmpty { return compacted }
+            }
+        }
+        return nil
+    }
+
+    private func compact(_ text: String, limit: Int = 180) -> String {
+        let normalized = text
+            .split(whereSeparator: { $0.isNewline })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalized.count > limit else { return normalized }
+        let end = normalized.index(normalized.startIndex, offsetBy: limit)
+        return String(normalized[..<end]) + "..."
+    }
+
+    private func isHandoffEvent(_ type: AgentGraphEventType) -> Bool {
+        switch type {
+        case .handoffWritten, .handoffAccepted, .handoffRejected:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func handoffTitle(_ type: AgentGraphEventType) -> String {
+        switch type {
+        case .handoffAccepted: return "Handoff accepted"
+        case .handoffRejected: return "Handoff rejected"
+        default:               return "Handoff written"
+        }
+    }
+
+    private func hasGitEvidence(_ event: AgentGraphEvent) -> Bool {
+        event.payload["gitBranch"] != nil
+        || event.payload["gitHead"] != nil
+        || event.payload["gitDirty"] != nil
+    }
+
     private func summaryChips(_ summary: AgentGraphRunSummary) -> [String] {
         [
             summary.status.capitalized,
@@ -923,6 +1055,14 @@ private struct WorkspaceWorkflowSignals {
     let hasAttention: Bool
     let hasReviewSignals: Bool
     let shipReady: Bool
+}
+
+private struct LedgerEvidence: Identifiable {
+    let id: String
+    let icon: String
+    let tint: Color
+    let title: String
+    let detail: String
 }
 
 struct WorkspaceStatusBar: View {

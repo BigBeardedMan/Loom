@@ -262,6 +262,7 @@ function TimelineContent({
           runs.slice(0, 8).map((run) => {
             const expanded = expandedRunId === run.id;
             const events = eventsByRun[run.id] ?? [];
+            const evidence = runEvidence(events);
             return (
               <section key={run.id} style={sectionBox}>
                 <button
@@ -287,13 +288,23 @@ function TimelineContent({
                       events.slice(-5).reverse().map((event) => (
                         <div key={event.eventID ?? event.eventId ?? `${event.type}:${event.occurredAt}`} style={{ marginTop: 6 }}>
                           <RailRow
-                            icon="listBulletRect"
-                            color={workspaceColorVar.blue}
+                            icon={eventIcon(event.type)}
+                            color={eventColor(event)}
                             title={event.type}
-                            detail={event.summary || event.title || event.payload?.tool || event.occurredAt}
+                            detail={eventDetail(event)}
                           />
                         </div>
                       ))
+                    )}
+                    {evidence.length > 0 && (
+                      <div style={{ marginTop: 10 }}>
+                        <SectionTitle>Evidence</SectionTitle>
+                        <div className="flex flex-col gap-2">
+                          {evidence.map((item) => (
+                            <RailRow key={item.id} icon={item.icon} color={item.color} title={item.title} detail={item.detail} />
+                          ))}
+                        </div>
+                      </div>
                     )}
                   </div>
                 )}
@@ -582,6 +593,176 @@ function runStatusColor(status: string): string {
       return workspaceColorVar.orange;
     default:
       return workspaceColorVar.blue;
+  }
+}
+
+function eventIcon(type: string): keyof typeof Icons {
+  switch (type) {
+    case "run.completed":
+    case "spawn.completed":
+      return "checkCircle";
+    case "run.failed":
+    case "run.cancelled":
+    case "spawn.failed":
+      return "failedCircle";
+    case "tool.started":
+    case "tool.completed":
+      return "terminal";
+    case "handoff.written":
+    case "handoff.accepted":
+    case "handoff.rejected":
+      return "rerun";
+    case "attention.requested":
+    case "andon.paused":
+      return "failedCircle";
+    default:
+      return "listBulletRect";
+  }
+}
+
+function eventColor(event: AgentGraphEvent): string {
+  switch (event.type) {
+    case "run.completed":
+    case "spawn.completed":
+    case "handoff.accepted":
+      return workspaceColorVar.green;
+    case "run.failed":
+    case "run.cancelled":
+    case "spawn.failed":
+    case "handoff.rejected":
+    case "attention.requested":
+    case "andon.paused":
+      return workspaceColorVar.orange;
+    case "tool.completed":
+      return event.payload?.status === "failed" ? workspaceColorVar.orange : workspaceColorVar.green;
+    case "tool.started":
+      return workspaceColorVar.purple;
+    default:
+      return workspaceColorVar.blue;
+  }
+}
+
+function eventDetail(event: AgentGraphEvent): string {
+  return compact(
+    event.summary ||
+      event.title ||
+      event.payload?.tool ||
+      event.payload?.status ||
+      event.payload?.subject ||
+      event.payload?.taskID ||
+      event.payload?.path ||
+      event.occurredAt
+  );
+}
+
+type RunEvidence = {
+  id: string;
+  icon: keyof typeof Icons;
+  color: string;
+  title: string;
+  detail?: string;
+};
+
+function runEvidence(events: AgentGraphEvent[]): RunEvidence[] {
+  const newest = [...events].sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt));
+  const evidence: RunEvidence[] = [];
+
+  const review = newest.find((event) => payloadValue(event, ["reviewSummary", "review"]));
+  const reviewDetail = review ? payloadValue(review, ["reviewSummary", "review"]) : null;
+  if (reviewDetail) {
+    evidence.push({ id: "review", icon: "file", color: workspaceColorVar.purple, title: "Review ready", detail: reviewDetail });
+  }
+
+  const failedTool = newest.find((event) => event.type === "tool.completed" && event.payload?.status === "failed");
+  if (failedTool) {
+    const tool = failedTool.payload?.tool || failedTool.title || "Tool";
+    evidence.push({
+      id: "failed-tool",
+      icon: "failedCircle",
+      color: workspaceColorVar.orange,
+      title: `${tool} failed`,
+      detail: compact(failedTool.summary || failedTool.payload?.status || "Tool needs attention."),
+    });
+  }
+
+  const preview = newest.find((event) => (event.payload?.tool || event.title) === "preview_snapshot");
+  if (preview) {
+    evidence.push({
+      id: "preview",
+      icon: "eye",
+      color: workspaceColorVar.pink,
+      title: "Preview check",
+      detail: compact(preview.summary || preview.payload?.status || "Preview snapshot recorded."),
+    });
+  }
+
+  const handoff = newest.find((event) => ["handoff.written", "handoff.accepted", "handoff.rejected"].includes(event.type));
+  if (handoff) {
+    evidence.push({
+      id: "handoff",
+      icon: "rerun",
+      color: eventColor(handoff),
+      title: handoffTitle(handoff.type),
+      detail: compact(handoff.summary || handoff.payload?.reviewSummary || handoff.title || "Handoff signal recorded."),
+    });
+  }
+
+  const git = newest.find((event) => event.payload?.gitBranch || event.payload?.gitHead || event.payload?.gitDirty);
+  if (git?.payload) {
+    const gitParts = [
+      git.payload.gitBranch,
+      git.payload.gitHead,
+      git.payload.gitDirty ? (git.payload.gitDirty === "true" ? "dirty" : "clean") : null,
+    ].filter(Boolean) as string[];
+    evidence.push({
+      id: "git",
+      icon: "diff",
+      color: git.payload.gitDirty === "true" ? workspaceColorVar.orange : workspaceColorVar.green,
+      title: "Git state",
+      detail: gitParts.join(" - "),
+    });
+  }
+
+  const attention = newest.find((event) => ["attention.requested", "andon.paused", "run.failed"].includes(event.type));
+  if (attention) {
+    evidence.push({
+      id: "attention",
+      icon: "failedCircle",
+      color: workspaceColorVar.orange,
+      title: "Attention needed",
+      detail: compact(attention.summary || attention.title || attention.payload?.status || attention.type),
+    });
+  }
+
+  return evidence.slice(0, 5);
+}
+
+function payloadValue(event: AgentGraphEvent, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = event.payload?.[key];
+    if (value?.trim()) return compact(value);
+  }
+  return null;
+}
+
+function compact(raw: string, limit = 180): string {
+  const value = raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  return value.length > limit ? `${value.slice(0, limit)}...` : value;
+}
+
+function handoffTitle(type: string): string {
+  switch (type) {
+    case "handoff.accepted":
+      return "Handoff accepted";
+    case "handoff.rejected":
+      return "Handoff rejected";
+    default:
+      return "Handoff written";
   }
 }
 
