@@ -69,6 +69,7 @@ async function devInvoke<T>(command: string, args?: InvokePayload): Promise<T> {
     case "terminal_set_cwd":
     case "terminal_update_metadata":
     case "fs_write_file":
+    case "fs_reveal_path":
     case "fs_watch_stop":
     case "mcp_add":
     case "mcp_remove":
@@ -387,6 +388,7 @@ export const ipc = {
     read: (path: string) => invoke<string>("fs_read_file", { path }),
     write: (path: string, contents: string) =>
       invoke<void>("fs_write_file", { path, contents }),
+    reveal: (path: string) => invoke<void>("fs_reveal_path", { path }),
     pickWorkspaceSeeds: (folder: string) =>
       invoke<string[]>("fs_pick_workspace_seed_files", { folder }),
     watchStart: (root: string) => invoke<string>("fs_watch_start", { root }),

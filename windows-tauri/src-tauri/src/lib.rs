@@ -247,6 +247,7 @@ pub fn run() {
             fs_walk::fs_walk_tree,
             fs_walk::fs_read_file,
             fs_walk::fs_write_file,
+            fs_walk::fs_reveal_path,
             fs_walk::fs_pick_workspace_seed_files,
             fs_walk::fs_watch_start,
             fs_walk::fs_watch_stop,

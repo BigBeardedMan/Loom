@@ -5,6 +5,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
@@ -150,6 +151,32 @@ pub async fn fs_write_file(
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     std::fs::write(&path, contents).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn fs_reveal_path(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    let path = security::validate_existing_path(&state, &path)?;
+    #[cfg(target_os = "windows")]
+    let status = Command::new("explorer.exe")
+        .arg(format!("/select,{}", path.display()))
+        .status()
+        .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    let status = Command::new("open")
+        .arg("-R")
+        .arg(&path)
+        .status()
+        .map_err(|e| e.to_string())?;
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let status = Command::new("xdg-open")
+        .arg(path.parent().unwrap_or_else(|| Path::new(".")))
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("open failed with status {status}"))
+    }
 }
 
 #[tauri::command]

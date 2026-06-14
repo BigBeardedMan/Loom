@@ -554,12 +554,18 @@ struct WorkspaceRightRailView: View {
                     railMuted("No agent memory files found in this folder.")
                 } else {
                     ForEach(memoryFiles) { file in
-                        railRow(
-                            icon: "doc.text",
-                            tint: LoomTheme.blue,
-                            title: file.name,
-                            detail: "\(file.characterCount) bytes"
-                        )
+                        VStack(alignment: .leading, spacing: 6) {
+                            railRow(
+                                icon: "doc.text",
+                                tint: LoomTheme.blue,
+                                title: file.name,
+                                detail: "\(file.characterCount) bytes"
+                            )
+                            memoryFileActions(for: file)
+                        }
+                        .padding(9)
+                        .background(LoomTheme.inset)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
                 }
             } else {
@@ -720,6 +726,7 @@ struct WorkspaceRightRailView: View {
                             .foregroundStyle(LoomTheme.mutedText)
                             .lineLimit(4)
                             .fixedSize(horizontal: false, vertical: true)
+                        memoryFileActions(for: file)
                     }
                     .padding(9)
                     .background(LoomTheme.inset)
@@ -992,16 +999,35 @@ struct WorkspaceRightRailView: View {
 
     private func ledgerActions(for summary: AgentGraphRunSummary) -> some View {
         HStack(spacing: 6) {
-            ledgerActionButton(title: "Copy", systemImage: "doc.on.doc") {
+            railActionButton(title: "Copy", systemImage: "doc.on.doc", help: "Copy ledger path") {
                 copyLedgerPath(summary.ledgerPath)
             }
-            ledgerActionButton(title: "Reveal", systemImage: "folder") {
+            railActionButton(title: "Reveal", systemImage: "folder", help: "Reveal ledger in Finder") {
                 revealLedger(summary.ledgerPath)
             }
         }
     }
 
-    private func ledgerActionButton(title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+    private func memoryFileActions(for file: WorkspaceMemoryFile) -> some View {
+        HStack(spacing: 6) {
+            railActionButton(title: "Copy", systemImage: "doc.on.doc", help: "Copy memory file path") {
+                copyPath(file.path)
+            }
+            railActionButton(title: "Open", systemImage: "doc.text", help: "Open \(file.name)") {
+                openPath(file.path)
+            }
+            railActionButton(title: "Reveal", systemImage: "folder", help: "Reveal \(file.name) in Finder") {
+                revealPath(file.path)
+            }
+        }
+    }
+
+    private func railActionButton(
+        title: String,
+        systemImage: String,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             HStack(spacing: 5) {
                 Image(systemName: systemImage)
@@ -1021,16 +1047,28 @@ struct WorkspaceRightRailView: View {
         }
         .buttonStyle(.plain)
         .pointingHandCursor()
-        .help("\(title) ledger path")
+        .help(help)
     }
 
     private func copyLedgerPath(_ path: String) {
+        copyPath(path)
+    }
+
+    private func copyPath(_ path: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(path, forType: .string)
     }
 
     private func revealLedger(_ path: String) {
+        revealPath(path)
+    }
+
+    private func revealPath(_ path: String) {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+
+    private func openPath(_ path: String) {
+        NSWorkspace.shared.open(URL(fileURLWithPath: path))
     }
 
     private func railRow(icon: String, tint: Color, title: String, detail: String) -> some View {

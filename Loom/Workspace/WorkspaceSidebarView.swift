@@ -283,12 +283,24 @@ struct WorkspaceSidebarView: View {
     @ViewBuilder
     private var sessionsSection: some View {
         switch selectedKind {
-        case .code, .runs:
+        case .code:
             terminalSessionsSection
         case .ideas:
             ideaSessionsSection
         case .review:
-            reviewSessionsSection
+            agentRunSessionsSection(
+                title: "Review Runs",
+                emptyText: "Review-ready runs will appear here after agents write graph ledger evidence.",
+                refreshHelp: "Refresh review runs",
+                badgeTint: LoomTheme.orange
+            )
+        case .runs:
+            agentRunSessionsSection(
+                title: "Run History",
+                emptyText: "No run history for this workspace yet.",
+                refreshHelp: "Refresh run history",
+                badgeTint: LoomTheme.green
+            )
         }
     }
 
@@ -726,13 +738,18 @@ struct WorkspaceSidebarView: View {
         try? context.save()
     }
 
-    // MARK: - Review sessions (placeholder)
+    // MARK: - Agent run sessions
 
-    private var reviewSessionsSection: some View {
+    private func agentRunSessionsSection(
+        title: String,
+        emptyText: String,
+        refreshHelp: String,
+        badgeTint: Color
+    ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            sectionHeader(title: "Review Runs", trailing: {
+            sectionHeader(title: title, trailing: {
                 HStack(spacing: 6) {
-                    countBadge(reviewRunSummaries.count)
+                    countBadge(reviewRunSummaries.count, tint: badgeTint)
                     Button {
                         Task { await refreshReviewRuns() }
                     } label: {
@@ -741,12 +758,12 @@ struct WorkspaceSidebarView: View {
                             .foregroundStyle(LoomTheme.mutedText)
                     }
                     .buttonStyle(.plain)
-                    .help("Refresh review runs")
-                    .accessibilityLabel("Refresh review runs")
+                    .help(refreshHelp)
+                    .accessibilityLabel(refreshHelp)
                 }
             })
             if reviewRunSummaries.isEmpty {
-                emptyHint("Review-ready runs will appear here after agents write graph ledger evidence.")
+                emptyHint(emptyText)
             } else {
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 6) {
@@ -805,7 +822,7 @@ struct WorkspaceSidebarView: View {
 
     @MainActor
     private func refreshReviewRuns() async {
-        guard selectedKind == .review else {
+        guard selectedKind == .review || selectedKind == .runs else {
             reviewRunSummaries = []
             return
         }
@@ -926,12 +943,13 @@ struct WorkspaceSidebarView: View {
         }
     }
 
-    private func countBadge(_ count: Int) -> some View {
+    private func countBadge(_ count: Int, tint: Color? = nil) -> some View {
         Text(count.formatted())
             .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(LoomTheme.mutedText)
+            .foregroundStyle(tint ?? LoomTheme.mutedText)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
+            .background(tint?.opacity(0.12) ?? Color.clear)
             .background(LoomTheme.softPanel)
             .clipShape(Capsule())
     }

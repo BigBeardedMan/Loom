@@ -334,7 +334,10 @@ function FilesContent({ workspace, memoryFiles }: { workspace: Workspace | null;
             <Muted>No agent memory files found in this folder.</Muted>
           ) : (
             memoryFiles.map((file) => (
-              <RailRow key={file.id} icon="file" color={workspaceColorVar.blue} title={file.name} detail={`${file.characterCount} chars`} />
+              <section key={file.id} style={sectionBox}>
+                <RailRow icon="file" color={workspaceColorVar.blue} title={file.name} detail={`${file.characterCount} chars`} />
+                <MemoryFileActions file={file} />
+              </section>
             ))
           )}
         </>
@@ -503,6 +506,7 @@ function MemoryContent({ memoryFiles, runs }: { memoryFiles: MemoryFile[]; runs:
               <p style={{ marginTop: 6, fontSize: 10, lineHeight: 1.45, color: text.muted }}>
                 {file.excerpt}
               </p>
+              <MemoryFileActions file={file} />
             </section>
           ))
         )}
@@ -583,25 +587,43 @@ function CodeLine({ children }: { children: ReactNode }) {
   );
 }
 
+function MemoryFileActions({ file }: { file: MemoryFile }) {
+  const copyPath = () => void navigator.clipboard?.writeText(file.path);
+  const revealPath = () => void ipc.fs.reveal(file.path);
+
+  return (
+    <div className="flex items-center gap-1.5" style={{ marginTop: 7 }}>
+      <RailActionButton title={`Copy ${file.name} path`} onClick={copyPath}>
+        <Icons.copy size={11} strokeWidth={2.2} />
+        Copy
+      </RailActionButton>
+      <RailActionButton title={`Reveal ${file.name}`} onClick={revealPath}>
+        <Icons.folderOpen size={11} strokeWidth={2.2} />
+        Reveal
+      </RailActionButton>
+    </div>
+  );
+}
+
 function LedgerActions({ run }: { run: AgentGraphRunSummary }) {
   const copyLedgerPath = () => void navigator.clipboard?.writeText(run.ledgerPath);
   const revealLedger = () => void ipc.agentGraph.reveal(run.id);
 
   return (
     <div className="flex items-center gap-1.5" style={{ marginTop: 6 }}>
-      <LedgerActionButton title="Copy ledger path" onClick={copyLedgerPath}>
+      <RailActionButton title="Copy ledger path" onClick={copyLedgerPath}>
         <Icons.copy size={11} strokeWidth={2.2} />
         Copy
-      </LedgerActionButton>
-      <LedgerActionButton title="Reveal ledger" onClick={revealLedger}>
+      </RailActionButton>
+      <RailActionButton title="Reveal ledger" onClick={revealLedger}>
         <Icons.folderOpen size={11} strokeWidth={2.2} />
         Reveal
-      </LedgerActionButton>
+      </RailActionButton>
     </div>
   );
 }
 
-function LedgerActionButton({
+function RailActionButton({
   title,
   onClick,
   children,
