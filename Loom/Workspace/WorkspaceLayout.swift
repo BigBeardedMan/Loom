@@ -349,6 +349,36 @@ final class WorkspaceLayout {
         return true
     }
 
+    func addTerminalPane(to blockID: UUID) {
+        let current = blocks
+        guard let block = current.first(where: { $0.id == blockID }) else { return }
+        let before = block.terminalSessions.count
+        block.addTerminalPane(defaultCwd: defaultCwd)
+        guard block.terminalSessions.count != before else { return }
+        blocksByKind[currentKind] = current
+        persistCurrent()
+    }
+
+    func removeTerminalPane(from blockID: UUID, sessionID: UUID) {
+        let current = blocks
+        guard let block = current.first(where: { $0.id == blockID }) else { return }
+        let before = block.terminalSessions.count
+        block.removeTerminalPane(id: sessionID)
+        guard block.terminalSessions.count != before else { return }
+        blocksByKind[currentKind] = current
+        persistCurrent()
+    }
+
+    func toggleTerminalSplitAxis(for blockID: UUID) {
+        let current = blocks
+        guard let block = current.first(where: { $0.id == blockID }) else { return }
+        let before = block.terminalSplitAxis
+        block.toggleTerminalSplitAxis()
+        guard block.terminalSplitAxis != before else { return }
+        blocksByKind[currentKind] = current
+        persistCurrent()
+    }
+
     private static func nextTerminalIndex(in blocks: [WorkspaceBlock]) -> Int {
         let used = Set(blocks.compactMap { $0.kind == .terminal ? $0.autoTerminalIndex : nil })
         var n = 1

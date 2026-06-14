@@ -192,7 +192,7 @@ private struct TerminalSinglePane: View {
         // and at 4 the layout is locked to a 2x2 quad.
         if (2...3).contains(block.terminalSessions.count) {
             Button {
-                block.toggleTerminalSplitAxis()
+                layout.toggleTerminalSplitAxis(for: block.id)
             } label: {
                 Image(systemName: block.terminalSplitAxis == .horizontal
                       ? "rectangle.split.1x2"
@@ -209,7 +209,7 @@ private struct TerminalSinglePane: View {
 
         if block.terminalSessions.count < WorkspaceBlock.maxTerminalPanes {
             Button {
-                block.addTerminalPane(defaultCwd: layout.defaultCwd)
+                layout.addTerminalPane(to: block.id)
             } label: {
                 Image(systemName: "plus.rectangle.on.rectangle")
                     .font(.system(size: 12))
@@ -222,7 +222,7 @@ private struct TerminalSinglePane: View {
 
         if block.terminalSessions.count > 1 {
             Button {
-                block.removeTerminalPane(id: session.id)
+                layout.removeTerminalPane(from: block.id, sessionID: session.id)
             } label: {
                 Image(systemName: "xmark.circle")
                     .font(.system(size: 12))
