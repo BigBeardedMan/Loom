@@ -1,5 +1,170 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { listen as tauriListen, type UnlistenFn } from "@tauri-apps/api/event";
+
+type InvokePayload = Record<string, unknown>;
+
+function hasTauriRuntime(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    Boolean((window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__)
+  );
+}
+
+function invoke<T>(command: string, args?: InvokePayload): Promise<T> {
+  if (!hasTauriRuntime()) return devInvoke<T>(command, args);
+  return tauriInvoke<T>(command, args);
+}
+
+const DEV_WORKSPACES: Workspace[] = [
+  makeDevWorkspace("dev-prompt", "Prompt", "blue", "code"),
+  makeDevWorkspace("dev-ideas", "Ideas", "pink", "ideas"),
+  makeDevWorkspace("dev-review", "Review", "orange", "review"),
+  makeDevWorkspace("dev-runs", "Runs", "green", "runs"),
+];
+let devTerminalCounter = 0;
+
+function makeDevWorkspace(
+  id: string,
+  name: string,
+  colorName: WorkspaceColor,
+  kindRaw: WorkspaceKind
+): Workspace {
+  const now = Date.now();
+  return {
+    id,
+    name,
+    folderPath: "",
+    colorName,
+    kindRaw,
+    previewUrl: "",
+    taskBadge: 0,
+    lastOpenedAt: now,
+    createdAt: now,
+  };
+}
+
+async function devInvoke<T>(command: string, args?: InvokePayload): Promise<T> {
+  switch (command) {
+    case "app_version":
+      return "dev" as T;
+    case "workspace_list":
+      return DEV_WORKSPACES as T;
+    case "workspace_create": {
+      const input = args?.input as Partial<WorkspaceInput> | undefined;
+      return makeDevWorkspace(
+        `dev-${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`,
+        input?.name ?? "Workspace",
+        input?.colorName ?? "blue",
+        input?.kindRaw ?? "code"
+      ) as T;
+    }
+    case "workspace_update":
+      return null as T;
+    case "workspace_delete":
+    case "workspace_touch_last_opened":
+    case "layout_save":
+    case "terminal_write":
+    case "terminal_resize":
+    case "terminal_kill":
+    case "terminal_set_cwd":
+    case "terminal_update_metadata":
+    case "fs_write_file":
+    case "fs_watch_stop":
+    case "mcp_add":
+    case "mcp_remove":
+    case "keychain_set":
+    case "keychain_delete":
+    case "live_tasks_set_staleness":
+    case "live_tasks_clear_group":
+    case "live_tasks_clear_all":
+    case "agent_graph_reveal":
+    case "update_run_installer":
+    case "crash_record_frontend":
+    case "terminal_transcript_move_to_deleted":
+    case "terminal_transcript_recover_deleted":
+    case "terminal_transcript_delete_permanently":
+    case "terminal_transcripts_prune":
+      return undefined as T;
+    case "layout_get":
+    case "terminal_foreground_command":
+    case "dialog_pick_folder":
+    case "crash_get_last":
+    case "update_check":
+    case "keychain_get":
+      return null as T;
+    case "terminal_spawn":
+      devTerminalCounter += 1;
+      return `dev-terminal-${Date.now()}-${devTerminalCounter}` as T;
+    case "terminal_list":
+    case "command_history_list":
+    case "terminal_transcripts_recent":
+    case "agent_registry_refresh":
+    case "mcp_list":
+    case "endpoint_list":
+    case "live_tasks_list":
+    case "agent_graph_list":
+    case "agent_graph_read":
+    case "lmstudio_models":
+      return [] as T;
+    case "command_history_read_output":
+    case "terminal_transcript_read":
+    case "terminal_transcripts_folder":
+    case "fs_read_file":
+      return "" as T;
+    case "terminal_transcript_restore":
+      return null as T;
+    case "terminal_transcripts_config":
+      return {
+        enabled: false,
+        maxBytes: 0,
+        totalBytes: 0,
+        baseDir: "",
+      } as T;
+    case "fs_walk_tree":
+      return {
+        name: "Workspace",
+        path: "",
+        isDir: true,
+        size: 0,
+        modifiedMs: Date.now(),
+        children: [],
+      } as T;
+    case "fs_pick_workspace_seed_files":
+      return [] as T;
+    case "fs_watch_start":
+      return "dev-watch" as T;
+    case "endpoint_test":
+      return { ok: false, status: 0, message: "Tauri runtime unavailable in browser preview." } as T;
+    case "lmstudio_runtime_status":
+    case "lmstudio_prepare":
+    case "lmstudio_load":
+    case "lmstudio_unload":
+      return emptyDevLmStudioRuntime("Tauri runtime unavailable in browser preview.") as T;
+    case "lmstudio_download":
+    case "lmstudio_download_status":
+      return {
+        jobId: null,
+        status: "unavailable",
+        totalSizeBytes: null,
+        downloadedBytes: null,
+        bytesPerSecond: null,
+        startedAt: null,
+        completedAt: null,
+        estimatedCompletion: null,
+      } as T;
+    case "usage_read":
+      return emptyDevUsage((args?.tool as CliToolUsage["tool"]) ?? "claude") as T;
+    case "update_get_arch":
+      return "dev" as T;
+    case "update_download_and_stage":
+      return "" as T;
+    case "window_open":
+      return undefined as T;
+    default:
+      console.warn(`[dev-ipc] Unhandled Tauri command "${command}"`, args);
+      return undefined as T;
+  }
+}
 
 async function notify(title: string, body: string): Promise<void> {
   try {
@@ -662,6 +827,50 @@ export type AgentSource =
   | "ollama"
   | "openAICompatible";
 
+function emptyDevLmStudioRuntime(error: string): LmStudioRuntimeStatus {
+  return {
+    cliInstalled: false,
+    serverReachable: false,
+    state: "no-endpoint",
+    apiMode: "browser-preview",
+    supportsV1: false,
+    supportsNativeChat: false,
+    supportsStreamingEvents: false,
+    supportsStatefulChat: false,
+    supportsNativeMcp: false,
+    supportsModelManagement: false,
+    supportsDownloads: false,
+    supportsAuthToken: false,
+    lastCapabilityError: null,
+    models: [],
+    recommendedModelId: null,
+    lastError: error,
+  };
+}
+
+function emptyDevUsage(tool: CliToolUsage["tool"]): CliToolUsage {
+  return {
+    tool,
+    isInstalled: false,
+    activeSessions: 0,
+    sessionsToday: 0,
+    sessionsTotal: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cachedTokens: 0,
+    lastActivity: null,
+    models: [],
+    chartBuckets: [],
+    topProjects: [],
+    tokensByModel: [],
+    tokensByProject: [],
+    topTopics: [],
+    recentPrompts: [],
+    hourlyDistribution: Array.from({ length: 24 }, () => 0),
+    promptCount: 0,
+  };
+}
+
 function normalizeAgentGraphRunSummaries(summaries: AgentGraphRunSummary[]): AgentGraphRunSummary[] {
   return summaries.map((summary) => ({
     ...summary,
@@ -710,5 +919,6 @@ export async function on<T = unknown>(
   event: string,
   handler: (payload: T) => void
 ): Promise<UnlistenFn> {
-  return listen<T>(event, (e) => handler(e.payload));
+  if (!hasTauriRuntime()) return () => {};
+  return tauriListen<T>(event, (e) => handler(e.payload));
 }
