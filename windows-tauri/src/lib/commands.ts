@@ -17,6 +17,11 @@ export const ROOM_META: Record<
   runs: { label: "Runs", icon: "workflow", color: workspaceColorVar.green },
 };
 
+export function workspaceMatchesKind(workspace: Pick<Workspace, "kindRaw">, kind: WorkspaceKind): boolean {
+  if (kind === "review") return workspace.kindRaw === "review" || workspace.kindRaw === "build";
+  return workspace.kindRaw === kind;
+}
+
 export const PANEL_META: Record<
   Panel,
   { label: string; icon: IconName; color: string }

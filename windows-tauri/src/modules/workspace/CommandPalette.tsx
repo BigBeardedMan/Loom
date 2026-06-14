@@ -10,10 +10,10 @@ import {
 } from "../../lib/theme";
 import { Icons } from "../../lib/icons";
 import { useApp } from "../../lib/store";
-import { ipc, type CommandRecord, type SessionInfo, type Workspace, type WorkspaceKind } from "../../lib/ipc";
+import { ipc, type CommandRecord, type SessionInfo } from "../../lib/ipc";
 import { LOOM_REFRESH_RUNS } from "../../lib/events";
 import { useRightRailContext } from "../../lib/railContext";
-import { ADD_BLOCK_COMMANDS, PANEL_META, ROOM_KINDS, ROOM_META, panelsForKind, railTabsForContext } from "../../lib/commands";
+import { ADD_BLOCK_COMMANDS, PANEL_META, ROOM_KINDS, ROOM_META, panelsForKind, railTabsForContext, workspaceMatchesKind } from "../../lib/commands";
 
 // Mirrors Loom/Workspace/CommandPalette.swift.
 // 560x420 sheet, .regularMaterial backdrop, sectioned list with selection ring.
@@ -410,9 +410,4 @@ export function CommandPalette() {
       </Command>
     </div>
   );
-}
-
-function workspaceMatchesKind(workspace: Workspace, kind: WorkspaceKind): boolean {
-  if (kind === "review") return workspace.kindRaw === "review" || workspace.kindRaw === "build";
-  return workspace.kindRaw === kind;
 }

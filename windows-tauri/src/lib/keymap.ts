@@ -4,7 +4,7 @@
 import { useEffect } from "react";
 import { useApp, type Panel } from "./store";
 import { ipc } from "./ipc";
-import { panelsForKind } from "./commands";
+import { ROOM_KINDS, ROOM_META, panelsForKind, workspaceMatchesKind } from "./commands";
 import { LOOM_REFRESH_RUNS } from "./events";
 
 type Binding = {
@@ -150,6 +150,18 @@ export function useGlobalKeymap() {
         },
       });
     }
+
+    // Ctrl+Alt+1..4 → jump to canonical rooms: Prompt, Ideas, Review, Runs.
+    ROOM_KINDS.forEach((kind, i) => {
+      bindings.push({
+        combo: `ctrl+alt+${i + 1}`,
+        description: `Open ${ROOM_META[kind].label} room`,
+        run: () => {
+          const ws = workspaces.find((workspace) => workspaceMatchesKind(workspace, kind));
+          if (ws) selectWorkspace(ws.id);
+        },
+      });
+    });
 
     // Ctrl+Shift+1..9 -> add pane of nth kind for the active workspace.
     panelsForKind(selectedWorkspace?.kindRaw).forEach((kind, i) => {
