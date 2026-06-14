@@ -9,9 +9,19 @@ import {
   type WorkspaceColor,
 } from "../../lib/theme";
 import { Icons } from "../../lib/icons";
-import { useApp } from "../../lib/store";
+import { useApp, type RightRailTab } from "../../lib/store";
 import { ipc, type CommandRecord, type SessionInfo } from "../../lib/ipc";
 import { ADD_BLOCK_COMMANDS, PANEL_META, panelsForKind } from "../../lib/commands";
+
+const INSPECTOR_COMMANDS: { tab: RightRailTab; label: string; icon: keyof typeof Icons }[] = [
+  { tab: "timeline", label: "Timeline", icon: "workflow" },
+  { tab: "files", label: "Files", icon: "folderFill" },
+  { tab: "preview", label: "Preview", icon: "eye" },
+  { tab: "tools", label: "Tools", icon: "tools" },
+  { tab: "diff", label: "Diff", icon: "diff" },
+  { tab: "memory", label: "Memory", icon: "brain" },
+  { tab: "details", label: "Details", icon: "panelRight" },
+];
 
 // Mirrors Loom/Workspace/CommandPalette.swift.
 // 560x420 sheet, .regularMaterial backdrop, sectioned list with selection ring.
@@ -23,6 +33,9 @@ export function CommandPalette() {
   const selectWorkspace = useApp((s) => s.selectWorkspace);
   const openSettings = useApp((s) => s.openSettings);
   const addBlock = useApp((s) => s.addBlock);
+  const isRightRailVisible = useApp((s) => s.isRightRailVisible);
+  const toggleRightRail = useApp((s) => s.toggleRightRail);
+  const setRightRailTab = useApp((s) => s.setRightRailTab);
   const [recent, setRecent] = useState<CommandRecord[]>([]);
   const selectedWorkspace = workspaces.find((w) => w.id === selectedWorkspaceId);
 
@@ -48,6 +61,12 @@ export function CommandPalette() {
       const bytes = Array.from(new TextEncoder().encode(command + "\r"));
       await ipc.terminal.write(target.id, bytes);
     } catch {}
+  };
+
+  const refreshRuns = () => {
+    setRightRailTab("timeline");
+    window.dispatchEvent(new Event("loom-refresh-runs"));
+    closePalette();
   };
 
   if (!isOpen) return null;
@@ -222,6 +241,70 @@ export function CommandPalette() {
               ))}
             </Command.Group>
           )}
+
+          <Command.Group
+            heading="Inspector"
+            className="section-header"
+            style={{ padding: "10px 14px 4px" }}
+          >
+            <Command.Item
+              value={`${isRightRailVisible ? "hide" : "show"} inspector right rail`}
+              onSelect={() => {
+                toggleRightRail();
+                closePalette();
+              }}
+              className="flex cursor-pointer items-center gap-2"
+              style={{
+                padding: "7px 14px",
+                fontSize: 13,
+                fontWeight: 500,
+                color: text.muted,
+                borderRadius: 6,
+              }}
+            >
+              <Icons.panelRight size={12} strokeWidth={1.8} />
+              {isRightRailVisible ? "Hide Inspector" : "Show Inspector"}
+            </Command.Item>
+            <Command.Item
+              value="refresh runs agents graph timeline"
+              onSelect={refreshRuns}
+              className="flex cursor-pointer items-center gap-2"
+              style={{
+                padding: "7px 14px",
+                fontSize: 13,
+                fontWeight: 500,
+                color: text.muted,
+                borderRadius: 6,
+              }}
+            >
+              <Icons.refresh size={12} strokeWidth={1.8} />
+              Refresh Runs
+            </Command.Item>
+            {INSPECTOR_COMMANDS.map(({ tab, label, icon }) => {
+              const Icon = Icons[icon];
+              return (
+                <Command.Item
+                  key={tab}
+                  value={`open inspector ${label}`}
+                  onSelect={() => {
+                    setRightRailTab(tab);
+                    closePalette();
+                  }}
+                  className="flex cursor-pointer items-center gap-2"
+                  style={{
+                    padding: "7px 14px",
+                    fontSize: 13,
+                    fontWeight: 500,
+                    color: text.muted,
+                    borderRadius: 6,
+                  }}
+                >
+                  <Icon size={12} strokeWidth={1.8} />
+                  Open {label}
+                </Command.Item>
+              );
+            })}
+          </Command.Group>
 
           <Command.Group
             heading="Actions"

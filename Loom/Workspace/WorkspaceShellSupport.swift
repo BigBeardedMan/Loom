@@ -143,6 +143,7 @@ struct WorkspaceRightRailView: View {
     @Environment(AgentRegistry.self) private var agentRegistry
     @Environment(LocalEndpointStore.self) private var endpointStore
     @Binding var selectedTab: WorkspaceRightRailTab
+    let refreshNonce: Int
     let workspace: Workspace?
     let selectedBlock: WorkspaceBlock?
     let blocks: [WorkspaceBlock]
@@ -163,9 +164,13 @@ struct WorkspaceRightRailView: View {
                 .stroke(LoomTheme.hairline, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 10))
-        .task(id: workspace?.id) {
+        .task(id: refreshKey) {
             await refreshRailData()
         }
+    }
+
+    private var refreshKey: String {
+        "\(workspace?.id.uuidString ?? "none"):\(refreshNonce)"
     }
 
     private var effectiveTab: WorkspaceRightRailTab {
@@ -272,13 +277,14 @@ struct WorkspaceRightRailView: View {
     }
 
     private var workflowMap: some View {
+        let signals = workflowSignals
         let phases = [
-            ("Scope", workspace != nil),
-            ("Workspace", workspace?.folderPath.isEmpty == false),
-            ("Agents", liveAgentTasks.groups.isEmpty == false),
-            ("Checks", scopedRunSummaries.contains { !$0.toolNames.isEmpty }),
-            ("Review", scopedRunSummaries.contains { $0.status == "completed" || $0.status == "failed" }),
-            ("Ship", false)
+            ("Scope", workspace != nil, workspace?.color.color ?? LoomTheme.blue),
+            ("Workspace", workspace?.folderPath.isEmpty == false, LoomTheme.blue),
+            ("Agents", signals.hasActiveAgents, LoomTheme.purple),
+            ("Checks", signals.hasCheckSignals, LoomTheme.green),
+            ("Review", signals.hasReviewSignals, signals.hasAttention ? LoomTheme.orange : LoomTheme.green),
+            ("Ship", signals.shipReady, LoomTheme.green)
         ]
         return VStack(alignment: .leading, spacing: 7) {
             railSectionTitle("Workflow")
@@ -286,7 +292,7 @@ struct WorkspaceRightRailView: View {
                 ForEach(Array(phases.enumerated()), id: \.offset) { _, phase in
                     VStack(spacing: 4) {
                         Circle()
-                            .fill(phase.1 ? LoomTheme.green : LoomTheme.hairline)
+                            .fill(phase.1 ? phase.2 : LoomTheme.hairline)
                             .frame(width: 7, height: 7)
                         Text(phase.0)
                             .font(.system(size: 8, weight: .semibold))
@@ -424,6 +430,15 @@ struct WorkspaceRightRailView: View {
 
     private var diffContent: some View {
         VStack(alignment: .leading, spacing: 8) {
+            let decision = shipDecision
+            railSectionTitle("Ship Decision")
+            railRow(
+                icon: decision.icon,
+                tint: decision.tint,
+                title: decision.title,
+                detail: decision.detail
+            )
+
             railSectionTitle("Review Signals")
             let reviewable = scopedRunSummaries.filter { $0.gitBranch != nil || $0.gitDirty != nil || $0.toolEventCount > 0 }
             if reviewable.isEmpty {
@@ -435,6 +450,21 @@ struct WorkspaceRightRailView: View {
                         tint: summary.gitDirty == true ? LoomTheme.orange : LoomTheme.green,
                         title: summary.gitBranch ?? summary.title,
                         detail: summary.gitHead ?? "\(summary.toolEventCount) tool events"
+                    )
+                }
+            }
+
+            railSectionTitle("Preview Status")
+            let previewBlocks = blocks.filter { $0.kind == .preview }
+            if previewBlocks.isEmpty {
+                railMuted("No Preview panes are open in this room.")
+            } else {
+                ForEach(previewBlocks.prefix(3)) { block in
+                    railRow(
+                        icon: "globe",
+                        tint: LoomTheme.pink,
+                        title: block.displayTitle,
+                        detail: block.effectivePreviewURL
                     )
                 }
             }
@@ -455,6 +485,26 @@ struct WorkspaceRightRailView: View {
                             .foregroundStyle(LoomTheme.mutedText)
                             .lineLimit(4)
                             .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(9)
+                    .background(LoomTheme.inset)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+            }
+
+            railSectionTitle("Run Ledger Summaries")
+            if scopedRunSummaries.isEmpty {
+                railMuted("No graph ledger summaries found under ~/.loom/agent-runs.")
+            } else {
+                ForEach(scopedRunSummaries.prefix(5)) { summary in
+                    VStack(alignment: .leading, spacing: 5) {
+                        railRow(
+                            icon: statusIcon(summary.status),
+                            tint: statusTint(summary.status),
+                            title: summary.title,
+                            detail: summaryChips(summary).joined(separator: " · ")
+                        )
+                        railCode(displayPath(summary.ledgerPath))
                     }
                     .padding(9)
                     .background(LoomTheme.inset)
@@ -502,6 +552,13 @@ struct WorkspaceRightRailView: View {
 
     private func normalizedPath(_ path: String) -> String {
         URL(fileURLWithPath: path).standardizedFileURL.path
+    }
+
+    private func displayPath(_ path: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if path == home { return "~" }
+        if path.hasPrefix(home + "/") { return "~" + path.dropFirst(home.count) }
+        return path
     }
 
     private func railSectionTitle(_ title: String) -> some View {
@@ -633,6 +690,100 @@ struct WorkspaceRightRailView: View {
             summary.taskCount > 0 ? "\(summary.taskCount) tasks" : nil
         ].compactMap { $0 }
     }
+
+    private var workflowSignals: WorkspaceWorkflowSignals {
+        let runs = scopedRunSummaries
+        let hasRunningRun = runs.contains { isRunningStatus($0.status) }
+        let hasActiveAgents = !liveAgentTasks.groups.isEmpty || hasRunningRun
+        let hasCheckSignals = runs.contains { $0.toolEventCount > 0 || !$0.toolNames.isEmpty }
+        let hasAttention = runs.contains { summary in
+            isAttentionStatus(summary.status) || summary.gitDirty == true
+        }
+        let hasCompletedEvidence = runs.contains { summary in
+            isCompletedStatus(summary.status)
+            && summary.gitDirty != true
+            && (summary.toolEventCount > 0 || summary.taskCount > 0 || summary.gitHead != nil || summary.gitBranch != nil)
+        }
+        return WorkspaceWorkflowSignals(
+            hasActiveAgents: hasActiveAgents,
+            hasCheckSignals: hasCheckSignals,
+            hasAttention: hasAttention,
+            hasReviewSignals: hasAttention || hasCompletedEvidence || hasCheckSignals,
+            shipReady: hasCompletedEvidence && !hasAttention && !hasActiveAgents
+        )
+    }
+
+    private var shipDecision: (icon: String, tint: Color, title: String, detail: String) {
+        let signals = workflowSignals
+        if signals.shipReady {
+            return (
+                "checkmark.seal.fill",
+                LoomTheme.green,
+                "Ready for review",
+                "Completed run with clean ledger signals."
+            )
+        }
+        if signals.hasAttention {
+            return (
+                "exclamationmark.triangle.fill",
+                LoomTheme.orange,
+                "Attention needed",
+                "Failed, cancelled, or dirty run signals are present."
+            )
+        }
+        if signals.hasActiveAgents {
+            return (
+                "clock.arrow.circlepath",
+                LoomTheme.blue,
+                "In progress",
+                "Live or running agents are still producing context."
+            )
+        }
+        if signals.hasCheckSignals {
+            return (
+                "doc.text.magnifyingglass",
+                LoomTheme.purple,
+                "Review pending",
+                "Tool and check signals are ready to inspect."
+            )
+        }
+        return (
+            "circle.dashed",
+            LoomTheme.mutedText,
+            "No ship signal",
+            "Runs will promote this once checks and review evidence land."
+        )
+    }
+
+    private func isCompletedStatus(_ status: String) -> Bool {
+        status.lowercased() == "completed"
+    }
+
+    private func isAttentionStatus(_ status: String) -> Bool {
+        switch status.lowercased() {
+        case "failed", "cancelled":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func isRunningStatus(_ status: String) -> Bool {
+        switch status.lowercased() {
+        case "running", "pending", "in_progress", "in-progress":
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+private struct WorkspaceWorkflowSignals {
+    let hasActiveAgents: Bool
+    let hasCheckSignals: Bool
+    let hasAttention: Bool
+    let hasReviewSignals: Bool
+    let shipReady: Bool
 }
 
 struct WorkspaceStatusBar: View {

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Icons } from "../lib/icons";
 import { ipc, type AgentDescriptor, type LiveAgentTaskGroup, type LocalEndpoint } from "../lib/ipc";
 import { PANEL_META } from "../lib/commands";
-import { useApp } from "../lib/store";
+import { useApp, type RightRailTab } from "../lib/store";
 import { surface, text, workspaceColorVar } from "../lib/theme";
 import type { Block } from "../modules/workspace/LayoutPersistence";
 
@@ -47,10 +47,29 @@ export function WorkspaceStatusBar() {
       <StatusSegment icon="workflow" color={liveGroups.length ? workspaceColorVar.green : text.tertiary} label={`${liveGroups.length} live runs`} detail={liveRunDetail(liveGroups)} />
       <StatusSegment icon="server" color={endpoints.length ? workspaceColorVar.purple : text.tertiary} label={agents[0]?.name || "Default agent"} detail={agents[0]?.model || `${endpoints.length} local endpoints`} />
       <div className="flex-1" />
-      <StatusSegment icon="panelRight" color={workspaceColorVar.blue} label={rightRailTab} detail="inspector" />
+      <StatusSegment icon="panelRight" color={workspaceColorVar.blue} label={rightRailLabel(rightRailTab)} detail="inspector" />
       {updatePill && <StatusSegment icon="updateAvailable" color={workspaceColorVar.green} label="Update available" detail={updatePill.version} />}
     </footer>
   );
+}
+
+function rightRailLabel(tab: RightRailTab): string {
+  switch (tab) {
+    case "timeline":
+      return "Timeline";
+    case "files":
+      return "Files";
+    case "preview":
+      return "Preview";
+    case "tools":
+      return "Tools";
+    case "diff":
+      return "Diff";
+    case "memory":
+      return "Memory";
+    case "details":
+      return "Details";
+  }
 }
 
 function blockTitle(block: Block): string {

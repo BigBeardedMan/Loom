@@ -67,6 +67,11 @@ export function WorkspaceRightRail() {
   }, []);
 
   useEffect(() => {
+    window.addEventListener("loom-refresh-runs", refreshRuns);
+    return () => window.removeEventListener("loom-refresh-runs", refreshRuns);
+  }, []);
+
+  useEffect(() => {
     let active = true;
     loadMemoryFiles(workspace).then((files) => {
       if (active) setMemoryFiles(files);
@@ -166,8 +171,8 @@ export function WorkspaceRightRail() {
         {effectiveTab === "files" && <FilesContent workspace={workspace} memoryFiles={memoryFiles} />}
         {effectiveTab === "preview" && <PreviewContent workspace={workspace} blocks={layout?.blocks ?? []} />}
         {effectiveTab === "tools" && <ToolsContent blocks={layout?.blocks ?? []} agents={agents} endpoints={endpoints} />}
-        {effectiveTab === "diff" && <DiffContent runs={scopedRuns} />}
-        {effectiveTab === "memory" && <MemoryContent memoryFiles={memoryFiles} />}
+        {effectiveTab === "diff" && <DiffContent runs={scopedRuns} liveGroups={liveGroups} workspace={workspace} blocks={layout?.blocks ?? []} />}
+        {effectiveTab === "memory" && <MemoryContent memoryFiles={memoryFiles} runs={scopedRuns} />}
         {effectiveTab === "details" && <DetailsContent workspace={workspace} block={activeBlock} blocks={layout?.blocks ?? []} />}
       </main>
     </aside>
@@ -183,20 +188,21 @@ function WorkflowMap({
   runs: AgentGraphRunSummary[];
   liveGroups: LiveAgentTaskGroup[];
 }) {
+  const signals = workflowSignals(runs, liveGroups);
   const phases = [
-    ["Scope", !!workspace],
-    ["Workspace", !!workspace?.folderPath],
-    ["Agents", liveGroups.length > 0 || runs.some((r) => r.status === "running")],
-    ["Checks", runs.some((r) => (r.toolEventCount ?? 0) > 0)],
-    ["Review", runs.some((r) => r.status === "completed" || r.status === "failed")],
-    ["Ship", false],
+    ["Scope", !!workspace, workspace ? workspaceColorVar[workspace.colorName] : workspaceColorVar.blue],
+    ["Workspace", !!workspace?.folderPath, workspaceColorVar.blue],
+    ["Agents", signals.hasActiveAgents, workspaceColorVar.purple],
+    ["Checks", signals.hasCheckSignals, workspaceColorVar.green],
+    ["Review", signals.hasReviewSignals, signals.hasAttention ? workspaceColorVar.orange : workspaceColorVar.green],
+    ["Ship", signals.shipReady, workspaceColorVar.green],
   ] as const;
 
   return (
     <section style={sectionBox}>
       <SectionTitle>Workflow</SectionTitle>
       <div className="grid grid-cols-6 gap-1">
-        {phases.map(([label, active]) => (
+        {phases.map(([label, active, color]) => (
           <div key={label} className="min-w-0 text-center">
             <span
               style={{
@@ -204,7 +210,7 @@ function WorkflowMap({
                 width: 7,
                 height: 7,
                 borderRadius: 999,
-                background: active ? workspaceColorVar.green : surface.hairline,
+                background: active ? color : surface.hairline,
               }}
             />
             <div className="truncate" style={{ fontSize: 8, fontWeight: 700, color: active ? text.primary : text.tertiary }}>
@@ -393,43 +399,89 @@ function ToolsContent({
   );
 }
 
-function DiffContent({ runs }: { runs: AgentGraphRunSummary[] }) {
+function DiffContent({
+  runs,
+  liveGroups,
+  workspace,
+  blocks,
+}: {
+  runs: AgentGraphRunSummary[];
+  liveGroups: LiveAgentTaskGroup[];
+  workspace: Workspace | null;
+  blocks: Block[];
+}) {
   const reviewable = runs.filter((run) => run.gitBranch || run.gitDirty !== undefined || (run.toolEventCount ?? 0) > 0);
+  const previews = blocks.filter((block) => block.kind === "preview");
+  const decision = shipDecision(runs, liveGroups);
   return (
-    <RailSection title="Review Signals">
-      {reviewable.length === 0 ? (
-        <Muted>No changed-file or check signals have been recorded yet.</Muted>
-      ) : (
-        reviewable.slice(0, 8).map((run) => (
-          <RailRow
-            key={run.id}
-            icon="diff"
-            color={run.gitDirty ? workspaceColorVar.orange : workspaceColorVar.green}
-            title={run.gitBranch || run.title}
-            detail={run.gitHead || `${run.toolEventCount ?? 0} tool events`}
-          />
-        ))
-      )}
-    </RailSection>
+    <>
+      <RailSection title="Ship Decision">
+        <RailRow icon={decision.icon} color={decision.color} title={decision.title} detail={decision.detail} />
+      </RailSection>
+      <RailSection title="Review Signals">
+        {reviewable.length === 0 ? (
+          <Muted>No changed-file or check signals have been recorded yet.</Muted>
+        ) : (
+          reviewable.slice(0, 8).map((run) => (
+            <RailRow
+              key={run.id}
+              icon="diff"
+              color={run.gitDirty ? workspaceColorVar.orange : workspaceColorVar.green}
+              title={run.gitBranch || run.title}
+              detail={run.gitHead || `${run.toolEventCount ?? 0} tool events`}
+            />
+          ))
+        )}
+      </RailSection>
+      <RailSection title="Preview Status">
+        {previews.length === 0 ? (
+          <Muted>No Preview panes are open in this room.</Muted>
+        ) : (
+          previews.slice(0, 3).map((block) => (
+            <RailRow
+              key={block.id}
+              icon="eye"
+              color={workspaceColorVar.pink}
+              title={defaultBlockTitle(block)}
+              detail={workspace ? defaultPreviewUrlFor(workspace, block.autoPreviewIndex ?? 0) : `http://localhost:${3000 + (block.autoPreviewIndex ?? 0)}`}
+            />
+          ))
+        )}
+      </RailSection>
+    </>
   );
 }
 
-function MemoryContent({ memoryFiles }: { memoryFiles: MemoryFile[] }) {
+function MemoryContent({ memoryFiles, runs }: { memoryFiles: MemoryFile[]; runs: AgentGraphRunSummary[] }) {
   return (
-    <RailSection title="Read-only Memory">
-      {memoryFiles.length === 0 ? (
-        <Muted>No CLAUDE.md, AGENTS.md, GUIDE.md, or README.md found for this workspace.</Muted>
-      ) : (
-        memoryFiles.map((file) => (
-          <section key={file.id} style={sectionBox}>
-            <RailRow icon="brain" color={workspaceColorVar.purple} title={file.name} detail={file.path} />
-            <p style={{ marginTop: 6, fontSize: 10, lineHeight: 1.45, color: text.muted }}>
-              {file.excerpt}
-            </p>
-          </section>
-        ))
-      )}
-    </RailSection>
+    <>
+      <RailSection title="Read-only Memory">
+        {memoryFiles.length === 0 ? (
+          <Muted>No CLAUDE.md, AGENTS.md, GUIDE.md, or README.md found for this workspace.</Muted>
+        ) : (
+          memoryFiles.map((file) => (
+            <section key={file.id} style={sectionBox}>
+              <RailRow icon="brain" color={workspaceColorVar.purple} title={file.name} detail={file.path} />
+              <p style={{ marginTop: 6, fontSize: 10, lineHeight: 1.45, color: text.muted }}>
+                {file.excerpt}
+              </p>
+            </section>
+          ))
+        )}
+      </RailSection>
+      <RailSection title="Run Ledger Summaries">
+        {runs.length === 0 ? (
+          <Muted>No graph ledger summaries found under ~/.loom/agent-runs.</Muted>
+        ) : (
+          runs.slice(0, 5).map((run) => (
+            <section key={run.id} style={sectionBox}>
+              <RailRow icon={runStatusIcon(run.status)} color={runStatusColor(run.status)} title={run.title} detail={summaryChips(run).join(" · ")} />
+              <CodeLine>{displayPath(run.ledgerPath)}</CodeLine>
+            </section>
+          ))
+        )}
+      </RailSection>
+    </>
   );
 }
 
@@ -507,6 +559,123 @@ function summaryChips(run: AgentGraphRunSummary): string[] {
     (run.toolEventCount ?? 0) > 0 ? `${run.toolEventCount} tools` : null,
     (run.taskCount ?? 0) > 0 ? `${run.taskCount} tasks` : null,
   ].filter(Boolean) as string[];
+}
+
+function runStatusIcon(status: string): keyof typeof Icons {
+  switch (status.toLowerCase()) {
+    case "completed":
+      return "checkCircle";
+    case "failed":
+    case "cancelled":
+      return "failedCircle";
+    default:
+      return "workflow";
+  }
+}
+
+function runStatusColor(status: string): string {
+  switch (status.toLowerCase()) {
+    case "completed":
+      return workspaceColorVar.green;
+    case "failed":
+    case "cancelled":
+      return workspaceColorVar.orange;
+    default:
+      return workspaceColorVar.blue;
+  }
+}
+
+function displayPath(path: string): string {
+  return path
+    .replace(/^\/Users\/[^/]+/, "~")
+    .replace(/^C:\\Users\\[^\\]+/i, "~");
+}
+
+type WorkflowSignals = {
+  hasActiveAgents: boolean;
+  hasCheckSignals: boolean;
+  hasAttention: boolean;
+  hasReviewSignals: boolean;
+  shipReady: boolean;
+};
+
+function workflowSignals(runs: AgentGraphRunSummary[], liveGroups: LiveAgentTaskGroup[]): WorkflowSignals {
+  const hasRunningRun = runs.some((run) => isRunningStatus(run.status));
+  const hasActiveAgents = liveGroups.length > 0 || hasRunningRun;
+  const hasCheckSignals = runs.some((run) => (run.toolEventCount ?? 0) > 0 || (run.toolNames?.length ?? 0) > 0);
+  const hasAttention = runs.some((run) => isAttentionStatus(run.status) || run.gitDirty === true);
+  const hasCompletedEvidence = runs.some(
+    (run) =>
+      isCompletedStatus(run.status) &&
+      run.gitDirty !== true &&
+      ((run.toolEventCount ?? 0) > 0 || (run.taskCount ?? 0) > 0 || Boolean(run.gitHead) || Boolean(run.gitBranch))
+  );
+  return {
+    hasActiveAgents,
+    hasCheckSignals,
+    hasAttention,
+    hasReviewSignals: hasAttention || hasCompletedEvidence || hasCheckSignals,
+    shipReady: hasCompletedEvidence && !hasAttention && !hasActiveAgents,
+  };
+}
+
+function shipDecision(runs: AgentGraphRunSummary[], liveGroups: LiveAgentTaskGroup[]): {
+  icon: keyof typeof Icons;
+  color: string;
+  title: string;
+  detail: string;
+} {
+  const signals = workflowSignals(runs, liveGroups);
+  if (signals.shipReady) {
+    return {
+      icon: "checkCircle",
+      color: workspaceColorVar.green,
+      title: "Ready for review",
+      detail: "Completed run with clean ledger signals.",
+    };
+  }
+  if (signals.hasAttention) {
+    return {
+      icon: "failedCircle",
+      color: workspaceColorVar.orange,
+      title: "Attention needed",
+      detail: "Failed, cancelled, or dirty run signals are present.",
+    };
+  }
+  if (signals.hasActiveAgents) {
+    return {
+      icon: "workflow",
+      color: workspaceColorVar.blue,
+      title: "In progress",
+      detail: "Live or running agents are still producing context.",
+    };
+  }
+  if (signals.hasCheckSignals) {
+    return {
+      icon: "file",
+      color: workspaceColorVar.purple,
+      title: "Review pending",
+      detail: "Tool and check signals are ready to inspect.",
+    };
+  }
+  return {
+    icon: "workflow",
+    color: text.muted,
+    title: "No ship signal",
+    detail: "Runs will promote this once checks and review evidence land.",
+  };
+}
+
+function isCompletedStatus(status: string): boolean {
+  return status.toLowerCase() === "completed";
+}
+
+function isAttentionStatus(status: string): boolean {
+  return ["failed", "cancelled"].includes(status.toLowerCase());
+}
+
+function isRunningStatus(status: string): boolean {
+  return ["running", "pending", "in_progress", "in-progress"].includes(status.toLowerCase());
 }
 
 function availableRailTabs(

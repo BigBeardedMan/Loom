@@ -7,18 +7,23 @@ extension Notification.Name {
     /// its sheet state. Going through NotificationCenter avoids hoisting
     /// palette state into LoomApp just to thread a binding back down.
     static let loomOpenPalette = Notification.Name("loom.openPalette")
+    static let loomToggleInspector = Notification.Name("loom.toggleInspector")
+    static let loomOpenInspectorTab = Notification.Name("loom.openInspectorTab")
+    static let loomRefreshRuns = Notification.Name("loom.refreshRuns")
 }
 
 /// Fuzzy-style command palette. Aggregates the most-likely actions from
 /// across the app into a single search-and-execute surface so the user
 /// rarely has to reach for the mouse: switch workspaces, rerun a command
-    /// from history, add a pane to the current workspace, jump to docs.
+/// from history, add a pane to the current workspace, jump to docs.
 struct CommandPalette: View {
     @Environment(WorkspaceLayout.self) private var layout
     @Environment(CommandHistoryService.self) private var history
     @Query(sort: \Workspace.lastOpenedAt, order: .reverse) private var workspaces: [Workspace]
 
     @Binding var isPresented: Bool
+    let isRightRailVisible: Bool
+    let inspectorTabs: [WorkspaceRightRailTab]
     @State private var query: String = ""
     @State private var selectedID: String?
 
@@ -155,6 +160,7 @@ struct CommandPalette: View {
             workspaceSection(),
             recentCommandsSection(),
             addBlockSection(),
+            inspectorSection(),
             quickActionsSection()
         ]
         if q.isEmpty { return allSections.filter { !$0.items.isEmpty } }
@@ -207,6 +213,38 @@ struct CommandPalette: View {
             )
         }
         return PaletteSection(title: "Add Pane", items: items)
+    }
+
+    private func inspectorSection() -> PaletteSection {
+        var items = [
+            PaletteItem(
+                id: "inspector:toggle",
+                title: isRightRailVisible ? "Hide Inspector" : "Show Inspector",
+                subtitle: "Toggle the adaptive right rail",
+                systemImage: "sidebar.right",
+                tint: LoomTheme.blue,
+                action: .toggleInspector
+            ),
+            PaletteItem(
+                id: "inspector:refresh-runs",
+                title: "Refresh Runs",
+                subtitle: "Reload live agents and graph history",
+                systemImage: "arrow.clockwise",
+                tint: LoomTheme.green,
+                action: .refreshRuns
+            )
+        ]
+        items.append(contentsOf: inspectorTabs.map { tab in
+            PaletteItem(
+                id: "inspector:\(tab.rawValue)",
+                title: "Open \(tab.label)",
+                subtitle: "Show \(tab.label) in the inspector",
+                systemImage: tab.systemImage,
+                tint: .accentColor,
+                action: .openInspector(tab)
+            )
+        })
+        return PaletteSection(title: "Inspector", items: items)
     }
 
     private func quickActionsSection() -> PaletteSection {
@@ -296,6 +334,12 @@ struct CommandPalette: View {
             layout.firstTerminalSession()?.submit(cmd, capture: true)
         case .addBlock(let panel):
             layout.addBlock(panel)
+        case .toggleInspector:
+            NotificationCenter.default.post(name: .loomToggleInspector, object: nil)
+        case .openInspector(let tab):
+            NotificationCenter.default.post(name: .loomOpenInspectorTab, object: tab.rawValue)
+        case .refreshRuns:
+            NotificationCenter.default.post(name: .loomRefreshRuns, object: nil)
         case .openSettings:
             // SwiftUI's standard openSettings keyboard hits this same path
             // via the macOS app menu; using NSApp keeps the binding clean
@@ -343,6 +387,9 @@ private enum PaletteAction: Hashable {
     case switchWorkspace(UUID)
     case rerunCommand(String)
     case addBlock(PanelKind)
+    case toggleInspector
+    case openInspector(WorkspaceRightRailTab)
+    case refreshRuns
     case openSettings
     case openURL(String)
 }

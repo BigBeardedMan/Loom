@@ -164,6 +164,21 @@ struct LoomApp: App {
                 }
                 .keyboardShortcut("k", modifiers: [.command])
                 Divider()
+                Button("Toggle Inspector") {
+                    NotificationCenter.default.post(name: .loomToggleInspector, object: nil)
+                }
+                .keyboardShortcut("i", modifiers: [.command, .option])
+                Button("Show Timeline Inspector") {
+                    NotificationCenter.default.post(name: .loomOpenInspectorTab, object: WorkspaceRightRailTab.timeline.rawValue)
+                }
+                Button("Show Tools Inspector") {
+                    NotificationCenter.default.post(name: .loomOpenInspectorTab, object: WorkspaceRightRailTab.tools.rawValue)
+                }
+                Button("Refresh Runs") {
+                    NotificationCenter.default.post(name: .loomRefreshRuns, object: nil)
+                }
+                .keyboardShortcut("r", modifiers: [.command, .option])
+                Divider()
                 Button("Switch to Previous Workspace") {
                     quickFlipWorkspace()
                 }

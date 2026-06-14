@@ -6,6 +6,7 @@ struct WorkspaceView: View {
     @Environment(UpdateService.self) private var updates
     @Environment(UsageService.self) private var usage
     @Environment(DictationService.self) private var dictation
+    @Environment(LiveAgentTasksService.self) private var liveAgentTasks
     @Environment(WorkspaceContext.self) private var workspaceContext
     @Environment(TerminalTranscriptStore.self) private var terminalHistory
     @Environment(\.openURL) private var openURL
@@ -20,6 +21,7 @@ struct WorkspaceView: View {
     @State private var transcriptPreview: TerminalTranscriptSession?
     @State private var isRightRailVisible: Bool = true
     @State private var rightRailTab: WorkspaceRightRailTab = .timeline
+    @State private var rightRailRefreshNonce: Int = 0
     @State private var selectedBlockID: UUID?
 
     private var deckCapacity: Int {
@@ -71,6 +73,7 @@ struct WorkspaceView: View {
                         if isRightRailVisible && canFitInspector {
                             WorkspaceRightRailView(
                                 selectedTab: $rightRailTab,
+                                refreshNonce: rightRailRefreshNonce,
                                 workspace: selectedWorkspace,
                                 selectedBlock: selectedBlock,
                                 blocks: layout.blocks
@@ -100,6 +103,17 @@ struct WorkspaceView: View {
         .loomAppearance()
         .onChange(of: layout.selectedWorkspaceID) { _, _ in handleWorkspaceChange() }
         .onChange(of: selectedWorkspace?.folderPath) { _, _ in syncTerminalCwd() }
+        .onReceive(NotificationCenter.default.publisher(for: .loomToggleInspector)) { _ in
+            toggleRightRail()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .loomOpenInspectorTab)) { notification in
+            guard let raw = notification.object as? String,
+                  let tab = WorkspaceRightRailTab(rawValue: raw) else { return }
+            openInspector(tab)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .loomRefreshRuns)) { _ in
+            refreshRunContext()
+        }
         .animation(.easeOut(duration: 0.16), value: transcriptPreview?.id)
         .task { handleWorkspaceChange() }
     }
@@ -164,9 +178,7 @@ struct WorkspaceView: View {
                 tint: LoomTheme.blue,
                 isActive: isRightRailVisible
             ) {
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    isRightRailVisible.toggle()
-                }
+                toggleRightRail()
             }
 
             if updates.available != nil {
@@ -184,7 +196,11 @@ struct WorkspaceView: View {
         .shadow(color: .black.opacity(0.10), radius: 12, x: 0, y: 5)
         .animation(.easeInOut(duration: 0.18), value: updates.available)
         .sheet(isPresented: $showCommandPalette) {
-            CommandPalette(isPresented: $showCommandPalette)
+            CommandPalette(
+                isPresented: $showCommandPalette,
+                isRightRailVisible: isRightRailVisible,
+                inspectorTabs: availableInspectorTabs
+            )
         }
         .onReceive(NotificationCenter.default.publisher(for: .loomOpenPalette)) { _ in
             showCommandPalette = true
@@ -461,12 +477,46 @@ struct WorkspaceView: View {
             selectedUsageTool: $selectedUsageTool,
             isRightRailVisible: isRightRailVisible,
             toggleRightRail: {
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    isRightRailVisible.toggle()
-                }
+                toggleRightRail()
             },
             openSettings: openSettings
         )
+    }
+
+    private var availableInspectorTabs: [WorkspaceRightRailTab] {
+        var tabs: [WorkspaceRightRailTab] = [.timeline]
+        if selectedWorkspace?.folderPath.isEmpty == false { tabs.append(.files) }
+        if layout.blocks.contains(where: { $0.kind == .preview }) || selectedBlock?.kind == .preview {
+            tabs.append(.preview)
+        }
+        tabs.append(.tools)
+        if selectedWorkspace?.kind == .review || selectedWorkspace?.kind == .runs {
+            tabs.append(.diff)
+        }
+        if selectedWorkspace?.folderPath.isEmpty == false { tabs.append(.memory) }
+        tabs.append(.details)
+        return tabs
+    }
+
+    private func toggleRightRail() {
+        withAnimation(.easeInOut(duration: 0.18)) {
+            isRightRailVisible.toggle()
+        }
+    }
+
+    private func openInspector(_ tab: WorkspaceRightRailTab) {
+        rightRailTab = tab
+        if !isRightRailVisible {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                isRightRailVisible = true
+            }
+        }
+    }
+
+    private func refreshRunContext() {
+        liveAgentTasks.refresh()
+        rightRailRefreshNonce &+= 1
+        openInspector(.timeline)
     }
 
     private var leftRail: some View {

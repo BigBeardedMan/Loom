@@ -40,6 +40,8 @@ export function useGlobalKeymap() {
   const setTheme = useApp((s) => s.setTheme);
   const theme = useApp((s) => s.theme);
   const activeBlockId = useApp((s) => s.activeBlockId);
+  const toggleRightRail = useApp((s) => s.toggleRightRail);
+  const setRightRailTab = useApp((s) => s.setRightRailTab);
 
   useEffect(() => {
     const selectedBlockId =
@@ -117,6 +119,19 @@ export function useGlobalKeymap() {
           updateBlock(blk.id, { fullRowSpan: !blk.fullRowSpan });
         },
       },
+      {
+        combo: "ctrl+alt+i",
+        description: "Toggle inspector",
+        run: () => toggleRightRail(),
+      },
+      {
+        combo: "ctrl+alt+r",
+        description: "Refresh Runs",
+        run: () => {
+          setRightRailTab("timeline");
+          window.dispatchEvent(new Event("loom-refresh-runs"));
+        },
+      },
     ];
 
     // Ctrl+1..9 → jump to workspace n
@@ -170,6 +185,8 @@ export function useGlobalKeymap() {
     setTheme,
     theme,
     activeBlockId,
+    toggleRightRail,
+    setRightRailTab,
   ]);
 }
 
