@@ -334,6 +334,10 @@ function TimelineContent({
                         </div>
                       </div>
                     )}
+                    <div style={{ marginTop: 10 }}>
+                      <CodeLine>{displayPath(run.ledgerPath)}</CodeLine>
+                      <LedgerActions run={run} />
+                    </div>
                   </div>
                 )}
               </section>
@@ -538,6 +542,7 @@ function MemoryContent({ memoryFiles, runs }: { memoryFiles: MemoryFile[]; runs:
             <section key={run.id} style={sectionBox}>
               <RailRow icon={runStatusIcon(run.status)} color={runStatusColor(run.status)} title={run.title} detail={summaryChips(run).join(" · ")} />
               <CodeLine>{displayPath(run.ledgerPath)}</CodeLine>
+              <LedgerActions run={run} />
             </section>
           ))
         )}
@@ -597,6 +602,54 @@ function CodeLine({ children }: { children: ReactNode }) {
     <div className="truncate" style={{ padding: 8, borderRadius: radius.row, background: surface.inset, fontSize: 10, fontFamily: "var(--font-mono)", color: text.muted }}>
       {children}
     </div>
+  );
+}
+
+function LedgerActions({ run }: { run: AgentGraphRunSummary }) {
+  const copyLedgerPath = () => void navigator.clipboard?.writeText(run.ledgerPath);
+  const revealLedger = () => void ipc.agentGraph.reveal(run.id);
+
+  return (
+    <div className="flex items-center gap-1.5" style={{ marginTop: 6 }}>
+      <LedgerActionButton title="Copy ledger path" onClick={copyLedgerPath}>
+        <Icons.copy size={11} strokeWidth={2.2} />
+        Copy
+      </LedgerActionButton>
+      <LedgerActionButton title="Reveal ledger" onClick={revealLedger}>
+        <Icons.folderOpen size={11} strokeWidth={2.2} />
+        Reveal
+      </LedgerActionButton>
+    </div>
+  );
+}
+
+function LedgerActionButton({
+  title,
+  onClick,
+  children,
+}: {
+  title: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      className="flex items-center gap-1"
+      style={{
+        padding: "4px 8px",
+        borderRadius: 7,
+        border: `1px solid ${surface.hairline}`,
+        background: "color-mix(in srgb, " + surface.softPanel + ", transparent 35%)",
+        color: text.muted,
+        fontSize: 9,
+        fontWeight: 700,
+      }}
+    >
+      {children}
+    </button>
   );
 }
 

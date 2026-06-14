@@ -514,6 +514,7 @@ struct WorkspaceRightRailView: View {
                     }
 
                     railCode(displayPath(summary.ledgerPath))
+                    ledgerActions(for: summary)
                 }
             }
         }
@@ -717,6 +718,7 @@ struct WorkspaceRightRailView: View {
                             detail: summaryChips(summary).joined(separator: " · ")
                         )
                         railCode(displayPath(summary.ledgerPath))
+                        ledgerActions(for: summary)
                     }
                     .padding(9)
                     .background(LoomTheme.inset)
@@ -964,6 +966,49 @@ struct WorkspaceRightRailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(LoomTheme.inset)
             .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func ledgerActions(for summary: AgentGraphRunSummary) -> some View {
+        HStack(spacing: 6) {
+            ledgerActionButton(title: "Copy", systemImage: "doc.on.doc") {
+                copyLedgerPath(summary.ledgerPath)
+            }
+            ledgerActionButton(title: "Reveal", systemImage: "folder") {
+                revealLedger(summary.ledgerPath)
+            }
+        }
+    }
+
+    private func ledgerActionButton(title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 9, weight: .bold))
+                Text(title)
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            .foregroundStyle(LoomTheme.mutedText)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(LoomTheme.softPanel.opacity(0.58))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(LoomTheme.hairline, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .help("\(title) ledger path")
+    }
+
+    private func copyLedgerPath(_ path: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(path, forType: .string)
+    }
+
+    private func revealLedger(_ path: String) {
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
     }
 
     private func railRow(icon: String, tint: Color, title: String, detail: String) -> some View {
