@@ -29,6 +29,11 @@ type Turn = {
   vendor?: Vendor;
 };
 
+type ChatApiMessage = {
+  role: "user" | "assistant" | "system";
+  content: string;
+};
+
 type LmStudioRunStatus = {
   phase: string;
   label: string;
@@ -68,6 +73,8 @@ type Props = { workspace: Workspace; blockId?: string; presentation?: "agent" | 
 export function AgentPane({ workspace, blockId, presentation = "agent" }: Props) {
   const isChatPane = presentation === "chat";
   const setBlockStatus = useApp((s) => s.setBlockStatus);
+  const chatTranscriptKey =
+    isChatPane && blockId ? `loom.chat.transcript.${workspace.id}.${blockId}` : null;
   const [vendor, setVendor] = useState<Vendor>(
     () => (localStorage.getItem(`loom.agent.vendor.${workspace.id}`) as Vendor) || "claude"
   );
@@ -112,8 +119,31 @@ export function AgentPane({ workspace, blockId, presentation = "agent" }: Props)
   const [lmRunStatus, setLmRunStatus] = useState<LmStudioRunStatus | null>(null);
   const [lmRunUsage, setLmRunUsage] = useState<LmStudioRunUsage | null>(null);
   const [lmNativeResponseId, setLmNativeResponseId] = useState<string | null>(null);
+  const [loadedChatTranscriptKey, setLoadedChatTranscriptKey] = useState<string | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isChatPane) {
+      setLoadedChatTranscriptKey(null);
+      return;
+    }
+    if (!chatTranscriptKey) {
+      setTurns([]);
+      setLoadedChatTranscriptKey(null);
+      return;
+    }
+    setTurns(readStoredTurns(chatTranscriptKey));
+    setLmNativeResponseId(null);
+    setLoadedChatTranscriptKey(chatTranscriptKey);
+  }, [chatTranscriptKey, isChatPane]);
+
+  useEffect(() => {
+    if (!isChatPane || !chatTranscriptKey || loadedChatTranscriptKey !== chatTranscriptKey) {
+      return;
+    }
+    writeStoredTurns(chatTranscriptKey, turns);
+  }, [chatTranscriptKey, isChatPane, loadedChatTranscriptKey, turns]);
 
   useEffect(() => {
     localStorage.setItem(`loom.agent.vendor.${workspace.id}`, vendor);
@@ -355,9 +385,10 @@ export function AgentPane({ workspace, blockId, presentation = "agent" }: Props)
   const submit = async () => {
     const prompt = draft.trim();
     if (!prompt || busy) return;
+    const contextTurns = turns;
     setDraft("");
     const lmPreviousResponseId =
-      vendor === "lmstudio" && turns.length > 0 ? lmNativeResponseId : null;
+      vendor === "lmstudio" && contextTurns.length > 0 ? lmNativeResponseId : null;
     if (vendor === "lmstudio") {
       setLmRunStatus(null);
       setLmRunUsage(null);
@@ -376,13 +407,13 @@ export function AgentPane({ workspace, blockId, presentation = "agent" }: Props)
     setBusy(true);
 
     try {
-      if (vendor === "anthropic") await runAnthropic(prompt, asstId);
+      if (vendor === "anthropic") await runAnthropic(prompt, asstId, contextTurns);
       else if (
         vendor === "openai-compat" ||
         vendor === "lmstudio" ||
         (vendor === "ollama" && activeEndpoint)
       )
-        await runOpenAi(prompt, asstId, lmPreviousResponseId);
+        await runOpenAi(prompt, asstId, lmPreviousResponseId, contextTurns);
       else await runCli(prompt, asstId);
     } catch (e) {
       setTurns((prev) =>
@@ -425,11 +456,16 @@ export function AgentPane({ workspace, blockId, presentation = "agent" }: Props)
     };
   };
 
-  const runOpenAi = async (prompt: string, asstId: string, previousResponseId?: string | null) => {
+  const runOpenAi = async (
+    prompt: string,
+    asstId: string,
+    previousResponseId: string | null | undefined,
+    contextTurns: Turn[]
+  ) => {
     if (!activeEndpoint) {
       throw new Error("No endpoint configured. Open Settings → AI Providers to add one.");
     }
-    const messages = [{ role: "user", content: prompt }];
+    const messages = buildChatMessages(contextTurns, prompt);
     const selectedModel =
       vendor === "lmstudio"
         ? lmEffectiveModel || lmRuntime?.recommendedModelId || activeEndpoint.defaultModel || ""
@@ -487,10 +523,10 @@ export function AgentPane({ workspace, blockId, presentation = "agent" }: Props)
     };
   };
 
-  const runAnthropic = async (prompt: string, asstId: string) => {
+  const runAnthropic = async (prompt: string, asstId: string, contextTurns: Turn[]) => {
     const apiKey = await ipc.keychain.get("loom.anthropic", "default");
     if (!apiKey) throw new Error("Anthropic API key not set. Open Settings to add one.");
-    const messages = [{ role: "user", content: prompt }];
+    const messages = buildAnthropicMessages(contextTurns, prompt);
     const streamId = await ipc.agents.httpSend({
       apiKey,
       model,
@@ -1125,6 +1161,119 @@ export function AgentPane({ workspace, blockId, presentation = "agent" }: Props)
         )}
       </div>
     </div>
+  );
+}
+
+const MAX_STORED_CHAT_TURNS = 80;
+const MAX_CONTEXT_MESSAGES = 24;
+const MAX_CONTEXT_CHARS = 32_000;
+
+function readStoredTurns(key: string): Turn[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map(normalizeStoredTurn)
+      .filter((turn): turn is Turn => Boolean(turn))
+      .slice(-MAX_STORED_CHAT_TURNS);
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredTurns(key: string, turns: Turn[]) {
+  const stableTurns = turns
+    .filter((turn) => !turn.streaming)
+    .map(normalizeStoredTurn)
+    .filter((turn): turn is Turn => Boolean(turn))
+    .slice(-MAX_STORED_CHAT_TURNS);
+
+  try {
+    if (stableTurns.length === 0) {
+      localStorage.removeItem(key);
+    } else {
+      localStorage.setItem(key, JSON.stringify(stableTurns));
+    }
+  } catch {
+    try {
+      localStorage.setItem(key, JSON.stringify(stableTurns.slice(-Math.floor(MAX_STORED_CHAT_TURNS / 2))));
+    } catch {
+      // Ignore storage quota/private-mode failures; the live transcript still works.
+    }
+  }
+}
+
+function normalizeStoredTurn(value: unknown): Turn | null {
+  if (!value || typeof value !== "object") return null;
+  const source = value as Partial<Turn>;
+  const role = source.role;
+  if (role !== "user" && role !== "assistant" && role !== "system") return null;
+  const text = typeof source.text === "string" ? source.text.trim() : "";
+  if (!text) return null;
+  const id = typeof source.id === "string" && source.id ? source.id : crypto.randomUUID();
+  const normalized: Turn = { id, role, text };
+  if (isVendor(source.vendor)) normalized.vendor = source.vendor;
+  return normalized;
+}
+
+function buildChatMessages(turns: Turn[], prompt: string): ChatApiMessage[] {
+  const current: ChatApiMessage = { role: "user", content: prompt };
+  const history = turns
+    .filter((turn) => !turn.streaming)
+    .map(turnToApiMessage)
+    .filter((message): message is ChatApiMessage => Boolean(message));
+
+  const selected: ChatApiMessage[] = [];
+  let charCount = current.content.length;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    if (selected.length >= MAX_CONTEXT_MESSAGES - 1) break;
+    const message = history[i];
+    const nextCount = charCount + message.content.length;
+    if (nextCount > MAX_CONTEXT_CHARS) continue;
+    selected.unshift(message);
+    charCount = nextCount;
+  }
+
+  return mergeAdjacentMessages([...selected, current]);
+}
+
+function buildAnthropicMessages(turns: Turn[], prompt: string) {
+  return mergeAdjacentMessages(
+    buildChatMessages(turns, prompt).filter((message) => message.role !== "system")
+  );
+}
+
+function turnToApiMessage(turn: Turn): ChatApiMessage | null {
+  const content = turn.text.trim();
+  if (!content) return null;
+  if (turn.role !== "user" && turn.role !== "assistant" && turn.role !== "system") return null;
+  return { role: turn.role, content };
+}
+
+function mergeAdjacentMessages(messages: ChatApiMessage[]): ChatApiMessage[] {
+  const merged: ChatApiMessage[] = [];
+  for (const message of messages) {
+    const previous = merged[merged.length - 1];
+    if (previous && previous.role === message.role) {
+      previous.content = `${previous.content}\n\n${message.content}`;
+    } else {
+      merged.push({ ...message });
+    }
+  }
+  return merged;
+}
+
+function isVendor(value: unknown): value is Vendor {
+  return (
+    value === "claude" ||
+    value === "codex" ||
+    value === "gemini" ||
+    value === "ollama" ||
+    value === "lmstudio" ||
+    value === "anthropic" ||
+    value === "openai-compat"
   );
 }
 
