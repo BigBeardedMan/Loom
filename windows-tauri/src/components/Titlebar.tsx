@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { useApp } from "../lib/store";
 import { UpdatePill } from "./UpdatePill";
 import { Icons } from "../lib/icons";
@@ -96,7 +97,7 @@ export function Titlebar() {
           onClose={() => setUsageTool(null)}
         />
       ) : workspace ? (
-        <AddBlockStrip
+        <AddPaneMenu
           workspaceKind={workspace.kindRaw}
           activeKinds={layout?.blocks.map((b) => b.kind) ?? []}
           canAdd={canAddPane}
@@ -180,7 +181,7 @@ function SelectedUsageStatus({
   );
 }
 
-function AddBlockStrip({
+function AddPaneMenu({
   workspaceKind,
   activeKinds,
   canAdd,
@@ -192,51 +193,122 @@ function AddBlockStrip({
   onAdd: (k: PanelType) => void;
 }) {
   const available = panelsForKind(workspaceKind);
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (menuRef.current?.contains(event.target as Node)) return;
+      setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
 
   return (
     <div
-      className="flex items-center gap-1"
+      ref={menuRef}
+      className="relative flex items-center"
       style={{
-        padding: "3px 2px",
-        borderRadius: 999,
-        background: "transparent",
+        padding: 0,
       }}
     >
-      {available.map((p) => {
-        const meta = PANEL_META[p];
-        const Icon = Icons[meta.icon];
-        const used = activeKinds.includes(p);
-        return (
-          <button
-            key={p}
-            onClick={() => {
-              if (canAdd) onAdd(p);
-            }}
-            disabled={!canAdd}
-            className="flex items-center gap-1 transition-colors"
-            style={{
-              padding: "3px 8px",
-              borderRadius: 999,
-              background: "transparent",
-              color: canAdd ? text.primary : text.tertiary,
-              fontSize: 11,
-              fontWeight: 600,
-              opacity: canAdd ? (used ? 0.55 : 1) : 0.42,
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = surface.softPanel as string;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "transparent";
-            }}
-            title={canAdd ? `Add ${meta.label} pane` : "Pane limit reached"}
-          >
-            <Icons.plus size={9} strokeWidth={2.5} />
-            <Icon size={10} strokeWidth={2} color={meta.color} />
-            {meta.label}
-          </button>
-        );
-      })}
+      <button
+        type="button"
+        onClick={() => {
+          if (canAdd) setOpen((value) => !value);
+        }}
+        disabled={!canAdd}
+        className="flex items-center justify-center transition-colors"
+        style={{
+          width: 28,
+          height: 28,
+          borderRadius: radius.control,
+          background: open ? surface.softPanel : "transparent",
+          color: canAdd ? text.primary : text.tertiary,
+          opacity: canAdd ? 1 : 0.45,
+        }}
+        title={canAdd ? "Add pane" : "Pane limit reached"}
+        aria-label="Add pane"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <Icons.plus size={15} strokeWidth={2.6} />
+      </button>
+
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-full z-50 mt-2"
+          style={{
+            minWidth: 184,
+            padding: 5,
+            borderRadius: 8,
+            background: surface.panel,
+            border: `1px solid ${surface.hairline}`,
+            boxShadow: "0 16px 34px rgba(0,0,0,0.42)",
+          }}
+        >
+          {available.map((p) => {
+            const meta = PANEL_META[p];
+            const Icon = Icons[meta.icon];
+            const used = activeKinds.includes(p);
+            return (
+              <button
+                key={p}
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  if (!canAdd) return;
+                  onAdd(p);
+                  setOpen(false);
+                }}
+                disabled={!canAdd}
+                className="flex w-full items-center gap-2 text-left transition-colors"
+                style={{
+                  padding: "7px 8px",
+                  borderRadius: 6,
+                  background: "transparent",
+                  color: canAdd ? text.primary : text.tertiary,
+                  fontSize: 12,
+                  fontWeight: 650,
+                  opacity: canAdd ? (used ? 0.58 : 1) : 0.42,
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = surface.softPanel as string;
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                }}
+                title={canAdd ? `Add ${meta.label} pane` : "Pane limit reached"}
+              >
+                <Icon size={13} strokeWidth={2.1} color={meta.color} />
+                <span className="flex-1">Add {meta.label}</span>
+                {used && (
+                  <span
+                    style={{
+                      color: text.tertiary,
+                      fontSize: 10,
+                      fontFamily: "var(--font-mono)",
+                      fontWeight: 700,
+                    }}
+                  >
+                    open
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

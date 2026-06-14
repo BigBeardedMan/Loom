@@ -94,8 +94,8 @@ export function OnboardingModal({ onDone }: Props) {
         {step === "welcome" && (
           <>
             <p style={{ fontSize: 13, color: "rgba(255,255,255,0.65)", marginBottom: 14 }}>
-              Loom is your developer cockpit: terminal, editor, kanban, agents, notes, and preview
-              side-by-side in one workspace. Each workspace points at a folder on disk.
+              Loom is your agent workroom: start with one focused thread, then add terminal,
+              editor, runs, notes, and preview panes when the task needs them.
             </p>
             <ul
               style={{
@@ -107,7 +107,7 @@ export function OnboardingModal({ onDone }: Props) {
                 lineHeight: 1.6,
               }}
             >
-              <li>Add blocks via Ctrl+Shift+1..7 or the topbar + buttons.</li>
+              <li>Add panes from the compact + menu or with Ctrl+Shift shortcuts.</li>
               <li>The agent pane talks to Claude, Codex, Gemini, Ollama, or any OpenAI-compat endpoint.</li>
               <li>Open Settings (Ctrl+K → "Open Settings") for API keys, providers, and shell integration.</li>
             </ul>

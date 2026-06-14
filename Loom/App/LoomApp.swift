@@ -134,9 +134,9 @@ struct LoomApp: App {
                 }
                 .keyboardShortcut("a", modifiers: [.command])
             }
-            CommandMenu("Add Block") {
+            CommandMenu("Add Pane") {
                 ForEach(layout.currentKind.availablePanels) { panel in
-                    Button("Add \(panel.label)") {
+                    Button("Add \(panel.label) Pane") {
                         layout.addBlock(panel)
                     }
                     .keyboardShortcut(shortcutKey(for: panel), modifiers: [.command, .shift])

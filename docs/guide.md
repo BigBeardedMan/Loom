@@ -393,9 +393,9 @@ The deck's capacity scales with the window size:
 | 900+ | (any) | 3 | 2 | 6 |
 | (smaller) | (any) | 2 | 2 | 4 |
 
-When the deck is at capacity the **Add Block** buttons in the top bar dim
-out and tooltips read "Block limit reached for this window size." Resize the
-window or remove a block to add a new one.
+When the deck is at capacity the compact **+** add menu in the top bar dims
+out and tooltips read "Pane limit reached for this window size." Resize the
+window or remove a pane to add a new one.
 
 ### Pinning
 

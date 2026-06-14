@@ -5,15 +5,15 @@ When Loom opens for the first time it seeds four rooms in the left rail: **Promp
 1. Click **+** in the top-left of the sidebar (or press ⌘N).
 2. Pick a **kind** - Prompt, Ideas, Review, or Runs. The kind determines which panes can be added later.
 3. Name the workspace and confirm.
-4. Add panes via the top-right add strip, the **Add Block** menu, or ⌘⇧1 through ⌘⇧5. Keys map to the available panels for the current room.
+4. Add panes from the compact top-right **+** menu, the **Add Pane** menu, or ⌘⇧1 through ⌘⇧5. Keys map to the available panels for the current room.
 
 ## Pick the right workspace kind
 
 | Kind | Available panes | Use it for |
 | ---- | --------------- | ---------- |
-| **Prompt** | Terminal, Editor, Runs, Agent, Commands | Active build / debug sessions. The cockpit. |
-| **Ideas** | Notes, Agent | Drafting, idea capture, low-stakes brainstorming with a model. |
-| **Review** | Preview, Agent | Looking at a localhost preview or rendered output side-by-side with an agent. |
+| **Prompt** | Agent, plus addable Terminal, Editor, Runs, and Commands | The primary agent thread for active build / debug sessions. |
+| **Ideas** | Agent, plus addable Notes | Drafting, idea capture, low-stakes brainstorming with a model. |
+| **Review** | Agent, plus addable Preview | Review-ready context with preview or rendered output available when needed. |
 | **Runs** | Runs, Chat, Agent, Terminal, Commands | Supervising agent graphs, history, chats, handoffs, and review evidence. |
 
 Switch between kinds freely — each kind remembers its own layout and pane order.

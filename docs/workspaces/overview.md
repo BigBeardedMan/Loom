@@ -1,14 +1,14 @@
 # Workspaces
 
-A workspace is one named, persistent room in the left rail. Pick a **kind** when you create it; the kind locks in which panes are available, while the shell keeps the same command bar, adaptive inspector, and bottom status bar around every room.
+A workspace is one named, persistent room in the left rail. Pick a **kind** when you create it; the kind locks in which panes are available, while the shell keeps the same command bar and an adaptive inspector that stays hidden until you open it.
 
 ## Four rooms
 
 | Kind | Sidebar label | Icon | Available panes |
 | ---- | ------------- | ---- | --------------- |
-| `code` | **Prompt** | `text.cursor` | Terminal, Editor, Runs, Agent, Commands |
-| `ideas` | **Ideas** | `lightbulb` | Notes, Agent |
-| `review` | **Review** | `magnifyingglass` | Preview, Agent |
+| `code` | **Prompt** | `text.cursor` | Agent, plus addable Terminal, Editor, Runs, Commands |
+| `ideas` | **Ideas** | `lightbulb` | Agent, plus addable Notes |
+| `review` | **Review** | `magnifyingglass` | Agent, plus addable Preview |
 | `runs` | **Runs** | `rectangle.stack.fill` | Runs, Chat, Agent, Terminal, Commands |
 
 The kind is set at creation and cannot be changed afterward — make a new workspace if you need a different shape.

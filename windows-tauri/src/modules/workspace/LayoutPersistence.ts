@@ -70,12 +70,12 @@ export function defaultLayout(kind: WorkspaceKind): Layout {
   const kinds: Panel[] = (() => {
     switch (kind) {
       case "code":
-        return ["terminal", "tasks", "agent"];
+        return ["agent"];
       case "ideas":
-        return ["notes", "agent"];
+        return ["agent"];
       case "review":
       case "build":
-        return ["preview", "agent"];
+        return ["agent"];
       case "runs":
         return ["tasks", "chat"];
       default:
@@ -165,7 +165,14 @@ export async function loadLayout(
       const migrated = blocks
         .map(migrateLegacyBlock)
         .filter((b): b is Block => b !== null);
-      if (migrated.length > 0) return { blocks: migrated };
+      if (migrated.length > 0) {
+        if (isLegacyFocusedMigrationCandidate(kind, migrated)) {
+          const focused = defaultLayout(kind);
+          await saveLayout(workspaceId, kind, focused);
+          return focused;
+        }
+        return { blocks: migrated };
+      }
     }
   } catch {
     /* fall through */
@@ -200,6 +207,32 @@ export async function saveLayout(
 
 export function newBlock(kind: Panel): Block {
   return { id: uuid(), kind };
+}
+
+function isLegacyFocusedMigrationCandidate(kind: WorkspaceKind, blocks: Block[]): boolean {
+  const expected: Panel[] | null =
+    kind === "code"
+      ? ["terminal", "tasks", "agent"]
+      : kind === "ideas"
+        ? ["notes", "agent"]
+        : kind === "review" || kind === "build"
+          ? ["preview", "agent"]
+          : null;
+  if (!expected) return false;
+  if (blocks.length !== expected.length) return false;
+  if (!blocks.every((block, index) => block.kind === expected[index])) return false;
+  return blocks.every((block) => {
+    const title = block.customTitle?.trim() ?? "";
+    return (
+      title.length === 0 &&
+      !block.fullRowSpan &&
+      !block.pin &&
+      block.pinFraction === undefined &&
+      (block.widthWeight === undefined || block.widthWeight === 1) &&
+      (block.heightWeight === undefined || block.heightWeight === 1) &&
+      (block.widthFraction === undefined || block.widthFraction === 1)
+    );
+  });
 }
 
 function layoutEnvelope(parsed: unknown): LayoutEnvelope | null {

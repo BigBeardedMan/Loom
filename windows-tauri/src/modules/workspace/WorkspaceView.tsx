@@ -201,6 +201,39 @@ export function WorkspaceView() {
     drag && drag.target?.kind === "pin"
       ? pinPreviewRect(drag.target.pin, deckSize)
       : null;
+  const focusedBlock = blocks.length === 1 && isFocusedConversationBlock(blocks[0])
+    ? blocks[0]
+    : null;
+
+  if (focusedBlock) {
+    return (
+      <div
+        ref={setContainerEl}
+        className="h-full w-full"
+        style={{ position: "relative", padding: cockpit.outerPadding, paddingTop: 0 }}
+      >
+        <div
+          onPointerDown={() => setActiveBlock(focusedBlock.id)}
+          style={{
+            position: "absolute",
+            left: cockpit.outerPadding,
+            top: 0,
+            width: deckSize.width,
+            height: deckSize.height,
+            overflow: "hidden",
+            borderRadius: radius.panel,
+            background: "rgb(5, 6, 7)",
+          }}
+        >
+          <BlockContent
+            kind={focusedBlock.kind}
+            workspace={workspace}
+            blockId={focusedBlock.id}
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -297,6 +330,10 @@ export function WorkspaceView() {
       )}
     </div>
   );
+}
+
+function isFocusedConversationBlock(block: Block | undefined): block is Block {
+  return block?.kind === "agent" || block?.kind === "chat";
 }
 
 function BlockShell({

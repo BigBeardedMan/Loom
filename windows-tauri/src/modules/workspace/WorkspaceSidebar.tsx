@@ -25,6 +25,7 @@ import type { Block } from "./LayoutPersistence";
 
 const USAGE_TOOLS: Tool[] = ["claude", "codex", "lmstudio"];
 const SHOW_USAGE_SECTION = false;
+const SHOW_CONTEXT_SECTIONS = false;
 
 export function WorkspaceSidebar() {
   const workspaces = useApp((s) => s.workspaces);
@@ -220,7 +221,7 @@ export function WorkspaceSidebar() {
           </>
         )}
 
-        {workspace?.kindRaw === "ideas" ? (
+        {SHOW_CONTEXT_SECTIONS && (workspace?.kindRaw === "ideas" ? (
           <div className="flex min-h-0 flex-1 flex-col">
             <SectionHeader
               title="Ideas"
@@ -415,7 +416,7 @@ export function WorkspaceSidebar() {
               <Icons.chevronRight className="ml-auto" size={11} strokeWidth={2.2} />
             </button>
           </div>
-        )}
+        ))}
       </div>
       {preview && (
         <TranscriptPreviewModal
@@ -523,7 +524,7 @@ function WorkspaceRow({
           </span>
         )}
       </span>
-      {sessionCount > 0 && (
+      {SHOW_CONTEXT_SECTIONS && sessionCount > 0 && (
         <CountBadge value={sessionCount} color="var(--color-ws-green)" />
       )}
       <span className="flex flex-none items-center gap-1 opacity-70 transition-opacity group-hover:opacity-100">

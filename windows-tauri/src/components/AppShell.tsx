@@ -8,6 +8,8 @@ import { on } from "../lib/ipc";
 import { useApp } from "../lib/store";
 import { cockpit, surface } from "../lib/theme";
 
+const SHOW_STATUS_BAR = false;
+
 export function AppShell() {
   const isRightRailVisible = useApp((s) => s.isRightRailVisible);
   const toggleRightRail = useApp((s) => s.toggleRightRail);
@@ -58,7 +60,7 @@ export function AppShell() {
           </>
         )}
       </div>
-      <WorkspaceStatusBar />
+      {SHOW_STATUS_BAR && <WorkspaceStatusBar />}
     </div>
   );
 }

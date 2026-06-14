@@ -73,6 +73,7 @@ const VENDORS: { value: Vendor; label: string }[] = [
 const LOCAL_HTTP_VENDORS = new Set<Vendor>(["ollama", "lmstudio", "openai-compat"]);
 const MAX_MEMORY_FILE_CHARS = 1800;
 const MAX_MEMORY_TOTAL_CHARS = 5000;
+const SHOW_LM_STUDIO_WORKBENCH = false;
 
 type Props = { workspace: Workspace; blockId?: string; presentation?: "agent" | "chat" };
 
@@ -921,7 +922,7 @@ export function AgentPane({ workspace, blockId, presentation = "agent" }: Props)
         </div>
       )}
 
-      {vendor === "lmstudio" && (
+      {vendor === "lmstudio" && SHOW_LM_STUDIO_WORKBENCH && (
         <div
           className="grid flex-none gap-2"
           style={{

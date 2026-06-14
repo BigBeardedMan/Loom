@@ -20,7 +20,8 @@ struct WorkspaceView: View {
     @State private var transcriptPreview: TerminalTranscriptSession?
     @AppStorage("loom.shell.rightRailVisible") private var isRightRailVisible: Bool = false
     @AppStorage("loom.shell.rightRailTab") private var rightRailTabRaw: String = WorkspaceRightRailTab.files.rawValue
-    @AppStorage("loom.shell.focusedDefaultsApplied.9.0.16") private var focusedDefaultsApplied: Bool = false
+    @AppStorage("loom.shell.focusedDefaultsApplied.9.0.17") private var focusedDefaultsApplied: Bool = false
+    @AppStorage("loom.shell.statusBarVisible") private var isStatusBarVisible: Bool = false
     @State private var rightRailRefreshNonce: Int = 0
     @State private var selectedBlockID: UUID?
     @State private var inspectorRunSummaries: [AgentGraphRunSummary] = []
@@ -111,15 +112,17 @@ struct WorkspaceView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
 
-                WorkspaceStatusBar(
-                    workspace: selectedWorkspace,
-                    blocks: layout.blocks,
-                    selectedBlock: selectedBlock,
-                    runSummaries: scopedInspectorRunSummaries,
-                    rightRailTab: effectiveRightRailTab,
-                    openInspector: openInspector,
-                    showUsageTool: { selectedUsageTool = $0 }
-                )
+                if isStatusBarVisible {
+                    WorkspaceStatusBar(
+                        workspace: selectedWorkspace,
+                        blocks: layout.blocks,
+                        selectedBlock: selectedBlock,
+                        runSummaries: scopedInspectorRunSummaries,
+                        rightRailTab: effectiveRightRailTab,
+                        openInspector: openInspector,
+                        showUsageTool: { selectedUsageTool = $0 }
+                    )
+                }
             }
             .padding(8)
 
@@ -213,7 +216,7 @@ struct WorkspaceView: View {
             if let tool = selectedUsageTool {
                 selectedUsageStatus(tool)
             } else {
-                addBlockStrip
+                addPaneMenu
             }
 
             dictationButton
@@ -425,40 +428,30 @@ struct WorkspaceView: View {
         }
     }
 
-    private var addBlockStrip: some View {
-        HStack(spacing: 4) {
+    private var addPaneMenu: some View {
+        Menu {
             ForEach(currentKind.availablePanels) { panel in
-                addBlockButton(panel)
-            }
-        }
-        .padding(.horizontal, 2)
-        .padding(.vertical, 2)
-    }
-
-    private func addBlockButton(_ panel: PanelKind) -> some View {
-        Button {
-            guard canAddBlock else { return }
-            if layout.addBlock(panel) {
-                selectedBlockID = layout.commandTargetBlockID
+                Button {
+                    guard canAddBlock else { return }
+                    if layout.addBlock(panel) {
+                        selectedBlockID = layout.commandTargetBlockID
+                    }
+                } label: {
+                    Label("Add \(panel.label)", systemImage: panel.systemImage)
+                }
+                .disabled(!canAddBlock)
             }
         } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "plus")
-                    .font(.system(size: 9, weight: .bold))
-                Image(systemName: panel.systemImage)
-                    .font(.system(size: 10, weight: .bold))
-                Text(panel.label)
-                    .font(.system(size: 11, weight: .semibold))
-            }
-            .foregroundStyle(canAddBlock ? LoomTheme.primaryText : LoomTheme.mutedText.opacity(0.55))
-            .padding(.horizontal, 7)
-            .padding(.vertical, 4)
-            .contentShape(Capsule())
+            Image(systemName: "plus")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(canAddBlock ? LoomTheme.primaryText : LoomTheme.mutedText.opacity(0.55))
+                .frame(width: 26, height: 26)
+                .contentShape(RoundedRectangle(cornerRadius: LoomTheme.controlRadius))
         }
-        .buttonStyle(.plain)
-        .pointingHandCursor()
+        .menuStyle(.borderlessButton)
+        .fixedSize()
         .disabled(!canAddBlock)
-        .help(canAddBlock ? "Add \(panel.label) pane" : "Pane limit reached for this window size")
+        .help(canAddBlock ? "Add pane" : "Pane limit reached for this window size")
     }
 
     // MARK: - Sidebar
@@ -562,6 +555,7 @@ struct WorkspaceView: View {
         @Bindable var bindable = layout
         return WorkspaceSidebarView(
             showsWorkspaceSection: true,
+            showsSessionSections: false,
             selectedWorkspaceID: $bindable.selectedWorkspaceID,
             selectedUsageTool: $selectedUsageTool,
             transcriptPreview: $transcriptPreview
@@ -668,6 +662,10 @@ struct WorkspaceView: View {
                         .onAppear { deckSize = geo.size }
                         .onChange(of: geo.size) { _, new in deckSize = new }
                 }
+            } else if layout.blocks.count == 1,
+                      let block = layout.blocks.first,
+                      isFocusedConversationBlock(block) {
+                focusedConversationDeck(block)
             } else {
                 GeometryReader { geo in
                     let metrics = DeckMetrics(size: geo.size, blocks: layout.blocks)
@@ -731,6 +729,32 @@ struct WorkspaceView: View {
                     .onChange(of: geo.size) { _, new in deckSize = new }
                 }
             }
+        }
+    }
+
+    private func isFocusedConversationBlock(_ block: WorkspaceBlock) -> Bool {
+        block.kind == .agent || block.kind == .chat
+    }
+
+    private func focusedConversationDeck(_ block: WorkspaceBlock) -> some View {
+        GeometryReader { geo in
+            blockContent(for: block)
+                .frame(width: geo.size.width, height: geo.size.height)
+                .background(Color(red: 0.018, green: 0.022, blue: 0.026))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .contentShape(RoundedRectangle(cornerRadius: 10))
+                .onAppear {
+                    deckSize = geo.size
+                    selectedBlockID = block.id
+                    layout.commandTargetBlockID = block.id
+                }
+                .onChange(of: geo.size) { _, new in deckSize = new }
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        selectedBlockID = block.id
+                        layout.commandTargetBlockID = block.id
+                    }
+                )
         }
     }
 
@@ -867,7 +891,7 @@ struct WorkspaceView: View {
         LoomEmptyState(
             systemImage: "rectangle.dashed",
             title: "Empty workroom",
-            detail: "Add Terminal, Editor, Runs, Chat, Agent, or Commands from the command bar.",
+            detail: "Add a pane from the top bar.",
             tint: selectedWorkspace?.color.color ?? LoomTheme.blue
         )
     }

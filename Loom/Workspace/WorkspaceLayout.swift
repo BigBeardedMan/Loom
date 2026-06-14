@@ -208,6 +208,8 @@ final class WorkspaceBlock: Identifiable {
 @Observable
 @MainActor
 final class WorkspaceLayout {
+    private static let focusedWorkroomMigrationKey = "loom.shell.focusedWorkroomMigration.9.0.17"
+
     private var blocksByKind: [WorkspaceKind: [WorkspaceBlock]] = [:]
     var currentKind: WorkspaceKind = .code
     var defaultCwd: URL = FileManager.default.homeDirectoryForCurrentUser
@@ -261,6 +263,7 @@ final class WorkspaceLayout {
             }
         }
         hasHydrated = true
+        applyFocusedWorkroomMigrationIfNeeded()
     }
 
     /// Eagerly hydrate every kind's blocks at app launch so the first switch
@@ -278,6 +281,7 @@ final class WorkspaceLayout {
             }
         }
         hasHydrated = true
+        applyFocusedWorkroomMigrationIfNeeded()
     }
 
     func setDefaultCwd(_ url: URL?) {
@@ -597,25 +601,11 @@ final class WorkspaceLayout {
     private func makeDefaults(for kind: WorkspaceKind) -> [WorkspaceBlock] {
         switch kind {
         case .code:
-            let terminal = WorkspaceBlock(kind: .terminal, cwd: defaultCwd)
-            terminal.autoTerminalIndex = 1
-            return [
-                terminal,
-                WorkspaceBlock(kind: .tasks),
-                WorkspaceBlock(kind: .agent)
-            ]
+            return [WorkspaceBlock(kind: .agent)]
         case .ideas:
-            return [
-                WorkspaceBlock(kind: .notes),
-                WorkspaceBlock(kind: .agent)
-            ]
+            return [WorkspaceBlock(kind: .agent)]
         case .review:
-            let preview = WorkspaceBlock(kind: .preview, cwd: defaultCwd)
-            preview.autoPreviewIndex = nextPreviewIndex(considering: [])
-            return [
-                preview,
-                WorkspaceBlock(kind: .agent)
-            ]
+            return [WorkspaceBlock(kind: .agent)]
         case .runs:
             let chat = WorkspaceBlock(kind: .chat, cwd: defaultCwd)
             chat.autoChatIndex = 1
@@ -623,6 +613,47 @@ final class WorkspaceLayout {
                 WorkspaceBlock(kind: .tasks),
                 chat
             ]
+        }
+    }
+
+    private func applyFocusedWorkroomMigrationIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: Self.focusedWorkroomMigrationKey) else { return }
+        defaults.set(true, forKey: Self.focusedWorkroomMigrationKey)
+
+        for kind in [WorkspaceKind.code, .ideas, .review] {
+            guard let current = blocksByKind[kind],
+                  Self.isLegacyMultiPaneDefault(current, for: kind) else { continue }
+            current.forEach { $0.cleanup() }
+            let replacement = makeDefaults(for: kind)
+            blocksByKind[kind] = replacement
+            LayoutPersistence.save(kind: kind, blocks: replacement)
+        }
+    }
+
+    private static func isLegacyMultiPaneDefault(_ blocks: [WorkspaceBlock], for kind: WorkspaceKind) -> Bool {
+        let expectedKinds: [PanelKind]
+        switch kind {
+        case .code:
+            expectedKinds = [.terminal, .tasks, .agent]
+        case .ideas:
+            expectedKinds = [.notes, .agent]
+        case .review:
+            expectedKinds = [.preview, .agent]
+        case .runs:
+            return false
+        }
+
+        guard blocks.map(\.kind) == expectedKinds else { return false }
+        return blocks.allSatisfy { block in
+            let hasDefaultTitle = block.customTitle?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
+            return hasDefaultTitle
+            && block.pin == nil
+            && block.spansFullRow == false
+            && block.widthWeight == 1.0
+            && block.heightWeight == 1.0
+            && block.pinFraction == nil
+            && block.widthFraction == 1.0
         }
     }
 }

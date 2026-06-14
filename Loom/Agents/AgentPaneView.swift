@@ -77,7 +77,7 @@ struct AgentPaneView: View {
     @AppStorage("loom.lmstudio.coderModel") private var lmStudioCoderModel: String = ""
     @AppStorage("loom.lmstudio.autoScale") private var lmStudioAutoScale: Bool = true
     @AppStorage("loom.lmstudio.maxContext") private var lmStudioMaxContext: Int = 65_536
-    @AppStorage("loom.lmstudio.workbenchEnabled") private var lmStudioWorkbenchEnabled: Bool = true
+    @AppStorage("loom.lmstudio.workbenchEnabled") private var lmStudioWorkbenchEnabled: Bool = false
     @AppStorage("loom.lmstudio.autoPrepare") private var lmStudioAutoPrepare: Bool = true
     @AppStorage("loom.lmstudio.statefulSessions") private var lmStudioStatefulSessions: Bool = true
     @AppStorage("loom.agent.autoVerify") private var autoVerifyAgentRuns: Bool = true

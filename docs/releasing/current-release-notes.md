@@ -1,5 +1,9 @@
 ## Changes
 
+- Testing Edition now opens Prompt, Ideas, and Review as focused agent workrooms instead of multi-pane cockpit grids, while keeping Terminal, Runs, Editor, Notes, Preview, and Commands available from the compact add menu.
+- The default shell is quieter on macOS and Windows: session/history sidebar sections, the right inspector, the bottom status strip, and the LM Studio workbench cards are hidden until explicitly needed.
+- Existing untouched default Prompt/Ideas/Review layouts migrate to the focused workroom default, so current installs stop reopening into the old Terminal + Runs + Agent clutter.
+- Testing Edition version metadata now moves to 9.0.17 across macOS, Windows/Tauri, and the bundled LM Studio helper.
 - Testing Edition now uses a focused Codex/Hermes-style shell: one left workspace/sidebar surface, a central workroom that keeps its width, and an optional floating right context card.
 - The old duplicate room rail is removed from the default shell, usage meters are hidden from the default sidebar, and the top bar now reads as the current workroom title plus actions instead of repeating app branding.
 - Runs and Review inspector context now opens with a single prioritized status row instead of a six-phase workflow dashboard.

@@ -112,7 +112,7 @@ type AppState = {
 const SELECTED_WS_KEY = "loom.selectedWorkspaceId";
 const RIGHT_RAIL_VISIBLE_KEY = "loom.shell.rightRailVisible";
 const RIGHT_RAIL_TAB_KEY = "loom.shell.rightRailTab";
-const FOCUSED_DEFAULTS_KEY = "loom.shell.focusedDefaultsApplied.9.0.16";
+const FOCUSED_DEFAULTS_KEY = "loom.shell.focusedDefaultsApplied.9.0.17";
 
 const RIGHT_RAIL_TABS = new Set<RightRailTab>([
   "files",
