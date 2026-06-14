@@ -23,6 +23,8 @@ struct WorkspaceView: View {
     @AppStorage("loom.shell.rightRailTab") private var rightRailTabRaw: String = WorkspaceRightRailTab.files.rawValue
     @State private var rightRailRefreshNonce: Int = 0
     @State private var selectedBlockID: UUID?
+    @State private var inspectorRunSummaries: [AgentGraphRunSummary] = []
+    @State private var inspectorMemoryFiles: [WorkspaceMemoryFile] = []
 
     private var deckCapacity: Int {
         let cap = WorkspaceLayout.capacity(for: deckSize)
@@ -153,6 +155,9 @@ struct WorkspaceView: View {
         .task {
             syncDeckCapacity()
             handleWorkspaceChange()
+        }
+        .task(id: inspectorContextTaskKey) {
+            await refreshInspectorContext()
         }
     }
 
@@ -529,8 +534,25 @@ struct WorkspaceView: View {
         WorkspaceRightRailAvailability.tabs(
             workspace: selectedWorkspace,
             selectedBlock: selectedBlock,
-            blocks: layout.blocks
+            blocks: layout.blocks,
+            memoryFiles: inspectorMemoryFiles,
+            runSummaries: scopedInspectorRunSummaries
         )
+    }
+
+    private var scopedInspectorRunSummaries: [AgentGraphRunSummary] {
+        WorkspaceRightRailAvailability.scopedRunSummaries(
+            inspectorRunSummaries,
+            workspace: selectedWorkspace
+        )
+    }
+
+    private var inspectorContextTaskKey: String {
+        [
+            selectedWorkspace?.id.uuidString ?? "none",
+            selectedWorkspace?.folderPath ?? "",
+            String(rightRailRefreshNonce)
+        ].joined(separator: ":")
     }
 
     private func rightRailView(width: CGFloat) -> some View {
@@ -570,6 +592,20 @@ struct WorkspaceView: View {
         liveAgentTasks.refresh()
         rightRailRefreshNonce &+= 1
         openInspector(.timeline)
+    }
+
+    @MainActor
+    private func refreshInspectorContext() async {
+        let workspaceID = selectedWorkspace?.id
+        let folderPath = selectedWorkspace?.folderPath
+        let summaries = (try? await AgentGraphLedger.shared.summaries()) ?? []
+        let memoryFiles = WorkspaceMemoryFile.load(from: folderPath)
+        guard selectedWorkspace?.id == workspaceID,
+              selectedWorkspace?.folderPath == folderPath else {
+            return
+        }
+        inspectorRunSummaries = summaries
+        inspectorMemoryFiles = memoryFiles
     }
 
     private func syncDeckCapacity() {

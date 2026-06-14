@@ -68,6 +68,25 @@ enum WorkspaceRightRailAvailability {
         tabs.append(.details)
         return tabs
     }
+
+    static func scopedRunSummaries(
+        _ summaries: [AgentGraphRunSummary],
+        workspace: Workspace?
+    ) -> [AgentGraphRunSummary] {
+        guard let folderPath = workspace?.folderPath, !folderPath.isEmpty else {
+            return summaries
+        }
+        let root = normalizedPath(folderPath)
+        return summaries.filter { summary in
+            guard let workspacePath = summary.workspacePath, !workspacePath.isEmpty else { return false }
+            let candidate = normalizedPath(workspacePath)
+            return candidate == root || candidate.hasPrefix(root + "/")
+        }
+    }
+
+    private static func normalizedPath(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.path
+    }
 }
 
 struct WorkspaceRoomRailView: View {
@@ -307,15 +326,7 @@ struct WorkspaceRightRailView: View {
     }
 
     private var scopedRunSummaries: [AgentGraphRunSummary] {
-        guard let folderPath = workspace?.folderPath, !folderPath.isEmpty else {
-            return runSummaries
-        }
-        let root = normalizedPath(folderPath)
-        return runSummaries.filter { summary in
-            guard let workspacePath = summary.workspacePath, !workspacePath.isEmpty else { return false }
-            let candidate = normalizedPath(workspacePath)
-            return candidate == root || candidate.hasPrefix(root + "/")
-        }
+        WorkspaceRightRailAvailability.scopedRunSummaries(runSummaries, workspace: workspace)
     }
 
     private var scopedLiveAgentGroups: [LiveAgentTaskGroup] {
