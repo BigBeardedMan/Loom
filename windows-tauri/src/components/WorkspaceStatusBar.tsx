@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Icons } from "../lib/icons";
-import { ipc, type AgentDescriptor, type LiveAgentTaskGroup, type LocalEndpoint } from "../lib/ipc";
+import { ipc, type AgentDescriptor, type AgentGraphRunSummary, type LiveAgentTaskGroup, type LocalEndpoint } from "../lib/ipc";
 import { effectiveRailTab, PANEL_META, ROOM_META, rightRailTabLabel } from "../lib/commands";
 import { LOOM_ENDPOINTS_CHANGED } from "../lib/events";
 import { useRightRailContext } from "../lib/railContext";
@@ -33,6 +33,7 @@ export function WorkspaceStatusBar() {
     hasMemoryFiles: memoryFiles.length > 0,
   });
   const scopedLiveGroups = filterLiveGroupsForWorkspace(liveGroups, workspace?.folderPath);
+  const runSegment = runHistorySegment(scopedRuns);
 
   useEffect(() => {
     const tick = () => ipc.liveTasks.list().then(setLiveGroups).catch(() => {});
@@ -92,12 +93,86 @@ export function WorkspaceStatusBar() {
       />
       <StatusSegment icon="panelRight" color={workspaceColorVar.blue} label={`${layout?.blocks.length ?? 0} panes`} detail={activeBlock ? blockTitle(activeBlock) : "No selection"} onClick={() => setRightRailTab("details")} />
       <StatusSegment icon="workflow" color={scopedLiveGroups.length ? workspaceColorVar.green : text.tertiary} label={`${scopedLiveGroups.length} live runs`} detail={liveRunDetail(scopedLiveGroups)} onClick={() => setRightRailTab("timeline")} />
+      <StatusSegment icon={runSegment.icon} color={runSegment.color} label={runSegment.label} detail={runSegment.detail} onClick={() => setRightRailTab(runSegment.targetTab)} />
       <StatusSegment icon="server" color={endpoints.length ? workspaceColorVar.purple : text.tertiary} label={agents[0]?.name || "Default agent"} detail={agents[0]?.model || `${endpoints.length} local endpoints`} onClick={() => setRightRailTab("tools")} />
       <div className="flex-1" />
       <StatusSegment icon={updateSegment.icon} color={updateSegment.color} label={updateSegment.label} detail={updateSegment.detail} onClick={() => void checkForUpdates()} />
       <StatusSegment icon="panelRight" color={workspaceColorVar.blue} label={rightRailTabLabel(effectiveRightRailTab)} detail="inspector" onClick={() => setRightRailTab(effectiveRightRailTab)} />
     </footer>
   );
+}
+
+function runHistorySegment(runs: AgentGraphRunSummary[]): {
+  icon: keyof typeof Icons;
+  color: string;
+  label: string;
+  detail?: string | null;
+  targetTab: "timeline" | "diff";
+} {
+  if (runs.length === 0) {
+    return {
+      icon: "workflow",
+      color: text.tertiary as string,
+      label: "No Run History",
+      targetTab: "timeline",
+    };
+  }
+
+  const attention = runs.filter((run) => isAttentionStatus(run.status) || run.gitDirty === true).length;
+  const running = runs.filter((run) => isRunningStatus(run.status)).length;
+  const ready = runs.filter(
+    (run) =>
+      isCompletedStatus(run.status) &&
+      run.gitDirty !== true &&
+      ((run.toolEventCount ?? 0) > 0 || (run.taskCount ?? 0) > 0 || Boolean(run.gitHead) || Boolean(run.gitBranch))
+  ).length;
+
+  if (attention > 0) {
+    return {
+      icon: "failedCircle",
+      color: workspaceColorVar.orange,
+      label: `${attention} Attention`,
+      detail: `${runs.length} recent runs`,
+      targetTab: "diff",
+    };
+  }
+  if (running > 0) {
+    return {
+      icon: "workflow",
+      color: workspaceColorVar.blue,
+      label: `${running} Running`,
+      detail: `${runs.length} recent runs`,
+      targetTab: "timeline",
+    };
+  }
+  if (ready > 0) {
+    return {
+      icon: "checkCircle",
+      color: workspaceColorVar.green,
+      label: `${ready} Ready`,
+      detail: `${runs.length} recent runs`,
+      targetTab: "diff",
+    };
+  }
+  return {
+    icon: "workflow",
+    color: text.tertiary as string,
+    label: `${runs.length} Recent`,
+    detail: "run history",
+    targetTab: "timeline",
+  };
+}
+
+function isCompletedStatus(status: string): boolean {
+  return status.toLowerCase() === "completed";
+}
+
+function isAttentionStatus(status: string): boolean {
+  return ["failed", "cancelled"].includes(status.toLowerCase());
+}
+
+function isRunningStatus(status: string): boolean {
+  return ["running", "pending", "in_progress", "in-progress"].includes(status.toLowerCase());
 }
 
 function updateStatusSegment(

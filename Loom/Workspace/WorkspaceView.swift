@@ -119,6 +119,7 @@ struct WorkspaceView: View {
                     workspace: selectedWorkspace,
                     blocks: layout.blocks,
                     selectedBlock: selectedBlock,
+                    runSummaries: scopedInspectorRunSummaries,
                     rightRailTab: effectiveRightRailTab,
                     openInspector: openInspector
                 )

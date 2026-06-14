@@ -1493,6 +1493,7 @@ struct WorkspaceStatusBar: View {
     let workspace: Workspace?
     let blocks: [WorkspaceBlock]
     let selectedBlock: WorkspaceBlock?
+    let runSummaries: [AgentGraphRunSummary]
     let rightRailTab: WorkspaceRightRailTab
     let openInspector: (WorkspaceRightRailTab) -> Void
 
@@ -1520,6 +1521,15 @@ struct WorkspaceStatusBar: View {
                 detail: liveRunDetail,
                 tint: scopedLiveAgentGroups.isEmpty ? LoomTheme.mutedText : LoomTheme.green,
                 action: { openInspector(.timeline) }
+            )
+
+            let runs = runHistoryStatus
+            statusSegment(
+                icon: runs.icon,
+                title: runs.title,
+                detail: runs.detail,
+                tint: runs.tint,
+                action: { openInspector(runs.targetTab) }
             )
 
             statusSegment(
@@ -1592,6 +1602,69 @@ struct WorkspaceStatusBar: View {
         }
     }
 
+    private var runHistoryStatus: (
+        icon: String,
+        title: String,
+        detail: String?,
+        tint: Color,
+        targetTab: WorkspaceRightRailTab
+    ) {
+        guard !runSummaries.isEmpty else {
+            return (
+                "clock.arrow.circlepath",
+                "No Run History",
+                nil,
+                LoomTheme.mutedText,
+                .timeline
+            )
+        }
+
+        let attention = runSummaries.filter { summary in
+            isAttentionStatus(summary.status) || summary.gitDirty == true
+        }.count
+        let running = runSummaries.filter { isRunningStatus($0.status) }.count
+        let ready = runSummaries.filter { summary in
+            isCompletedStatus(summary.status)
+            && summary.gitDirty != true
+            && (summary.toolEventCount > 0 || summary.taskCount > 0 || summary.gitHead != nil || summary.gitBranch != nil)
+        }.count
+
+        if attention > 0 {
+            return (
+                "exclamationmark.triangle.fill",
+                "\(attention) Attention",
+                "\(runSummaries.count) recent runs",
+                LoomTheme.orange,
+                .diff
+            )
+        }
+        if running > 0 {
+            return (
+                "point.3.connected.trianglepath.dotted",
+                "\(running) Running",
+                "\(runSummaries.count) recent runs",
+                LoomTheme.blue,
+                .timeline
+            )
+        }
+        if ready > 0 {
+            return (
+                "checkmark.seal.fill",
+                "\(ready) Ready",
+                "\(runSummaries.count) recent runs",
+                LoomTheme.green,
+                .diff
+            )
+        }
+        return (
+            "clock.arrow.circlepath",
+            "\(runSummaries.count) Recent",
+            "run history",
+            LoomTheme.mutedText,
+            .timeline
+        )
+    }
+
     private func normalizedPath(_ path: String) -> String {
         URL(fileURLWithPath: path).standardizedFileURL.path
     }
@@ -1626,6 +1699,28 @@ struct WorkspaceStatusBar: View {
         }
         let running = UpdateService.runningVersionTriple()
         return ("checkmark.seal.fill", "Up To Date", "\(running.version) (\(running.build))", LoomTheme.mutedText)
+    }
+
+    private func isCompletedStatus(_ status: String) -> Bool {
+        status.lowercased() == "completed"
+    }
+
+    private func isAttentionStatus(_ status: String) -> Bool {
+        switch status.lowercased() {
+        case "failed", "cancelled":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func isRunningStatus(_ status: String) -> Bool {
+        switch status.lowercased() {
+        case "running", "pending", "in_progress", "in-progress":
+            return true
+        default:
+            return false
+        }
     }
 
     private func runUpdateAction() {
