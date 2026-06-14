@@ -34,6 +34,11 @@ type ChatApiMessage = {
   content: string;
 };
 
+type WorkspacePromptContext = {
+  systemPrompt: string;
+  contextBlock: string;
+};
+
 type LmStudioRunStatus = {
   phase: string;
   label: string;
@@ -65,6 +70,9 @@ const VENDORS: { value: Vendor; label: string }[] = [
 ];
 
 const LOCAL_HTTP_VENDORS = new Set<Vendor>(["ollama", "lmstudio", "openai-compat"]);
+const MEMORY_CANDIDATES = ["CLAUDE.md", "AGENTS.md", "GUIDE.md", "README.md"];
+const MAX_MEMORY_FILE_CHARS = 1800;
+const MAX_MEMORY_TOTAL_CHARS = 5000;
 
 type Props = { workspace: Workspace; blockId?: string; presentation?: "agent" | "chat" };
 
@@ -407,14 +415,15 @@ export function AgentPane({ workspace, blockId, presentation = "agent" }: Props)
     setBusy(true);
 
     try {
-      if (vendor === "anthropic") await runAnthropic(prompt, asstId, contextTurns);
+      const workspacePrompt = await buildWorkspacePrompt(workspace);
+      if (vendor === "anthropic") await runAnthropic(prompt, asstId, contextTurns, workspacePrompt);
       else if (
         vendor === "openai-compat" ||
         vendor === "lmstudio" ||
         (vendor === "ollama" && activeEndpoint)
       )
-        await runOpenAi(prompt, asstId, lmPreviousResponseId, contextTurns);
-      else await runCli(prompt, asstId);
+        await runOpenAi(prompt, asstId, lmPreviousResponseId, contextTurns, workspacePrompt);
+      else await runCli(prompt, asstId, workspacePrompt);
     } catch (e) {
       setTurns((prev) =>
         prev.map((t) =>
@@ -427,10 +436,10 @@ export function AgentPane({ workspace, blockId, presentation = "agent" }: Props)
     }
   };
 
-  const runCli = async (prompt: string, asstId: string) => {
+  const runCli = async (prompt: string, asstId: string, workspacePrompt: WorkspacePromptContext) => {
     const streamId = await ipc.agents.cliSend({
       vendor: vendor as "claude" | "codex" | "gemini" | "ollama",
-      prompt,
+      prompt: decoratedPrompt(prompt, workspacePrompt),
       cwd: workspace.folderPath || ".",
     });
     const off1 = await on<string>(`agent://${streamId}/chunk`, (line) => {
@@ -460,7 +469,8 @@ export function AgentPane({ workspace, blockId, presentation = "agent" }: Props)
     prompt: string,
     asstId: string,
     previousResponseId: string | null | undefined,
-    contextTurns: Turn[]
+    contextTurns: Turn[],
+    workspacePrompt: WorkspacePromptContext
   ) => {
     if (!activeEndpoint) {
       throw new Error("No endpoint configured. Open Settings → AI Providers to add one.");
@@ -474,6 +484,7 @@ export function AgentPane({ workspace, blockId, presentation = "agent" }: Props)
       endpointId: activeEndpoint.id,
       model: selectedModel,
       messages,
+      system: workspacePrompt.systemPrompt,
       maxTokens: 4096,
       previousResponseId: vendor === "lmstudio" ? previousResponseId ?? undefined : undefined,
     });
@@ -523,7 +534,12 @@ export function AgentPane({ workspace, blockId, presentation = "agent" }: Props)
     };
   };
 
-  const runAnthropic = async (prompt: string, asstId: string, contextTurns: Turn[]) => {
+  const runAnthropic = async (
+    prompt: string,
+    asstId: string,
+    contextTurns: Turn[],
+    workspacePrompt: WorkspacePromptContext
+  ) => {
     const apiKey = await ipc.keychain.get("loom.anthropic", "default");
     if (!apiKey) throw new Error("Anthropic API key not set. Open Settings to add one.");
     const messages = buildAnthropicMessages(contextTurns, prompt);
@@ -531,6 +547,7 @@ export function AgentPane({ workspace, blockId, presentation = "agent" }: Props)
       apiKey,
       model,
       messages,
+      system: workspacePrompt.systemPrompt,
       maxTokens: 4096,
     });
     const off1 = await on<{ kind: string; data: unknown }>(
@@ -1247,6 +1264,98 @@ function normalizeStoredTurn(value: unknown): Turn | null {
   const normalized: Turn = { id, role, text };
   if (isVendor(source.vendor)) normalized.vendor = source.vendor;
   return normalized;
+}
+
+async function buildWorkspacePrompt(workspace: Workspace): Promise<WorkspacePromptContext> {
+  const projectMemory = await loadProjectMemory(workspace);
+  const contextBlock = formatWorkspaceContext(workspace, projectMemory);
+  const role = workspaceRoleInstruction(workspace);
+  return {
+    systemPrompt: contextBlock ? `${role}\n\n${contextBlock}` : role,
+    contextBlock,
+  };
+}
+
+async function loadProjectMemory(workspace: Workspace): Promise<string> {
+  if (!workspace.folderPath) return "";
+  const sections: string[] = [];
+  let totalLength = 0;
+  for (const name of MEMORY_CANDIDATES) {
+    const path = joinWorkspacePath(workspace.folderPath, name);
+    try {
+      const raw = await ipc.fs.read(path);
+      const trimmed = raw.trim();
+      if (!trimmed) continue;
+      const body = truncateText(trimmed, MAX_MEMORY_FILE_CHARS);
+      const section = `## ${name}\n\n${body}`;
+      sections.push(section);
+      totalLength += section.length;
+      if (totalLength >= MAX_MEMORY_TOTAL_CHARS) break;
+    } catch {
+      // Missing memory files are expected.
+    }
+  }
+  const joined = sections.join("\n\n");
+  return truncateText(joined, MAX_MEMORY_TOTAL_CHARS, "\n\n...(truncated)");
+}
+
+function workspaceRoleInstruction(workspace: Workspace): string {
+  if (workspace.kindRaw === "ideas") {
+    return [
+      "You are inside Loom, a workspace for terminals, editor, AI agents, and task state.",
+      "The user is in the Ideas room.",
+      "When they ask for ideas, items, tasks, or a brainstorm, reply with a clean numbered or bulleted list, one short phrase per item, unless they ask for another format.",
+      "Use the workspace context below to avoid repeating captured project direction.",
+    ].join(" ");
+  }
+  return [
+    "You are inside Loom, a workspace for terminals, editor, AI agents, and task state.",
+    "Use the workspace context below to answer with awareness of the project folder, project memory, and current room.",
+  ].join(" ");
+}
+
+function formatWorkspaceContext(workspace: Workspace, projectMemory: string): string {
+  const lines = ["## Loom workspace context"];
+  const label = workspaceKindLabel(workspace.kindRaw);
+  const name = workspace.name.trim();
+  lines.push(name ? `- Workspace: ${name} (${label})` : `- Workspace kind: ${label}`);
+  if (workspace.folderPath) lines.push(`- Project folder: ${workspace.folderPath}`);
+  if (projectMemory) {
+    lines.push("");
+    lines.push("### Project memory");
+    lines.push(projectMemory);
+  }
+  return lines.join("\n");
+}
+
+function decoratedPrompt(userPrompt: string, workspacePrompt: WorkspacePromptContext): string {
+  if (!workspacePrompt.contextBlock.trim()) return userPrompt;
+  return `${workspacePrompt.systemPrompt}\n\n## User request\n\n${userPrompt}`;
+}
+
+function workspaceKindLabel(kind: Workspace["kindRaw"]): string {
+  switch (kind) {
+    case "code":
+      return "Prompt";
+    case "ideas":
+      return "Ideas";
+    case "review":
+    case "build":
+      return "Review";
+    case "runs":
+      return "Runs";
+    default:
+      return kind;
+  }
+}
+
+function joinWorkspacePath(root: string, name: string): string {
+  const sep = root.includes("\\") ? "\\" : "/";
+  return `${root.replace(/[\\/]+$/, "")}${sep}${name}`;
+}
+
+function truncateText(textValue: string, max: number, suffix = "..."): string {
+  return textValue.length > max ? `${textValue.slice(0, max)}${suffix}` : textValue;
 }
 
 function buildChatMessages(turns: Turn[], prompt: string): ChatApiMessage[] {
