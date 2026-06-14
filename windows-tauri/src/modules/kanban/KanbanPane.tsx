@@ -103,7 +103,7 @@ function projectTaskGroupsFromEvents(events: AgentGraphEvent[]): LiveAgentTaskGr
     ) {
       continue;
     }
-    const sessionId = event.runId ?? event.runID ?? event.rootRunId ?? event.rootRunID;
+    const sessionId = event.runId || event.rootRunId;
     const workspacePath = event.workspacePath?.trim();
     if (sessionId && workspacePath) {
       workspacePathBySession.set(sessionId, workspacePath);
@@ -119,7 +119,7 @@ function projectTaskGroupsFromEvents(events: AgentGraphEvent[]): LiveAgentTaskGr
     .map((event): LiveAgentTask | null => {
       const payload = event.payload ?? {};
       const taskId = payload.taskID ?? payload.id;
-      const sessionId = event.runId ?? event.runID ?? event.rootRunId ?? event.rootRunID;
+      const sessionId = event.runId || event.rootRunId;
       if (!taskId || !sessionId) return null;
       const source = normalizeAgentSource(event.source);
       const status = normalizeTaskStatus(payload.status);
@@ -735,7 +735,7 @@ function RunTimeline({
       {[...events]
         .sort((a, b) => new Date(a.occurredAt).getTime() - new Date(b.occurredAt).getTime())
         .map((event) => (
-          <RunTimelineRow key={event.eventId ?? event.eventID ?? `${event.type}-${event.occurredAt}`} event={event} />
+          <RunTimelineRow key={event.eventId} event={event} />
         ))}
     </div>
   );
@@ -1188,7 +1188,7 @@ function timelineChips(event: AgentGraphEvent): string[] {
       return value ? `${key}: ${value}` : null;
     })
     .filter((value): value is string => Boolean(value));
-  const parent = event.parentRunId ?? event.parentRunID;
+  const parent = event.parentRunId;
   const branch = payload.gitBranch?.trim();
   if (branch && branch !== "HEAD") chips.push(`branch: ${branch}`);
   const head = payload.gitHead?.trim();

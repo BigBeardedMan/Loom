@@ -287,7 +287,7 @@ function TimelineContent({
                       <Muted>No ledger events found.</Muted>
                     ) : (
                       events.slice(-5).reverse().map((event) => (
-                        <div key={event.eventID ?? event.eventId ?? `${event.type}:${event.occurredAt}`} style={{ marginTop: 6 }}>
+                        <div key={event.eventId} style={{ marginTop: 6 }}>
                           <RailRow
                             icon={eventIcon(event.type)}
                             color={eventColor(event)}

@@ -364,9 +364,10 @@ export const ipc = {
   },
 
   agentGraph: {
-    list: () => invoke<AgentGraphRunSummary[]>("agent_graph_list"),
+    list: async () =>
+      normalizeAgentGraphRunSummaries(await invoke<AgentGraphRunSummary[]>("agent_graph_list")),
     read: (rootRunId: string) =>
-      invoke<AgentGraphEvent[]>("agent_graph_read", { rootRunId }),
+      invoke<AgentGraphEvent[]>("agent_graph_read", { rootRunId }).then(normalizeAgentGraphEvents),
     reveal: (rootRunId: string) =>
       invoke<void>("agent_graph_reveal", { rootRunId }),
   },
@@ -614,13 +615,13 @@ export type LiveAgentTaskGroup = {
 
 export type AgentGraphEvent = {
   schemaVersion: number;
-  eventId?: string;
+  eventId: string;
   eventID?: string;
   type: string;
   occurredAt: string;
-  rootRunId?: string;
+  rootRunId: string;
   rootRunID?: string;
-  runId?: string;
+  runId: string;
   runID?: string;
   parentRunId?: string | null;
   parentRunID?: string | null;
@@ -660,6 +661,39 @@ export type AgentSource =
   | "lmstudio"
   | "ollama"
   | "openAICompatible";
+
+function normalizeAgentGraphRunSummaries(summaries: AgentGraphRunSummary[]): AgentGraphRunSummary[] {
+  return summaries.map((summary) => ({
+    ...summary,
+    title: summary.title || summary.id,
+    status: summary.status || "running",
+    eventCount: summary.eventCount ?? 0,
+    toolEventCount: summary.toolEventCount ?? 0,
+    taskCount: summary.taskCount ?? 0,
+    toolNames: summary.toolNames ?? [],
+  }));
+}
+
+function normalizeAgentGraphEvents(events: AgentGraphEvent[]): AgentGraphEvent[] {
+  return events.map((event) => {
+    const eventId = event.eventId ?? event.eventID ?? `${event.type}:${event.occurredAt}`;
+    const rootRunId = event.rootRunId ?? event.rootRunID ?? event.runId ?? event.runID ?? "";
+    const runId = event.runId ?? event.runID ?? rootRunId;
+    const parentRunId = event.parentRunId ?? event.parentRunID ?? null;
+    return {
+      ...event,
+      eventId,
+      eventID: event.eventID ?? eventId,
+      rootRunId,
+      rootRunID: event.rootRunID ?? rootRunId,
+      runId,
+      runID: event.runID ?? runId,
+      parentRunId,
+      parentRunID: event.parentRunID ?? parentRunId,
+      payload: event.payload ?? {},
+    };
+  });
+}
 
 export type UpdateInfo = {
   version: string;
