@@ -31,6 +31,9 @@ export function CommandPalette() {
   const toggleRightRail = useApp((s) => s.toggleRightRail);
   const setRightRailTab = useApp((s) => s.setRightRailTab);
   const [recent, setRecent] = useState<CommandRecord[]>([]);
+  const [query, setQuery] = useState("");
+  const [historyIndex, setHistoryIndex] = useState<number | null>(null);
+  const [historyDraft, setHistoryDraft] = useState("");
   const selectedWorkspace = workspaces.find((w) => w.id === selectedWorkspaceId);
   const canAddPane = !layout || paneCapacityLimit === null || layout.blocks.length < paneCapacityLimit;
   const { scopedRuns, memoryFiles } = useRightRailContext(selectedWorkspace ?? null, layout?.blocks ?? []);
@@ -43,11 +46,55 @@ export function CommandPalette() {
 
   useEffect(() => {
     if (!isOpen) return;
+    setQuery("");
+    setHistoryIndex(null);
+    setHistoryDraft("");
     ipc.commandHistory
       .list(selectedWorkspace?.folderPath || undefined)
-      .then((list) => setRecent(list.slice(0, 12)))
+      .then((list) => setRecent(list.slice(0, 50)))
       .catch(() => {});
   }, [isOpen, selectedWorkspace?.folderPath]);
+
+  const recentCommandStrings = () => {
+    const seen = new Set<string>();
+    const commands: string[] = [];
+    for (const record of recent) {
+      if (seen.has(record.command)) continue;
+      seen.add(record.command);
+      commands.push(record.command);
+      if (commands.length === 50) break;
+    }
+    return commands;
+  };
+
+  const stepHistory = (direction: -1 | 1) => {
+    const commands = recentCommandStrings();
+    if (commands.length === 0) return;
+    if (direction < 0) {
+      const next = (historyIndex ?? -1) + 1;
+      if (next >= commands.length) return;
+      if (historyIndex === null) setHistoryDraft(query);
+      setHistoryIndex(next);
+      setQuery(commands[next]);
+      return;
+    }
+    if (historyIndex === null) return;
+    if (historyIndex === 0) {
+      setHistoryIndex(null);
+      setQuery(historyDraft);
+      setHistoryDraft("");
+      return;
+    }
+    const next = historyIndex - 1;
+    setHistoryIndex(next);
+    setQuery(commands[next]);
+  };
+
+  const handleQueryChange = (value: string) => {
+    setQuery(value);
+    setHistoryIndex(null);
+    setHistoryDraft("");
+  };
 
   const rerunCommand = async (command: string) => {
     try {
@@ -114,6 +161,13 @@ export function CommandPalette() {
           <Icons.search size={14} strokeWidth={2} color={text.muted as string} />
           <Command.Input
             autoFocus
+            value={query}
+            onValueChange={handleQueryChange}
+            onKeyDown={(e) => {
+              if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+              e.preventDefault();
+              stepHistory(e.key === "ArrowUp" ? -1 : 1);
+            }}
             placeholder="Switch room, rerun a command, add a pane..."
             className="w-full focus:outline-none"
             style={{
@@ -349,7 +403,7 @@ export function CommandPalette() {
               className="section-header"
               style={{ padding: "10px 14px 4px" }}
             >
-              {recent.map((r) => (
+              {recent.slice(0, 20).map((r) => (
                 <Command.Item
                   key={r.id}
                   value={`rerun ${r.command}`}
