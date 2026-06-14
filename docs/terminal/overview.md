@@ -8,8 +8,8 @@ Loom's Terminal pane is a real terminal, backed by [SwiftTerm](https://github.co
 - TTY allocation (so things like `top` and `bat` get a width).
 - Working directory seeded from the workspace folder.
 - Standard ANSI color and 256-color support; truecolor via SwiftTerm.
-- Claude click-to-edit: clicking inside an active Claude prompt moves the
-  cursor to that spot.
+- Prompt click-to-edit: clicking inside an active shell, Claude, Codex,
+  Gemini, or lmstudio prompt moves the cursor to that spot when safe.
 - Local transcript persistence with Recently Closed and Recently Deleted
   recovery in Testing Edition.
 

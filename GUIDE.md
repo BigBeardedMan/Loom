@@ -29,11 +29,12 @@ version of these chapters lives at
    1. [Prompt Workspace](#41-prompt-workspace)
    2. [Ideas Workspace](#42-ideas-workspace)
    3. [Review Workspace](#43-review-workspace)
+   4. [Runs Workspace](#44-runs-workspace)
 5. [Layout System](#5-layout-system)
 6. [Panes](#6-panes)
    1. [Terminal](#61-terminal)
    2. [Editor](#62-editor)
-   3. [Tasks (Kanban)](#63-tasks-kanban)
+   3. [Runs Pane](#63-runs-pane)
    4. [Notes](#64-notes)
    5. [Preview](#65-preview)
    6. [Agent](#66-agent)
@@ -152,14 +153,16 @@ Loom 2.x extends the cockpit. Highlights:
 
 ## 2. Install
 
-Loom ships as a notarized-shape but ad-hoc-signed `.dmg` from GitHub Releases.
+Loom Testing Edition ships as a notarized-shape but ad-hoc-signed `.dmg`
+from GitHub Testing prereleases.
 
 ### Steps
 
-1. Download the latest `Loom-<version>.dmg` from the
-   [Releases page](https://github.com/BigBeardedMan/Loom/releases/latest).
+1. Download the latest `LoomTestingEdition-<version>.dmg` from the newest
+   `testing-*` prerelease on the
+   [Releases page](https://github.com/BigBeardedMan/Loom/releases).
 2. Open the DMG.
-3. Drag **Loom** onto the **Applications** alias inside the mounted volume.
+3. Drag **Loom Testing Edition** onto the **Applications** alias inside the mounted volume.
 4. Eject the volume.
 
 ### First launch (Gatekeeper)
@@ -171,7 +174,7 @@ malicious software" dialog.
 Bypass once:
 
 1. Open `/Applications` in Finder.
-2. Right-click **Loom**, choose **Open**.
+2. Right-click **Loom Testing Edition**, choose **Open**.
 3. Confirm in the dialog.
 
 Subsequent launches behave normally. macOS remembers the override.
@@ -187,7 +190,7 @@ Subsequent launches behave normally. macOS remembers the override.
 
 ### Uninstall
 
-Drag `/Applications/Loom.app` to the Trash. Loom-owned data lives in:
+Drag `/Applications/Loom Testing Edition.app` to the Trash. Testing Edition data lives in:
 
 - `~/Library/Application Support/Loom Testing Edition/` (staging directory,
   update manifest, layout JSON, shell history, terminal transcripts, and
@@ -196,8 +199,8 @@ Drag `/Applications/Loom.app` to the Trash. Loom-owned data lives in:
   (SwiftData store in the Testing Edition build)
 - `~/Library/Preferences/com.chasesims.LoomTestingEdition.plist`
   (UserDefaults in the Testing Edition build)
-- macOS Keychain, service `com.chasesims.Loom` (Anthropic key, local endpoint
-  bearer tokens)
+- macOS Keychain, service `com.chasesims.LoomTestingEdition` (Anthropic key,
+  local endpoint bearer tokens)
 
 See [File Paths](#161-file-paths) and [Keychain Keys](#162-keychain-keys) for
 the full inventory.
@@ -206,16 +209,16 @@ the full inventory.
 
 ## 3. First Run
 
-When Loom opens for the first time it seeds three default workspaces (Prompt,
-Ideas, Review) and a corresponding empty layout for each. The window is sized
+When Loom opens for the first time it seeds four default rooms (Prompt,
+Ideas, Review, Runs) and a corresponding layout for each. The window is sized
 1024 by 640 minimum, 1400 by 800 by default.
 
 A 30-second tour:
 
 1. Click a workspace in the left sidebar to select it. The center deck
    re-renders with that workspace's pane lineup.
-2. Use the top-bar **Add Block** strip (or `Command Shift 1` through
-   `Command Shift 4`) to add a pane that the current workspace kind allows.
+2. Use the top-bar add strip (or `Command Shift 1` through
+   `Command Shift 5`) to add a pane that the current room allows.
 3. In a Prompt workspace, an Agent pane is preconfigured. Type a prompt at
    the bottom and press Return to send it to the default Claude Code provider.
 4. Drag any pane's title bar to reorder. Drop near the left, right, top, or
@@ -247,23 +250,23 @@ bar and choose **Reset name** to clear the override.
 
 ## 4. Workspaces
 
-A workspace is one named layout in the sidebar with its own folder, color,
-kind, and pane configuration. Loom ships with three kinds, picked at creation
+A workspace is one named room in the left rail with its own folder, color,
+kind, and pane configuration. Loom ships with four kinds, picked at creation
 and immutable afterward.
 
 | Raw value | Sidebar label | Icon | Available panes |
 | --------- | ------------- | ---- | --------------- |
-| `code` | Prompt | text.cursor | Terminal, Editor, Tasks, Agent |
+| `code` | Prompt | text.cursor | Terminal, Editor, Runs, Agent, Commands |
 | `ideas` | Ideas | lightbulb | Notes, Agent |
 | `review` | Review | magnifyingglass | Preview, Agent |
+| `runs` | Runs | rectangle.stack.fill | Runs, Chat, Agent, Terminal, Commands |
 
 The kind drives:
 
-- Which buttons appear in the top-bar **Add Block** strip.
+- Which buttons appear in the top-bar add strip.
 - Which `Command Shift <N>` shortcut adds which pane (the order in
   `availablePanels` is the shortcut order).
-- Which sidebar section appears below the workspace list (Terminal Sessions,
-  Ideas, or nothing for Review).
+- Which room-specific context appears in the sidebar and right rail.
 
 ### Persistence
 
@@ -275,10 +278,10 @@ Each workspace persists:
   preview URL override, terminal slot index, preview slot index, terminal
   cwd path).
 
-Layout is stored in `~/Library/Application Support/Loom/layout.json` and
-keyed by workspace kind. The store is read once into an in-memory cache; saves
-are coalesced through a single in-flight task so two rapid mutations cannot
-race each other to disk.
+Layout is stored with the workspace data under the Testing Edition application
+support store. The visible `Runs` pane keeps the legacy raw value `tasks` so
+old layout JSON keeps loading, while shell state such as the selected right
+rail tab is persisted separately.
 
 ### Switching workspaces
 
@@ -294,20 +297,21 @@ latency for no payoff here.
 
 ### 4.1. Prompt Workspace
 
-Loom's cockpit. Four panes available, in this default order:
+Loom's build cockpit. Five panes available, in this default order:
 
 1. Terminal (`Command Shift 1`)
 2. Editor (`Command Shift 2`)
-3. Tasks (`Command Shift 3`)
+3. Runs (`Command Shift 3`)
 4. Agent (`Command Shift 4`)
+5. Commands (`Command Shift 5`)
 
-Default layout: Terminal, Tasks, Agent (the Editor pane is added on demand).
+Default layout: Terminal, Runs, Agent (the Editor and Commands panes are added on demand).
 
 Use Prompt for:
 
 - Active build and debug loops.
-- Driving a CLI agent (Claude Code, Codex, Gemini) inside the terminal while
-  watching its tasks mirror in the Tasks pane.
+- Driving a CLI agent (Claude Code, Codex, Gemini, or `lmstudio`) inside the
+  terminal while watching its tasks mirror in the Runs pane.
 - Holding multiple terminals side by side. Add as many `Terminal` blocks as
   you want; each gets an auto-incrementing slot index (Terminal, Terminal 2,
   Terminal 3) so the sidebar list stays legible.
@@ -347,6 +351,23 @@ block, `http://localhost:3001` for the second, etc. The auto-incrementing
 slot is global across kinds so two Review workspaces' previews do not
 collide. The block remembers any URL override; setting the URL back to the
 default clears the override so the slot keeps tracking its port.
+
+### 4.4. Runs Workspace
+
+Loom's supervision room for agent work. Five panes available, in this default
+order:
+
+1. Runs (`Command Shift 1`)
+2. Chat (`Command Shift 2`)
+3. Agent (`Command Shift 3`)
+4. Terminal (`Command Shift 4`)
+5. Commands (`Command Shift 5`)
+
+Default layout: Runs plus Chat. Chat panes reuse the Agent chat surface but
+start outside tool-running agent mode, so they are safe for attached
+conversation while the Runs pane and right rail show timeline, history,
+memory, tools, diff, handoffs, worktrees, and reviewability signals from
+`~/.loom/agent-runs/<rootRunId>/events.jsonl`.
 
 ---
 
@@ -439,8 +460,8 @@ preserves your tuned layout.
 ### Persistence
 
 Layout state is serialized via `LayoutPersistence` to
-`~/Library/Application Support/Loom/layout.json`. Each kind (Prompt, Ideas,
-Review) has its own block list. Switching kinds preserves each kind's
+the Testing Edition workspace layout store. Each room (Prompt, Ideas,
+Review, Runs) has its own block list. Switching rooms preserves each room's
 last-seen layout: drop two terminals into a Prompt workspace, switch to
 Ideas, switch back, and the two terminals are still there.
 
@@ -485,18 +506,18 @@ flow into every subprocess you run:
 - Suffix matches: any variable ending in `_API_KEY`, `_SECRET_KEY`,
   `_ACCESS_TOKEN`, or `_AUTH_TOKEN`.
 
-#### Claude click-to-edit
+#### Terminal click-to-edit
 
-When Claude Code (`claude`) is the foreground process, single-clicking inside
+When Claude Code (`claude`), Codex (`codex`), Gemini (`gemini`), `lmstudio`,
+or a known plain shell prompt is the foreground process, single-clicking inside
 its active prompt sends arrow-key sequences to walk the cursor to the clicked
-column and row. That makes it possible to click into already-typed Claude
-prompt text and edit from that point without manually arrowing around.
+column and row. That makes it possible to click into already-typed prompt text
+and edit from that point without manually arrowing around.
 
-The behavior is intentionally Claude-only. Sending arrows into zsh, Codex,
-Gemini, or an arbitrary TUI can trigger command history or tool-specific
-shortcuts instead of moving text insertion. Cross-row clicks are bounded to a
-10-row radius from the cursor so accidental scrollback clicks do not blast a
-hundred arrow sequences into the foreground.
+The behavior is intentionally disabled for common TUIs and remote/session
+tools such as vim, nano, tmux, ssh, top, and htop. Cross-row clicks are
+bounded to a 10-row radius from the cursor so accidental scrollback clicks do
+not blast a hundred arrow sequences into the foreground.
 
 Single clicks with any modifier (Shift, Command, Option, Control) are
 ignored so SwiftTerm's native selection and word-lookup gestures keep
@@ -506,15 +527,15 @@ working.
 
 The Terminal session reads `tcgetpgrp` on the PTY's child file descriptor to
 find the foreground process group, then `sysctl(KERN_PROC_PID)` to read its
-command name. Three names are currently recognized: `claude`, `codex`,
-`gemini`.
+command name. Four names are currently recognized: `claude`, `codex`,
+`gemini`, and `lmstudio`.
 
 When detection fires:
 
 - The active sessions badge in the workspace sidebar increments.
-- The Tasks pane (in Prompt workspaces) starts mirroring the agent's live
-  task list from `~/.claude/tasks/<session>/<id>.json`.
-- Claude terminal prompts unlock click-to-edit cursor movement.
+- The Runs pane starts mirroring the agent's live task list from local task
+  logs.
+- Agent and shell prompts unlock click-to-edit cursor movement when safe.
 
 When the agent process exits, detection drops on the next 2 second poll.
 
@@ -677,9 +698,11 @@ The roadmap includes a [CodeEdit](https://github.com/CodeEditApp/CodeEdit)
 integration to swap the plain `TextEditor` for a real `NSTextView`-based
 editing surface with syntax highlighting and Loom-native chrome.
 
-### 6.3. Tasks (Kanban)
+### 6.3. Runs Pane
 
-A SwiftData-backed kanban board. Available in Prompt workspaces.
+A SwiftData-backed kanban board plus live task and run-history surface.
+Available in Prompt and Runs rooms. The raw layout value is still `tasks`
+for compatibility, but the visible pane is Runs.
 
 #### Models
 
@@ -741,7 +764,7 @@ SwiftData application-support location, so cards survive app relaunches.
 #### Live agent tasks block
 
 When a CLI agent is detected in any Terminal pane (in any workspace), the
-Tasks pane shows its in-progress task list above the kanban columns. See
+Runs pane shows its in-progress task list above the kanban columns. See
 [Live Agent Tasks](#8-live-agent-tasks).
 
 ### 6.4. Notes
@@ -1281,7 +1304,7 @@ Reference implementations: `OllamaProvider.swift` and
 
 ## 8. Live Agent Tasks
 
-When a CLI agent runs in a Terminal pane (anywhere in Loom), the Tasks pane
+When a CLI agent runs in a Terminal pane (anywhere in Loom), the Runs pane
 mirrors its in-progress task list in real time.
 
 ### Where the data comes from
@@ -1308,7 +1331,7 @@ window. Codex steps map onto the same statuses as Claude (`pending`,
 
 **Gemini CLI** does not currently write plan state to disk in any format
 Loom can read. Gemini terminals show in the agent picker, but their
-in-flight plan won't appear in the Tasks pane until the CLI emits a
+in-flight plan won't appear in the Runs pane until the CLI emits a
 structured plan log.
 
 Loom polls every 2 seconds via `LiveAgentTasksService` (off-main-thread
@@ -1329,7 +1352,7 @@ descending.
 
 ### What you see
 
-In a Prompt workspace's Tasks pane, live agent tasks appear in their own
+In a Prompt or Runs room's Runs pane, live agent tasks appear in their own
 section above the kanban columns:
 
 - Header: **Live . <session-id-prefix>** (e.g. `Live . 33280421`).
@@ -1752,23 +1775,26 @@ There is no in-memory cache.
 
 ### 12.1. Auto Update
 
-Loom polls GitHub Releases on a 60 second cadence. New builds are downloaded
-and verified in the background; the **Update** pill in the top bar lights up
-once a build is staged. Click the pill to swap in the new version.
+Loom Testing Edition polls GitHub Testing prereleases on a 60 second cadence.
+New builds are downloaded and verified in the background; the **Update
+Available** pill in the top bar lights up once a build is staged. Click the
+pill to install and relaunch.
 
 #### Cadence
 
 - Remote poll: every 60 seconds.
 - Local manifest poll: every 4 seconds (cheap; just `stat`s the staging
   directory).
-- API endpoint:
-  `https://api.github.com/repos/BigBeardedMan/Loom/releases/latest`
-  (unauthenticated; 60 req/hr per IP).
+- macOS remote source: recent `testing-*` prereleases on
+  `BigBeardedMan/Loom`.
+- Windows remote source: `latest-windows-testing.json` from the current
+  testing prerelease.
 
 #### Pipeline
 
-1. `GitHubReleaseFetcher.fetchLatest()` returns the latest release. If its
-   tag is a strictly higher semver than the running build, proceed.
+1. `GitHubReleaseFetcher.fetchLatestPrerelease()` returns the newest testing
+   prerelease. If its tag is a strictly higher semver than the running build,
+   proceed.
 2. **Integrity check.** Fetch the published `.sha256` sidecar asset. The
    release MUST publish a SHA-256 of the DMG (hex, optionally followed by
    filename). Loom downloads the DMG and computes its SHA-256 in 256 KB
@@ -1777,8 +1803,8 @@ once a build is staged. Click the pill to swap in the new version.
    could replace the DMG with arbitrary code and Loom would silently
    install it.
 3. Mount the DMG read-only at a private mountpoint via `hdiutil attach`.
-4. Copy `Loom.app` from the mounted volume into
-   `~/Library/Application Support/Loom/staging/Loom.app`.
+4. Copy `Loom Testing Edition.app` from the mounted volume into
+   `~/Library/Application Support/Loom Testing Edition/staging/Loom Testing Edition.app`.
 5. Detach the DMG via `hdiutil detach -force` and remove the mountpoint.
 6. Strip the iCloud `com.apple.fileprovider.fpfs#P` xattr (which would
    otherwise trip iCloud "uploading..." rename behavior). Quarantine is
@@ -1795,12 +1821,13 @@ Clicking the pill calls `applyAndRelaunch()`:
    helper process's argv (passed via `zsh -c "<body>"`); no script file is
    written to a user-writable directory and re-executed.
 2. The helper waits up to 10 seconds for the running Loom PID to exit.
-3. The helper removes `/Applications/Loom.app` and copies the staged bundle
-   in.
+3. The helper removes `/Applications/Loom Testing Edition.app` and copies the
+   staged bundle in.
 4. The helper removes the staged manifest.
-5. The helper relaunches Loom from `/Applications` via `open`.
+5. The helper relaunches Loom Testing Edition from `/Applications` via `open`.
 6. Logs land in
-   `~/Library/Application Support/Loom/staging/last-apply.log` for forensics.
+   `~/Library/Application Support/Loom Testing Edition/staging/last-apply.log`
+   for forensics.
 
 The hand-off is fast. Loom quits, the new build launches in well under a
 second.
@@ -1819,8 +1846,8 @@ Use **Help -> Check for Updates...** in the menu bar (or `?` in the menu)
 to force a remote check now. The path is the same as the automatic poll;
 it just bypasses the 60 second interval and posts an alert with the result:
 
-- "Update available: Loom <version> (<build>) is ready. Click Update in the
-  top bar to install and relaunch."
+- "Update available: Loom Testing Edition <version> (<build>) is ready. Click
+  Update Available in the top bar to install and relaunch."
 - "Update check failed: <reason>"
 - "Loom is up to date. You're running <version> (<build>)."
 
@@ -1831,7 +1858,7 @@ The menu item is disabled while a remote check is in flight.
 There is no UI toggle today. To stop it, edit
 `Loom/App/UpdateService.swift` and short-circuit `start()`, then rebuild.
 Or kill the Loom process and remove
-`~/Library/Application Support/Loom/staging/`.
+`~/Library/Application Support/Loom Testing Edition/staging/`.
 
 ---
 
@@ -2284,7 +2311,7 @@ Adjacent precautions:
 
 | Path | Purpose |
 | ---- | ------- |
-| `~/Library/Application Support/Loom Testing Edition/staging/Loom Testing Edition.app` | Newly downloaded Testing Edition build, waiting for Update click |
+| `~/Library/Application Support/Loom Testing Edition/staging/Loom Testing Edition.app` | Newly downloaded Testing Edition build, waiting for the Update Available pill click |
 | `~/Library/Application Support/Loom Testing Edition/staging/manifest.json` | `{ version, build, stagedAt }` for the staged build |
 | `~/Library/Application Support/Loom Testing Edition/staging/last-apply.log` | Helper-script log from the last apply |
 | `~/Library/Application Support/Loom Testing Edition/layout.json` | Per-kind block list (custom titles, pins, span flags, terminal cwds, multi-pane split axis) |
@@ -2312,9 +2339,9 @@ Adjacent precautions:
 | Path | Purpose |
 | ---- | ------- |
 | `<repo>/` | Wherever you cloned Loom |
-| `~/Library/Developer/Xcode/DerivedData/Loom-*/Build/Products/Release/Loom.app` | Build output |
-| `<repo>/build/release/Loom-<version>.dmg` | Packaged DMG ready for `gh release upload` |
-| `<repo>/build/release/Loom-<version>.dmg.sha256` | SHA-256 sidecar for the DMG |
+| `~/Library/Developer/Xcode/DerivedData/LoomTestingEdition-*/Build/Products/Release/Loom Testing Edition.app` | Testing Edition build output |
+| `<repo>/build/release/LoomTestingEdition-<version>.dmg` | Packaged Testing Edition DMG ready for release upload |
+| `<repo>/build/release/LoomTestingEdition-<version>.dmg.sha256` | SHA-256 sidecar for the DMG |
 
 #### Why Application Support, not the app bundle?
 
@@ -2527,8 +2554,8 @@ Defined in `project.yml`:
 
 ### "Loom can't be opened because Apple cannot check it for malicious software"
 
-Right-click `/Applications/Loom.app` in Finder, choose **Open**, confirm
-the dialog. Subsequent launches behave normally.
+Right-click `/Applications/Loom Testing Edition.app` in Finder, choose
+**Open**, confirm the dialog. Subsequent launches behave normally.
 
 ### Auto-update never lights up
 
@@ -2537,9 +2564,9 @@ the dialog. Subsequent launches behave normally.
 2. Wait at least 60 seconds; the remote poll is on a one-minute cadence.
 3. **Help -> Check for Updates...** to force a remote check now and surface
    any error.
-4. Inspect `~/Library/Application Support/Loom/staging/last-apply.log` for
-   any failed swap.
-5. Check `~/Library/Application Support/Loom/staging/`. If the staged
+4. Inspect `~/Library/Application Support/Loom Testing Edition/staging/last-apply.log`
+   for any failed swap.
+5. Check `~/Library/Application Support/Loom Testing Edition/staging/`. If the staged
    bundle is present and the manifest is valid, the local 4 second poll
    should be lighting the pill. If the manifest is missing, the remote
    stage failed; check Console.app for `com.chasesims.Loom` log entries
@@ -2548,8 +2575,9 @@ the dialog. Subsequent launches behave normally.
 ### Update fails with "Release is missing the .sha256 checksum sidecar"
 
 The release is published without a SHA-256 sidecar. Loom refuses to
-install. Either re-run `bin/release.sh` (which now publishes the sidecar)
-or manually upload `Loom-<version>.dmg.sha256` to the existing release.
+install. Either re-run `bin/release-testing.sh` (which publishes the sidecar)
+or manually upload `LoomTestingEdition-<version>.dmg.sha256` to the existing
+testing prerelease.
 
 ### Agent pane returns "Failed to launch claude: ..."
 
@@ -2576,7 +2604,7 @@ The daemon is not running, the port is wrong, or a firewall is blocking
 it. The **Test connection** button in the editor sheet isolates the
 network problem from the model problem.
 
-### Live agent tasks pane shows nothing
+### Live agent tasks do not show in Runs
 
 1. Make sure a CLI agent is actually running in a Terminal pane.
 2. Check that `~/.claude/tasks/<session-id>/` contains JSON files.
