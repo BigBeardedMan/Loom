@@ -175,10 +175,23 @@ async function loadCanonicalWorkspaces(): Promise<Workspace[]> {
       colorName: seed.colorName,
       kindRaw: seed.kindRaw,
     });
-    await saveLayout(created.id, defaultLayout(seed.kindRaw));
+    await saveLayout(created.id, seed.kindRaw, defaultLayout(seed.kindRaw));
     next.push(created);
   }
   return canonicalWorkspaceList(next);
+}
+
+function selectedWorkspaceKind(state: AppState): Workspace["kindRaw"] | null {
+  const wsId = state.selectedWorkspaceId;
+  return wsId ? state.workspaces.find((w) => w.id === wsId)?.kindRaw ?? null : null;
+}
+
+async function saveCurrentLayout(get: () => AppState, layout: Layout): Promise<void> {
+  const state = get();
+  const wsId = state.selectedWorkspaceId;
+  const kind = selectedWorkspaceKind(state);
+  if (!wsId || !kind) return;
+  await saveLayout(wsId, kind, layout);
 }
 
 export const useApp = create<AppState>((set, get) => ({
@@ -246,7 +259,7 @@ export const useApp = create<AppState>((set, get) => ({
       kindRaw,
     });
     const layout = defaultLayout(kindRaw);
-    await saveLayout(ws.id, layout);
+    await saveLayout(ws.id, kindRaw, layout);
     set((s) => ({
       workspaces: [ws, ...s.workspaces],
       selectedWorkspaceId: ws.id,
@@ -317,7 +330,7 @@ export const useApp = create<AppState>((set, get) => ({
     }
     const next: Layout = { blocks: [...current.blocks, block] };
     set({ layout: next, activeBlockId: block.id });
-    await saveLayout(wsId, next);
+    await saveCurrentLayout(get, next);
   },
 
   restoreTerminalBlock: async (restore) => {
@@ -332,7 +345,7 @@ export const useApp = create<AppState>((set, get) => ({
     block.restoredTranscript = restore;
     const next: Layout = { blocks: [...current.blocks, block] };
     set({ layout: next, selectedUsageTool: null, activeBlockId: block.id });
-    await saveLayout(wsId, next);
+    await saveCurrentLayout(get, next);
   },
 
   removeBlock: async (id) => {
@@ -343,7 +356,7 @@ export const useApp = create<AppState>((set, get) => ({
       blocks: current.blocks.filter((b) => b.id !== id),
     };
     set({ layout: next, activeBlockId: get().activeBlockId === id ? null : get().activeBlockId });
-    await saveLayout(wsId, next);
+    await saveCurrentLayout(get, next);
   },
 
   reorderBlocks: async (newOrder) => {
@@ -351,7 +364,7 @@ export const useApp = create<AppState>((set, get) => ({
     if (!wsId) return;
     const next: Layout = { blocks: newOrder };
     set({ layout: next, activeBlockId: next.blocks.some((block) => block.id === get().activeBlockId) ? get().activeBlockId : null });
-    await saveLayout(wsId, next);
+    await saveCurrentLayout(get, next);
   },
 
   resetLayout: async () => {
@@ -360,7 +373,7 @@ export const useApp = create<AppState>((set, get) => ({
     if (!wsId || !ws) return;
     const layout = defaultLayout(ws.kindRaw);
     set({ layout, activeBlockId: null });
-    await saveLayout(wsId, layout);
+    await saveLayout(wsId, ws.kindRaw, layout);
   },
 
   updateBlock: async (id, patch) => {
@@ -371,7 +384,7 @@ export const useApp = create<AppState>((set, get) => ({
       blocks: current.blocks.map((b) => (b.id === id ? { ...b, ...patch } : b)),
     };
     set({ layout: next });
-    await saveLayout(wsId, next);
+    await saveCurrentLayout(get, next);
   },
 
   setBlockPin: async (id, pin) => {
@@ -396,7 +409,7 @@ export const useApp = create<AppState>((set, get) => ({
       }),
     };
     set({ layout: next });
-    await saveLayout(wsId, next);
+    await saveCurrentLayout(get, next);
   },
 
   toggleFullRow: async (id) => {
@@ -409,7 +422,7 @@ export const useApp = create<AppState>((set, get) => ({
       ),
     };
     set({ layout: next });
-    await saveLayout(wsId, next);
+    await saveCurrentLayout(get, next);
   },
 
   swapBlocks: async (a, b) => {
@@ -427,7 +440,7 @@ export const useApp = create<AppState>((set, get) => ({
     blocks[j] = ai;
     const next: Layout = { blocks };
     set({ layout: next });
-    await saveLayout(wsId, next);
+    await saveCurrentLayout(get, next);
   },
 
   applyBlockWeights: async (updates) => {
@@ -450,7 +463,7 @@ export const useApp = create<AppState>((set, get) => ({
       }),
     };
     set({ layout: next });
-    await saveLayout(wsId, next);
+    await saveCurrentLayout(get, next);
   },
 
   setPinFraction: async (id, fraction) => {
@@ -465,7 +478,7 @@ export const useApp = create<AppState>((set, get) => ({
       ),
     };
     set({ layout: next });
-    await saveLayout(wsId, next);
+    await saveCurrentLayout(get, next);
   },
 
   setWidthFraction: async (id, fraction) => {
@@ -480,7 +493,7 @@ export const useApp = create<AppState>((set, get) => ({
       ),
     };
     set({ layout: next });
-    await saveLayout(wsId, next);
+    await saveCurrentLayout(get, next);
   },
 
   resetSeam: async (ids) => {
@@ -494,7 +507,7 @@ export const useApp = create<AppState>((set, get) => ({
       ),
     };
     set({ layout: next });
-    await saveLayout(wsId, next);
+    await saveCurrentLayout(get, next);
   },
 
   resetAllWeights: async () => {
@@ -511,7 +524,7 @@ export const useApp = create<AppState>((set, get) => ({
       })),
     };
     set({ layout: next });
-    await saveLayout(wsId, next);
+    await saveCurrentLayout(get, next);
   },
 
   setBlockStatus: (id, status) =>

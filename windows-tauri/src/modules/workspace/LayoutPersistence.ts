@@ -57,6 +57,8 @@ export type Layout = {
   blocks: Block[];
 };
 
+type LayoutEnvelope = Record<string, unknown>;
+
 function uuid(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -138,17 +140,16 @@ function normalizeTerminalAxis(raw: unknown): Block["terminalAxis"] | null {
 }
 
 function blocksFromParsedLayout(parsed: unknown, kind: WorkspaceKind): unknown[] | null {
-  if (typeof parsed !== "object" || parsed === null) return null;
-  const r = parsed as Record<string, unknown>;
-  if (Array.isArray(r.blocks)) return r.blocks;
-  if (typeof r.blocksByKind !== "object" || r.blocksByKind === null) return null;
-  const blocksByKind = r.blocksByKind as Record<string, unknown>;
-  const keys = kind === "review" || kind === "build" ? ["review", "build"] : [kind];
-  for (const key of keys) {
-    const blocks = blocksByKind[key];
-    if (Array.isArray(blocks)) return blocks;
+  const r = layoutEnvelope(parsed);
+  if (!r) return null;
+  const blocksByKind = layoutBlocksByKind(r);
+  if (blocksByKind) {
+    for (const key of layoutKindKeys(kind)) {
+      const blocks = blocksByKind[key];
+      if (Array.isArray(blocks)) return blocks;
+    }
   }
-  return null;
+  return Array.isArray(r.blocks) ? r.blocks : null;
 }
 
 export async function loadLayout(
@@ -174,14 +175,65 @@ export async function loadLayout(
 
 export async function saveLayout(
   workspaceId: string,
+  kind: WorkspaceKind,
   layout: Layout
 ): Promise<void> {
-  const persistable: Layout = {
-    blocks: layout.blocks.map(({ restoredTranscript: _restoredTranscript, ...block }) => block),
-  };
+  const blocks = layout.blocks.map(({ restoredTranscript: _restoredTranscript, ...block }) => block);
+  const raw = await ipc.workspace.getLayout(workspaceId).catch(() => null);
+  const envelope = parseLayoutEnvelope(raw);
+  const blocksByKind = layoutBlocksByKind(envelope);
+  const persistable: LayoutEnvelope = blocksByKind
+    ? {
+        ...envelope,
+        ...(Array.isArray(envelope.blocks) ? { blocks } : {}),
+        blocksByKind: {
+          ...blocksByKind,
+          [layoutKindKeyForSave(blocksByKind, kind)]: blocks,
+        },
+      }
+    : {
+        ...envelope,
+        blocks,
+      };
   await ipc.workspace.saveLayout(workspaceId, JSON.stringify(persistable)).catch(() => {});
 }
 
 export function newBlock(kind: Panel): Block {
   return { id: uuid(), kind };
+}
+
+function layoutEnvelope(parsed: unknown): LayoutEnvelope | null {
+  return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+    ? (parsed as LayoutEnvelope)
+    : null;
+}
+
+function parseLayoutEnvelope(raw: string | null): LayoutEnvelope {
+  if (!raw) return {};
+  try {
+    return layoutEnvelope(JSON.parse(raw) as unknown) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function layoutBlocksByKind(envelope: LayoutEnvelope): Record<string, unknown> | null {
+  return typeof envelope.blocksByKind === "object" &&
+    envelope.blocksByKind !== null &&
+    !Array.isArray(envelope.blocksByKind)
+    ? (envelope.blocksByKind as Record<string, unknown>)
+    : null;
+}
+
+function layoutKindKeys(kind: WorkspaceKind): string[] {
+  return kind === "review" || kind === "build" ? ["review", "build"] : [kind];
+}
+
+function layoutKindKeyForSave(blocksByKind: Record<string, unknown>, kind: WorkspaceKind): string {
+  if (kind === "review" || kind === "build") {
+    if (Array.isArray(blocksByKind.review)) return "review";
+    if (Array.isArray(blocksByKind.build)) return "build";
+    return "review";
+  }
+  return kind;
 }
