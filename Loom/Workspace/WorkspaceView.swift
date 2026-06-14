@@ -855,7 +855,7 @@ struct WorkspaceView: View {
                 cwd: selectedWorkspace?.folderURL,
                 handlesExternalRuns: false,
                 presentation: .chat,
-                sessionNamespace: "chat:\(block.id.uuidString)"
+                sessionNamespace: chatSessionNamespace(for: block)
             )
         case .agent:
             AgentPaneView(
@@ -869,6 +869,13 @@ struct WorkspaceView: View {
         case .commands:
             CommandHistoryPaneView()
         }
+    }
+
+    private func chatSessionNamespace(for block: WorkspaceBlock) -> String {
+        if let index = block.autoChatIndex {
+            return "chat:\(index)"
+        }
+        return "chat:\(block.id.uuidString)"
     }
 
     private var deckEmptyState: some View {
