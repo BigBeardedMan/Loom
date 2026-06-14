@@ -54,6 +54,9 @@ pub struct AgentGraphRunSummary {
     pub tool_event_count: usize,
     pub task_count: usize,
     pub tool_names: Vec<String>,
+    pub parent_run_ids: Vec<String>,
+    pub child_run_count: usize,
+    pub lineage_event_count: usize,
 }
 
 fn graph_root() -> PathBuf {
@@ -217,6 +220,49 @@ fn summary_payload_value(
         .filter(|value| !value.is_empty())
 }
 
+fn lineage_metrics(events: &[AgentGraphEvent]) -> (Vec<String>, usize, usize) {
+    let mut parent_run_ids = BTreeSet::new();
+    let mut child_run_ids = BTreeSet::new();
+    let mut lineage_event_count = 0;
+
+    for event in events {
+        if let Some(parent) = event.parent_run_id.as_ref().map(|value| value.trim()) {
+            if !parent.is_empty() {
+                parent_run_ids.insert(parent.to_string());
+                lineage_event_count += 1;
+                if event.run_id != event.root_run_id {
+                    child_run_ids.insert(event.run_id.clone());
+                }
+            }
+        }
+
+        if event.r#type == "edge.created" {
+            lineage_event_count += 1;
+            for key in [
+                "childRunID",
+                "childRunId",
+                "toRunID",
+                "toRunId",
+                "targetRunID",
+                "targetRunId",
+            ] {
+                if let Some(value) = event.payload.get(key).map(|value| value.trim()) {
+                    if !value.is_empty() {
+                        child_run_ids.insert(value.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    (
+        parent_run_ids.into_iter().collect(),
+        child_run_ids.len(),
+        lineage_event_count,
+    )
+}
+
 #[tauri::command]
 pub fn agent_graph_list() -> Result<Vec<AgentGraphRunSummary>, String> {
     let root = graph_root();
@@ -266,6 +312,7 @@ pub fn agent_graph_list() -> Result<Vec<AgentGraphRunSummary>, String> {
                 .len();
             let git_dirty =
                 summary_payload_value("gitDirty", anchor, latest).map(|value| value == "true");
+            let (parent_run_ids, child_run_count, lineage_event_count) = lineage_metrics(&events);
             Some(AgentGraphRunSummary {
                 id: latest.root_run_id.clone(),
                 title: summary_title(anchor, latest),
@@ -295,6 +342,9 @@ pub fn agent_graph_list() -> Result<Vec<AgentGraphRunSummary>, String> {
                     .count(),
                 task_count,
                 tool_names,
+                parent_run_ids,
+                child_run_count,
+                lineage_event_count,
             })
         })
         .collect();

@@ -750,6 +750,8 @@ function summaryChips(run: AgentGraphRunSummary): string[] {
     run.gitBranch,
     (run.toolEventCount ?? 0) > 0 ? `${run.toolEventCount} tools` : null,
     (run.taskCount ?? 0) > 0 ? `${run.taskCount} tasks` : null,
+    (run.childRunCount ?? 0) > 0 ? `${run.childRunCount} child runs` : null,
+    (run.parentRunIds?.length ?? 0) > 0 ? `${run.parentRunIds?.length ?? 0} parents` : null,
   ].filter(Boolean) as string[];
 }
 
@@ -943,6 +945,9 @@ function reviewPacketRows(
   const running = Math.max(0, runs.length - completed - failed);
   const branches = uniqueSorted(runs.map((run) => run.gitBranch).filter(Boolean));
   const dirtyCount = runs.filter((run) => run.gitDirty === true).length;
+  const parentRunCount = uniqueSorted(runs.flatMap((run) => run.parentRunIds ?? [])).length;
+  const childRunCount = runs.reduce((total, run) => total + (run.childRunCount ?? 0), 0);
+  const lineageEventCount = runs.reduce((total, run) => total + (run.lineageEventCount ?? 0), 0);
 
   const rows: RunEvidence[] = [
     {
@@ -963,6 +968,16 @@ function reviewPacketRows(
           : "No tool checks recorded yet.",
     },
   ];
+
+  if (parentRunCount > 0 || childRunCount > 0 || lineageEventCount > 0) {
+    rows.push({
+      id: "lineage",
+      icon: "workflow",
+      color: workspaceColorVar.purple,
+      title: "Lineage",
+      detail: lineageSummary(parentRunCount, childRunCount, lineageEventCount),
+    });
+  }
 
   const failedEvent = failedEvents[0];
   if (failedEvent) {
@@ -1086,7 +1101,10 @@ function isReviewableRun(run: AgentGraphRunSummary): boolean {
       run.gitHead ||
       (run.toolEventCount ?? 0) > 0 ||
       (run.taskCount ?? 0) > 0 ||
-      (run.toolNames?.length ?? 0) > 0
+      (run.toolNames?.length ?? 0) > 0 ||
+      (run.parentRunIds?.length ?? 0) > 0 ||
+      (run.childRunCount ?? 0) > 0 ||
+      (run.lineageEventCount ?? 0) > 0
   );
 }
 
@@ -1110,6 +1128,15 @@ function limitedList(values: string[], empty: string, limit = 3): string {
   const visible = values.slice(0, limit).join(", ");
   const remaining = values.length - Math.min(values.length, limit);
   return remaining > 0 ? `${visible} +${remaining}` : visible;
+}
+
+function lineageSummary(parentRunCount: number, childRunCount: number, eventCount: number): string {
+  const parts = [
+    childRunCount > 0 ? `${childRunCount} child run${childRunCount === 1 ? "" : "s"}` : null,
+    parentRunCount > 0 ? `${parentRunCount} parent${parentRunCount === 1 ? "" : "s"}` : null,
+    eventCount > 0 ? `${eventCount} lineage event${eventCount === 1 ? "" : "s"}` : null,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" - ") : "No lineage edges recorded.";
 }
 
 function payloadValue(event: AgentGraphEvent, keys: string[]): string | null {
@@ -1164,7 +1191,13 @@ function workflowSignals(runs: AgentGraphRunSummary[], liveGroups: LiveAgentTask
     (run) =>
       isCompletedStatus(run.status) &&
       run.gitDirty !== true &&
-      ((run.toolEventCount ?? 0) > 0 || (run.taskCount ?? 0) > 0 || Boolean(run.gitHead) || Boolean(run.gitBranch))
+      ((run.toolEventCount ?? 0) > 0 ||
+        (run.taskCount ?? 0) > 0 ||
+        (run.toolNames?.length ?? 0) > 0 ||
+        (run.childRunCount ?? 0) > 0 ||
+        (run.lineageEventCount ?? 0) > 0 ||
+        Boolean(run.gitHead) ||
+        Boolean(run.gitBranch))
   );
   return {
     hasActiveAgents,

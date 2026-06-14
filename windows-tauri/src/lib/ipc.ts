@@ -819,6 +819,9 @@ export type AgentGraphRunSummary = {
   toolEventCount?: number;
   taskCount?: number;
   toolNames?: string[];
+  parentRunIds?: string[];
+  childRunCount?: number;
+  lineageEventCount?: number;
 };
 
 export type AgentSource =
@@ -883,6 +886,9 @@ function normalizeAgentGraphRunSummaries(summaries: AgentGraphRunSummary[]): Age
     toolEventCount: summary.toolEventCount ?? 0,
     taskCount: summary.taskCount ?? 0,
     toolNames: summary.toolNames ?? [],
+    parentRunIds: summary.parentRunIds ?? [],
+    childRunCount: summary.childRunCount ?? 0,
+    lineageEventCount: summary.lineageEventCount ?? 0,
   }));
 }
 

@@ -88,7 +88,15 @@ type RailContext = {
 
 type RailRunSummary = Pick<
   AgentGraphRunSummary,
-  "gitBranch" | "gitDirty" | "gitHead" | "toolEventCount" | "taskCount" | "toolNames"
+  | "gitBranch"
+  | "gitDirty"
+  | "gitHead"
+  | "toolEventCount"
+  | "taskCount"
+  | "toolNames"
+  | "parentRunIds"
+  | "childRunCount"
+  | "lineageEventCount"
 >;
 
 export function railTabsForContext({
@@ -136,7 +144,10 @@ function hasReviewEvidence(run: RailRunSummary): boolean {
       run.gitHead ||
       (run.toolEventCount ?? 0) > 0 ||
       (run.taskCount ?? 0) > 0 ||
-      (run.toolNames?.length ?? 0) > 0
+      (run.toolNames?.length ?? 0) > 0 ||
+      (run.parentRunIds?.length ?? 0) > 0 ||
+      (run.childRunCount ?? 0) > 0 ||
+      (run.lineageEventCount ?? 0) > 0
   );
 }
 

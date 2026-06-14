@@ -91,6 +91,9 @@ enum WorkspaceRightRailAvailability {
         || summary.toolEventCount > 0
         || summary.taskCount > 0
         || !summary.toolNames.isEmpty
+        || !summary.parentRunIDs.isEmpty
+        || summary.childRunCount > 0
+        || summary.lineageEventCount > 0
     }
 
     private static func normalizedPath(_ path: String) -> String {
@@ -849,6 +852,9 @@ struct WorkspaceRightRailView: View {
         let running = runs.count - completed - failed
         let branches = Array(Set(runs.compactMap(\.gitBranch))).sorted()
         let dirtyCount = runs.filter { $0.gitDirty == true }.count
+        let parentRunCount = Set(runs.flatMap(\.parentRunIDs)).count
+        let childRunCount = runs.reduce(0) { $0 + $1.childRunCount }
+        let lineageEventCount = runs.reduce(0) { $0 + $1.lineageEventCount }
 
         var rows: [LedgerEvidence] = [
             LedgerEvidence(
@@ -868,6 +874,20 @@ struct WorkspaceRightRailView: View {
                     : "No tool checks recorded yet."
             )
         ]
+
+        if parentRunCount > 0 || childRunCount > 0 || lineageEventCount > 0 {
+            rows.append(LedgerEvidence(
+                id: "lineage",
+                icon: "point.3.connected.trianglepath.dotted",
+                tint: LoomTheme.purple,
+                title: "Lineage",
+                detail: lineageSummary(
+                    parentRunCount: parentRunCount,
+                    childRunCount: childRunCount,
+                    eventCount: lineageEventCount
+                )
+            ))
+        }
 
         if let failedEvent = failedEvents.first {
             rows.append(LedgerEvidence(
@@ -1473,8 +1493,19 @@ struct WorkspaceRightRailView: View {
             summary.modelLabel,
             summary.gitBranch,
             summary.toolEventCount > 0 ? "\(summary.toolEventCount) tools" : nil,
-            summary.taskCount > 0 ? "\(summary.taskCount) tasks" : nil
+            summary.taskCount > 0 ? "\(summary.taskCount) tasks" : nil,
+            summary.childRunCount > 0 ? "\(summary.childRunCount) child runs" : nil,
+            summary.parentRunIDs.isEmpty ? nil : "\(summary.parentRunIDs.count) parents"
         ].compactMap { $0 }
+    }
+
+    private func lineageSummary(parentRunCount: Int, childRunCount: Int, eventCount: Int) -> String {
+        let parts = [
+            childRunCount > 0 ? "\(childRunCount) child run\(childRunCount == 1 ? "" : "s")" : nil,
+            parentRunCount > 0 ? "\(parentRunCount) parent\(parentRunCount == 1 ? "" : "s")" : nil,
+            eventCount > 0 ? "\(eventCount) lineage event\(eventCount == 1 ? "" : "s")" : nil
+        ].compactMap { $0 }
+        return parts.isEmpty ? "No lineage edges recorded." : parts.joined(separator: " · ")
     }
 
     private var workflowSignals: WorkspaceWorkflowSignals {

@@ -63,6 +63,9 @@ struct AgentGraphRunSummary: Identifiable, Hashable {
     var toolEventCount: Int
     var taskCount: Int
     var toolNames: [String]
+    var parentRunIDs: [String]
+    var childRunCount: Int
+    var lineageEventCount: Int
 }
 
 enum AgentGraphLedgerError: Error {
@@ -157,6 +160,7 @@ actor AgentGraphLedger {
             }
             let toolNames = Array(Set(events.compactMap { $0.payload["tool"] })).sorted()
             let taskIDs = Set(events.compactMap { $0.payload["taskID"] })
+            let lineage = Self.lineageMetrics(from: events)
             return AgentGraphRunSummary(
                 id: latest.rootRunID,
                 title: title,
@@ -174,7 +178,10 @@ actor AgentGraphLedger {
                 eventCount: events.count,
                 toolEventCount: events.filter { $0.type == .toolStarted || $0.type == .toolCompleted }.count,
                 taskCount: taskIDs.count,
-                toolNames: toolNames
+                toolNames: toolNames,
+                parentRunIDs: lineage.parentRunIDs,
+                childRunCount: lineage.childRunCount,
+                lineageEventCount: lineage.eventCount
             )
         }
         .sorted { $0.lastActivity > $1.lastActivity }
@@ -218,6 +225,42 @@ actor AgentGraphLedger {
             return nil
         }
         return trimmed
+    }
+
+    private nonisolated static func lineageMetrics(from events: [AgentGraphEvent]) -> (
+        parentRunIDs: [String],
+        childRunCount: Int,
+        eventCount: Int
+    ) {
+        let parentRunIDs = Set(events.compactMap { event -> String? in
+            guard let value = event.parentRunID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !value.isEmpty else {
+                return nil
+            }
+            return value
+        })
+        let childRunIDs = Set(events.compactMap { event -> String? in
+            if let parent = event.parentRunID,
+               !parent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               event.runID != event.rootRunID {
+                return event.runID
+            }
+            for key in ["childRunID", "childRunId", "toRunID", "toRunId", "targetRunID", "targetRunId"] {
+                if let value = event.payload[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !value.isEmpty {
+                    return value
+                }
+            }
+            return nil
+        })
+        let lineageEventCount = events.filter { event in
+            event.type == .edgeCreated || event.parentRunID != nil
+        }.count
+        return (
+            parentRunIDs: Array(parentRunIDs).sorted(),
+            childRunCount: childRunIDs.count,
+            eventCount: lineageEventCount
+        )
     }
 }
 
