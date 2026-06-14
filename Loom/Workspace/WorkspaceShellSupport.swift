@@ -1914,13 +1914,17 @@ struct WorkspaceStatusBar: View {
     @Environment(AgentRegistry.self) private var agentRegistry
     @Environment(LocalEndpointStore.self) private var endpointStore
     @Environment(UpdateService.self) private var updates
+    @Environment(UsageService.self) private var usage
     @Environment(DictationService.self) private var dictation
+    @AppStorage("loom.agent.allowBash") private var allowBash: Bool = false
+    @AppStorage("loom.agent.permissionMode") private var permissionModeRaw: String = AgentPermissionMode.confirm.rawValue
     let workspace: Workspace?
     let blocks: [WorkspaceBlock]
     let selectedBlock: WorkspaceBlock?
     let runSummaries: [AgentGraphRunSummary]
     let rightRailTab: WorkspaceRightRailTab
     let openInspector: (WorkspaceRightRailTab) -> Void
+    let showUsageTool: (CLITool) -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -1964,6 +1968,28 @@ struct WorkspaceStatusBar: View {
                 tint: endpointStore.endpoints.isEmpty ? LoomTheme.mutedText : LoomTheme.purple,
                 action: { openInspector(.tools) }
             )
+
+            let permission = permissionStatus
+            statusSegment(
+                icon: permission.icon,
+                title: permission.title,
+                detail: permission.detail,
+                tint: permission.tint,
+                action: { openInspector(.tools) }
+            )
+
+            if let warning = usageWarningStatus {
+                statusSegment(
+                    icon: "exclamationmark.triangle.fill",
+                    title: warning.title,
+                    detail: warning.detail,
+                    tint: LoomTheme.orange,
+                    action: {
+                        showUsageTool(warning.tool)
+                        usage.requestLimitWarningRefresh()
+                    }
+                )
+            }
 
             Spacer()
 
@@ -2126,6 +2152,60 @@ struct WorkspaceStatusBar: View {
             return "No local endpoints"
         }
         return "\(endpointStore.endpoints.count) local endpoints"
+    }
+
+    private var permissionMode: AgentPermissionMode {
+        AgentPermissionMode(rawValue: permissionModeRaw) ?? .confirm
+    }
+
+    private var permissionStatus: (icon: String, title: String, detail: String, tint: Color) {
+        let mode = permissionMode
+        let bashEnabled = allowBash || mode == .bypassPermissions
+        let tint: Color
+        switch mode {
+        case .bypassPermissions:
+            tint = LoomTheme.orange
+        case .plan:
+            tint = LoomTheme.mutedText
+        default:
+            tint = LoomTheme.purple
+        }
+        return (
+            mode.systemImage,
+            mode.label,
+            bashEnabled ? "Bash on" : "Bash off",
+            tint
+        )
+    }
+
+    private var usageWarningStatus: (tool: CLITool, title: String, detail: String)? {
+        let warnings = CLITool.allCases.compactMap { tool -> UsageLimitWarning? in
+            guard tool.supportsLimitSignals,
+                  usage.hasUnacknowledgedLimitWarning(for: tool) else { return nil }
+            return usage.limitWarnings[tool]
+        }
+        guard !warnings.isEmpty else { return nil }
+        let sorted = warnings.sorted {
+            ($0.observedAt ?? .distantPast) > ($1.observedAt ?? .distantPast)
+        }
+        guard let warning = sorted.first else { return nil }
+        let title = warnings.count == 1
+            ? "\(warning.tool.label) Limit"
+            : "\(warnings.count) Usage Warnings"
+        let percent = warning.peakUsedPercent.map { "\(Int($0.rounded()))%" }
+        let detail = [
+            warning.tool.label,
+            warning.reachedType,
+            percent
+        ]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " · ")
+        return (
+            warning.tool,
+            title,
+            detail.isEmpty ? "Limit signal" : detail
+        )
     }
 
     private var updateStatus: (icon: String, title: String, detail: String?, tint: Color) {

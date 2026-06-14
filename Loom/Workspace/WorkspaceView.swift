@@ -121,7 +121,8 @@ struct WorkspaceView: View {
                     selectedBlock: selectedBlock,
                     runSummaries: scopedInspectorRunSummaries,
                     rightRailTab: effectiveRightRailTab,
-                    openInspector: openInspector
+                    openInspector: openInspector,
+                    showUsageTool: { selectedUsageTool = $0 }
                 )
             }
             .padding(10)

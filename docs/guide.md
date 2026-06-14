@@ -124,6 +124,9 @@ Loom 2.x extends the cockpit. Highlights:
   first.
 - **Settings → Shell**: a toggle to opt out of the shell integration
   without uninstalling the shim.
+- **Bottom status bar**: shows workspace path, pane count, live runs,
+  run-review state, provider/model, agent permission mode, usage warnings,
+  update state, and the active inspector tab.
 - **⌘K command palette**: workspace switcher, recent-command rerun, and
   Add-Block actions in one fuzzy-search overlay. Press **↑** in the
   search field to walk back through the last 50 commands (deduped),
