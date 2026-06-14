@@ -7,7 +7,8 @@ import { WorkspaceView } from "../modules/workspace/WorkspaceView";
 import { WorkspaceRightRail } from "./WorkspaceRightRail";
 import { WorkspaceStatusBar } from "./WorkspaceStatusBar";
 import { on } from "../lib/ipc";
-import { useApp, workspaceKindLabel, type RightRailTab } from "../lib/store";
+import { ROOM_META } from "../lib/commands";
+import { useApp, type RightRailTab } from "../lib/store";
 import { cockpit, surface, text, workspaceColorVar } from "../lib/theme";
 
 export function AppShell() {
@@ -115,18 +116,13 @@ function RoomRail({
     >
       {workspaces.map((workspace) => {
         const selected = workspace.id === selectedId && !selectedUsageTool;
-        const Icon = workspace.kindRaw === "ideas"
-          ? Icons.lightbulb
-          : workspace.kindRaw === "review" || workspace.kindRaw === "build"
-            ? Icons.search
-            : workspace.kindRaw === "runs"
-              ? Icons.workflow
-              : Icons.textCursor;
+        const meta = ROOM_META[workspace.kindRaw];
+        const Icon = Icons[meta.icon];
         return (
           <button
             key={workspace.id}
             onClick={() => selectWorkspace(workspace.id)}
-            title={workspaceKindLabel[workspace.kindRaw]}
+            title={meta.label}
             className="flex w-full flex-col items-center gap-1"
             style={{
               padding: "5px 3px",
@@ -148,7 +144,7 @@ function RoomRail({
               <Icon size={14} strokeWidth={2.2} />
             </span>
             <span className="truncate" style={{ maxWidth: 54, fontSize: 9, fontWeight: 700, color: selected ? text.primary : text.muted }}>
-              {workspaceKindLabel[workspace.kindRaw]}
+              {meta.label}
             </span>
           </button>
         );

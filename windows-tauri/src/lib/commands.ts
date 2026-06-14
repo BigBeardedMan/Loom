@@ -10,10 +10,10 @@ export const ROOM_META: Record<
   WorkspaceKind,
   { label: string; icon: IconName; color: string }
 > = {
-  code: { label: "Prompt", icon: "terminal", color: workspaceColorVar.blue },
+  code: { label: "Prompt", icon: "textCursor", color: workspaceColorVar.blue },
   ideas: { label: "Ideas", icon: "lightbulb", color: workspaceColorVar.pink },
-  review: { label: "Review", icon: "diff", color: workspaceColorVar.orange },
-  build: { label: "Review", icon: "diff", color: workspaceColorVar.orange },
+  review: { label: "Review", icon: "search", color: workspaceColorVar.orange },
+  build: { label: "Review", icon: "search", color: workspaceColorVar.orange },
   runs: { label: "Runs", icon: "workflow", color: workspaceColorVar.green },
 };
 

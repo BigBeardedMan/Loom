@@ -559,11 +559,3 @@ export const workspaceColorClass: Record<Workspace["colorName"], string> = {
   yellow: "bg-[var(--color-ws-yellow)]",
   purple: "bg-[var(--color-ws-purple)]",
 };
-
-export const workspaceKindLabel: Record<Workspace["kindRaw"], string> = {
-  code: "Prompt",
-  ideas: "Ideas",
-  review: "Review",
-  build: "Review",
-  runs: "Runs",
-};
