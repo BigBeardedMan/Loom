@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Icons } from "../../lib/icons";
+import { LOOM_ENDPOINTS_CHANGED } from "../../lib/events";
 import { useApp } from "../../lib/store";
 import {
   ipc,
@@ -156,8 +157,14 @@ export function AgentPane({ workspace, blockId, presentation = "agent" }: Props)
     localStorage.setItem(`loom.lmstudio.reviewer.${workspace.id}`, lmReviewerModel);
   }, [lmReviewerModel, workspace.id]);
 
-  useEffect(() => {
+  const refreshEndpoints = () => {
     ipc.endpoints.list().then(setEndpoints).catch(() => {});
+  };
+
+  useEffect(() => {
+    refreshEndpoints();
+    window.addEventListener(LOOM_ENDPOINTS_CHANGED, refreshEndpoints);
+    return () => window.removeEventListener(LOOM_ENDPOINTS_CHANGED, refreshEndpoints);
   }, []);
 
   const matchingEndpoints = endpoints.filter((e) => {

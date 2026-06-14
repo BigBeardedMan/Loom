@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from
 import { Icons } from "../lib/icons";
 import { ipc, type AgentDescriptor, type AgentGraphEvent, type AgentGraphRunSummary, type LiveAgentTaskGroup, type LocalEndpoint, type Workspace } from "../lib/ipc";
 import { PANEL_META, railTabsForContext } from "../lib/commands";
+import { LOOM_ENDPOINTS_CHANGED } from "../lib/events";
 import { useApp, type Panel } from "../lib/store";
 import { radius, surface, text, workspaceColorVar } from "../lib/theme";
 import { defaultPreviewUrlFor } from "../modules/build/PreviewPane";
@@ -62,6 +63,11 @@ export function WorkspaceRightRail() {
   useEffect(() => {
     window.addEventListener("loom-refresh-runs", refreshRuns);
     return () => window.removeEventListener("loom-refresh-runs", refreshRuns);
+  }, []);
+
+  useEffect(() => {
+    window.addEventListener(LOOM_ENDPOINTS_CHANGED, refreshProviders);
+    return () => window.removeEventListener(LOOM_ENDPOINTS_CHANGED, refreshProviders);
   }, []);
 
   useEffect(() => {

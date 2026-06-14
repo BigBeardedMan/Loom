@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Icons } from "../../lib/icons";
 import { useApp } from "../../lib/store";
 import { ipc, type EndpointKind, type LocalEndpoint, type McpServer } from "../../lib/ipc";
+import { LOOM_ENDPOINTS_CHANGED } from "../../lib/events";
 import { modal, radius, surface, text } from "../../lib/theme";
 
 type Tab = "appearance" | "providers" | "mcp" | "shell" | "tasks" | "advanced" | "about";
@@ -239,6 +240,10 @@ function ProvidersPanel() {
   const [editing, setEditing] = useState<EndpointDraft | null>(null);
 
   const refresh = () => ipc.endpoints.list().then(setEndpoints).catch(() => {});
+  const refreshAndNotify = async () => {
+    await refresh();
+    window.dispatchEvent(new Event(LOOM_ENDPOINTS_CHANGED));
+  };
 
   useEffect(() => {
     ipc.keychain
@@ -267,7 +272,7 @@ function ProvidersPanel() {
     if (!confirm(`Delete endpoint "${name}"?`)) return;
     await ipc.endpoints.delete(id);
     await ipc.keychain.delete("loom.endpoint", id).catch(() => {});
-    refresh();
+    await refreshAndNotify();
   };
 
   if (!loaded) return <div style={{ fontSize: 12, color: text.muted }}>Loading…</div>;
@@ -414,7 +419,7 @@ function ProvidersPanel() {
           onCancel={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
-            refresh();
+            refreshAndNotify();
           }}
         />
       )}

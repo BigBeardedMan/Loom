@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Icons } from "../lib/icons";
 import { ipc, type AgentDescriptor, type LiveAgentTaskGroup, type LocalEndpoint } from "../lib/ipc";
 import { effectiveRailTab, PANEL_META, rightRailTabLabel } from "../lib/commands";
+import { LOOM_ENDPOINTS_CHANGED } from "../lib/events";
 import { useApp } from "../lib/store";
 import { surface, text, workspaceColorVar } from "../lib/theme";
 import type { Block } from "../modules/workspace/LayoutPersistence";
@@ -30,9 +31,15 @@ export function WorkspaceStatusBar() {
     return () => clearInterval(id);
   }, []);
 
-  useEffect(() => {
+  const refreshProviders = () => {
     ipc.agents.refresh().then(setAgents).catch(() => setAgents([]));
     ipc.endpoints.list().then(setEndpoints).catch(() => setEndpoints([]));
+  };
+
+  useEffect(() => {
+    refreshProviders();
+    window.addEventListener(LOOM_ENDPOINTS_CHANGED, refreshProviders);
+    return () => window.removeEventListener(LOOM_ENDPOINTS_CHANGED, refreshProviders);
   }, []);
 
   return (
