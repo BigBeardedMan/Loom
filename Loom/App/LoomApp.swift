@@ -174,6 +174,7 @@ struct LoomApp: App {
                     Button("Open \(kind.label) Room") {
                         NotificationCenter.default.post(name: .loomSwitchWorkspaceKind, object: kind.rawValue)
                     }
+                    .keyboardShortcut(roomShortcutKey(for: kind), modifiers: [.command, .option])
                 }
                 Divider()
                 ForEach(WorkspaceRightRailTab.allCases) { tab in
@@ -245,6 +246,13 @@ struct LoomApp: App {
     private func shortcutKey(for panel: PanelKind) -> KeyEquivalent {
         let panels = layout.currentKind.availablePanels
         let index = panels.firstIndex(of: panel) ?? 0
+        let digit = String(min(index + 1, 9))
+        return KeyEquivalent(Character(digit))
+    }
+
+    private func roomShortcutKey(for kind: WorkspaceKind) -> KeyEquivalent {
+        let kinds = WorkspaceKind.allCases
+        let index = kinds.firstIndex(of: kind) ?? 0
         let digit = String(min(index + 1, 9))
         return KeyEquivalent(Character(digit))
     }
