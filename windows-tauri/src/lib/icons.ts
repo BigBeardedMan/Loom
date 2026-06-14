@@ -50,6 +50,12 @@ import {
   Diamond,
   Package,
   Server,
+  PanelRight,
+  BrainCircuit,
+  GitCompareArrows,
+  Wrench,
+  Workflow,
+  Layers3,
 } from "lucide-react";
 
 export const Icons = {
@@ -101,6 +107,12 @@ export const Icons = {
   diamond: Diamond,
   package: Package,
   server: Server,
+  panelRight: PanelRight,
+  brain: BrainCircuit,
+  diff: GitCompareArrows,
+  tools: Wrench,
+  workflow: Workflow,
+  layers: Layers3,
 } as const;
 
 export type IconName = keyof typeof Icons;

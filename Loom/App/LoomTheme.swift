@@ -71,6 +71,21 @@ enum LoomTheme {
     /// modes because terminals are conventionally dark.
     static let terminalSurface = Color(red: 0.018, green: 0.022, blue: 0.026)
 
+    static let shellRail = adaptive(
+        light: Color(red: 0.955, green: 0.96, blue: 0.975).opacity(0.92),
+        dark:  Color(red: 0.035, green: 0.04, blue: 0.05).opacity(0.92)
+    )
+
+    static let shellInspector = adaptive(
+        light: Color(red: 0.975, green: 0.98, blue: 0.99).opacity(0.95),
+        dark:  Color(red: 0.048, green: 0.052, blue: 0.062).opacity(0.94)
+    )
+
+    static let shellStatus = adaptive(
+        light: Color(red: 0.94, green: 0.95, blue: 0.97).opacity(0.84),
+        dark:  Color.black.opacity(0.22)
+    )
+
     // Brand accents — constant across modes.
     static let blue   = Color(red: 0.18, green: 0.50, blue: 0.96)
     static let green  = Color(red: 0.23, green: 0.86, blue: 0.46)

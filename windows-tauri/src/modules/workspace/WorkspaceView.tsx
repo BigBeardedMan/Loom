@@ -53,6 +53,8 @@ export function WorkspaceView() {
   const setBlockPin = useApp((s) => s.setBlockPin);
   const swapBlocks = useApp((s) => s.swapBlocks);
   const toggleFullRow = useApp((s) => s.toggleFullRow);
+  const activeBlockId = useApp((s) => s.activeBlockId);
+  const setActiveBlock = useApp((s) => s.setActiveBlock);
   const usageTool = useApp((s) => s.selectedUsageTool);
   const workspace = workspaces.find((w) => w.id === selectedId);
 
@@ -125,7 +127,7 @@ export function WorkspaceView() {
     };
   }, [drag, metrics, setBlockPin, swapBlocks, containerEl]);
 
-  // Deck-level right-click for "Reset Grid Layout".
+  // Deck-level right-click for "Reset Pane Layout".
   const [deckMenu, setDeckMenu] = useState<{ x: number; y: number } | null>(null);
 
   if (usageTool) {
@@ -162,10 +164,10 @@ export function WorkspaceView() {
         >
           <Icons.emptyDeck size={32} strokeWidth={1.2} />
           <span style={{ fontSize: 13, fontWeight: 500, color: text.primary }}>
-            Empty deck
+            Empty workroom
           </span>
           <span style={{ fontSize: 11 }}>
-            Add a block from the top bar to begin.
+            Add a pane from the top bar to begin.
           </span>
           <button
             onClick={resetLayout}
@@ -244,8 +246,10 @@ export function WorkspaceView() {
               translation={isDragging ? drag!.translation : { x: 0, y: 0 }}
               isDragging={!!isDragging}
               isHoverTarget={!!isHoverTarget}
+              isSelected={activeBlockId === block.id}
               workspace={workspace}
               onRemove={() => removeBlock(block.id)}
+              onSelect={() => setActiveBlock(block.id)}
               onTitleBarDragStart={(mouse) =>
                 setDrag({
                   blockID: block.id,
@@ -293,8 +297,10 @@ function BlockShell({
   translation,
   isDragging,
   isHoverTarget,
+  isSelected,
   workspace,
   onRemove,
+  onSelect,
   onTitleBarDragStart,
   onToggleFullRow,
   onUnpin,
@@ -304,8 +310,10 @@ function BlockShell({
   translation: { x: number; y: number };
   isDragging: boolean;
   isHoverTarget: boolean;
+  isSelected: boolean;
   workspace: Workspace;
   onRemove: () => void;
+  onSelect: () => void;
   onTitleBarDragStart: (mouse: { x: number; y: number }) => void;
   onToggleFullRow: () => void;
   onUnpin: () => void;
@@ -342,11 +350,13 @@ function BlockShell({
         e.stopPropagation();
         setMenu({ x: e.clientX, y: e.clientY });
       }}
+      onPointerDown={onSelect}
     >
       <LoomPanel
         className="h-full"
         dragging={isDragging}
         dropTarget={isHoverTarget}
+        selected={isSelected}
       >
         <BlockTitleBar
           kind={block.kind}
@@ -668,7 +678,7 @@ function BlockContextMenu({
           }}
         />
         <MenuButton onClick={onClose2} danger>
-          Close block
+          Close pane
         </MenuButton>
       </div>
     </div>
@@ -710,7 +720,7 @@ function DeckMenu({
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        <MenuButton onClick={onReset}>Reset Grid Layout</MenuButton>
+        <MenuButton onClick={onReset}>Reset Pane Layout</MenuButton>
       </div>
     </div>
   );

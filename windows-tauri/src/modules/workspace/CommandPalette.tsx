@@ -9,8 +9,9 @@ import {
   type WorkspaceColor,
 } from "../../lib/theme";
 import { Icons } from "../../lib/icons";
-import { useApp, type Panel } from "../../lib/store";
+import { useApp } from "../../lib/store";
 import { ipc, type CommandRecord, type SessionInfo } from "../../lib/ipc";
+import { ADD_BLOCK_COMMANDS, PANEL_META, panelsForKind } from "../../lib/commands";
 
 // Mirrors Loom/Workspace/CommandPalette.swift.
 // 560x420 sheet, .regularMaterial backdrop, sectioned list with selection ring.
@@ -84,7 +85,7 @@ export function CommandPalette() {
           <Icons.search size={14} strokeWidth={2} color={text.muted as string} />
           <Command.Input
             autoFocus
-            placeholder="Switch workspace, rerun a command, add a block…"
+            placeholder="Switch room, rerun a command, add a pane..."
             className="w-full focus:outline-none"
             style={{
               background: "transparent",
@@ -144,22 +145,18 @@ export function CommandPalette() {
           </Command.Group>
 
           <Command.Group
-            heading="Add block"
+            heading="Add pane"
             className="section-header"
             style={{ padding: "10px 14px 4px" }}
           >
-            {(
-              [
-                ["terminal", Icons.terminal, "Terminal"],
-                ["editor", Icons.textCursor, "Editor"],
-                ["tasks", Icons.checkCircle, "Runs"],
-                ["chat", Icons.chat, "Chat"],
-                ["agent", Icons.sparkles, "Agent"],
-                ["notes", Icons.lightbulb, "Notes"],
-                ["preview", Icons.eye, "Preview"],
-                ["commands", Icons.listBulletRect, "Commands"],
-              ] as [Panel, typeof Icons.terminal, string][]
-            ).map(([kind, Icon, label]) => (
+            {(selectedWorkspace
+              ? panelsForKind(selectedWorkspace.kindRaw).map((kind) => ({
+                  kind,
+                  label: PANEL_META[kind].label,
+                  icon: Icons[PANEL_META[kind].icon],
+                }))
+              : ADD_BLOCK_COMMANDS
+            ).map(({ kind, icon: Icon, label }) => (
               <Command.Item
                 key={kind}
                 value={`add ${label}`}
@@ -177,7 +174,7 @@ export function CommandPalette() {
                 }}
               >
                 <Icon size={12} strokeWidth={1.8} />
-                Add {label} block
+                Add {label} pane
               </Command.Item>
             ))}
           </Command.Group>

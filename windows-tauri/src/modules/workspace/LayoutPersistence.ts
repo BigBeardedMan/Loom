@@ -6,6 +6,7 @@
 import { ipc } from "../../lib/ipc";
 import type { Panel } from "../../lib/store";
 import type { TerminalTranscriptRestore, WorkspaceKind } from "../../lib/ipc";
+import { isPanelKind } from "../../lib/commands";
 
 /// Edge or corner the block is anchored to on the deck. Mirrors the macOS
 /// `BlockPin` enum in WorkspaceLayout.swift.
@@ -97,10 +98,10 @@ export function defaultLayout(kind: WorkspaceKind): Layout {
 function migrateLegacyBlock(raw: unknown): Block | null {
   if (typeof raw !== "object" || raw === null) return null;
   const r = raw as Record<string, unknown>;
-  if (typeof r.id !== "string" || typeof r.kind !== "string") return null;
+  if (typeof r.id !== "string" || !isPanelKind(r.kind)) return null;
   const block: Block = {
     id: r.id,
-    kind: r.kind as Panel,
+    kind: r.kind,
   };
   if (typeof r.customTitle === "string") block.customTitle = r.customTitle;
   if (typeof r.fullRowSpan === "boolean") block.fullRowSpan = r.fullRowSpan;

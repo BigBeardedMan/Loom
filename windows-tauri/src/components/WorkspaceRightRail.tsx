@@ -1,0 +1,588 @@
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { Icons } from "../lib/icons";
+import { ipc, type AgentDescriptor, type AgentGraphEvent, type AgentGraphRunSummary, type LiveAgentTaskGroup, type LocalEndpoint, type Workspace } from "../lib/ipc";
+import { PANEL_META } from "../lib/commands";
+import { useApp, type Panel, type RightRailTab } from "../lib/store";
+import { radius, surface, text, workspaceColorVar } from "../lib/theme";
+import { defaultPreviewUrlFor } from "../modules/build/PreviewPane";
+import type { Block } from "../modules/workspace/LayoutPersistence";
+
+const RAIL_TABS: { id: RightRailTab; label: string; icon: keyof typeof Icons }[] = [
+  { id: "timeline", label: "Timeline", icon: "workflow" },
+  { id: "files", label: "Files", icon: "folderFill" },
+  { id: "preview", label: "Preview", icon: "eye" },
+  { id: "tools", label: "Tools", icon: "tools" },
+  { id: "diff", label: "Diff", icon: "diff" },
+  { id: "memory", label: "Memory", icon: "brain" },
+  { id: "details", label: "Details", icon: "panelRight" },
+];
+
+type MemoryFile = {
+  id: string;
+  name: string;
+  path: string;
+  excerpt: string;
+  characterCount: number;
+};
+
+export function WorkspaceRightRail() {
+  const workspaces = useApp((s) => s.workspaces);
+  const selectedId = useApp((s) => s.selectedWorkspaceId);
+  const workspace = workspaces.find((w) => w.id === selectedId) ?? null;
+  const layout = useApp((s) => s.layout);
+  const activeBlockId = useApp((s) => s.activeBlockId);
+  const selectedTab = useApp((s) => s.rightRailTab);
+  const setSelectedTab = useApp((s) => s.setRightRailTab);
+  const activeBlock = layout?.blocks.find((b) => b.id === activeBlockId) ?? null;
+  const [runs, setRuns] = useState<AgentGraphRunSummary[]>([]);
+  const [liveGroups, setLiveGroups] = useState<LiveAgentTaskGroup[]>([]);
+  const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
+  const [loadingRunId, setLoadingRunId] = useState<string | null>(null);
+  const [eventsByRun, setEventsByRun] = useState<Record<string, AgentGraphEvent[]>>({});
+  const [memoryFiles, setMemoryFiles] = useState<MemoryFile[]>([]);
+  const [agents, setAgents] = useState<AgentDescriptor[]>([]);
+  const [endpoints, setEndpoints] = useState<LocalEndpoint[]>([]);
+
+  const scopedRuns = useMemo(() => filterRunsForWorkspace(runs, workspace), [runs, workspace?.folderPath]);
+  const railTabs = useMemo(
+    () => availableRailTabs(workspace, layout?.blocks ?? [], scopedRuns, memoryFiles),
+    [workspace?.id, workspace?.folderPath, workspace?.kindRaw, layout?.blocks, scopedRuns, memoryFiles]
+  );
+  const effectiveTab = railTabs.some((tab) => tab.id === selectedTab) ? selectedTab : railTabs[0]?.id ?? "details";
+
+  const refreshRuns = () => {
+    ipc.agentGraph.list().then(setRuns).catch(() => setRuns([]));
+    ipc.liveTasks.list().then(setLiveGroups).catch(() => setLiveGroups([]));
+  };
+  const refreshProviders = () => {
+    ipc.agents.refresh().then(setAgents).catch(() => setAgents([]));
+    ipc.endpoints.list().then(setEndpoints).catch(() => setEndpoints([]));
+  };
+
+  useEffect(() => {
+    refreshRuns();
+    refreshProviders();
+    const id = setInterval(refreshRuns, 5000);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    loadMemoryFiles(workspace).then((files) => {
+      if (active) setMemoryFiles(files);
+    });
+    return () => {
+      active = false;
+    };
+  }, [workspace?.id, workspace?.folderPath]);
+
+  return (
+    <aside
+      className="flex h-full flex-col overflow-hidden"
+      style={{
+        width: "var(--loom-inspector-width, 308px)",
+        flex: "0 0 var(--loom-inspector-width, 308px)",
+        background: surface.shellInspector,
+        border: `1px solid ${surface.hairline}`,
+        borderRadius: 10,
+      }}
+    >
+      <header
+        className="flex items-center gap-2"
+        style={{
+          padding: "9px 12px",
+          borderBottom: `1px solid ${surface.hairline}`,
+        }}
+      >
+        <Icons.layers size={14} color={workspace ? workspaceColorVar[workspace.colorName] : workspaceColorVar.blue} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate" style={{ fontSize: 12, fontWeight: 700, color: text.primary }}>
+            {workspace?.name ?? "Inspector"}
+          </div>
+          <div className="truncate" style={{ fontSize: 10, color: text.muted }}>
+            {activeBlock ? defaultBlockTitle(activeBlock) : "Adaptive context"}
+          </div>
+        </div>
+        <button
+          onClick={refreshRuns}
+          title="Refresh rail data"
+          style={{ padding: 4, borderRadius: 6, color: text.muted }}
+        >
+          <Icons.refresh size={12} strokeWidth={2.1} />
+        </button>
+      </header>
+
+      <div className="flex gap-1 overflow-x-auto" style={{ padding: "8px 10px", borderBottom: `1px solid ${surface.hairline}` }}>
+        {railTabs.map((tab) => {
+          const Icon = Icons[tab.icon];
+          const active = effectiveTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setSelectedTab(tab.id)}
+              title={tab.label}
+              aria-label={tab.label}
+              style={{
+                width: 26,
+                height: 24,
+                borderRadius: 7,
+                display: "grid",
+                placeItems: "center",
+                background: active ? workspaceColorVar.blue : surface.softPanel,
+                color: active ? "#fff" : text.muted,
+              }}
+            >
+              <Icon size={12} strokeWidth={2.2} />
+            </button>
+          );
+        })}
+      </div>
+
+      <main className="scrollbar-thin min-h-0 flex-1 overflow-y-auto" style={{ padding: 12 }}>
+        <WorkflowMap workspace={workspace} runs={scopedRuns} liveGroups={liveGroups} />
+        {effectiveTab === "timeline" && (
+          <TimelineContent
+            runs={scopedRuns}
+            liveGroups={liveGroups}
+            expandedRunId={expandedRunId}
+            loadingRunId={loadingRunId}
+            eventsByRun={eventsByRun}
+            onToggle={(run) => {
+              if (expandedRunId === run.id) {
+                setExpandedRunId(null);
+                return;
+              }
+              setExpandedRunId(run.id);
+              if (eventsByRun[run.id]) return;
+              setLoadingRunId(run.id);
+              ipc.agentGraph
+                .read(run.id)
+                .then((events) => setEventsByRun((current) => ({ ...current, [run.id]: events })))
+                .catch(() => setEventsByRun((current) => ({ ...current, [run.id]: [] })))
+                .finally(() => setLoadingRunId((current) => (current === run.id ? null : current)));
+            }}
+          />
+        )}
+        {effectiveTab === "files" && <FilesContent workspace={workspace} memoryFiles={memoryFiles} />}
+        {effectiveTab === "preview" && <PreviewContent workspace={workspace} blocks={layout?.blocks ?? []} />}
+        {effectiveTab === "tools" && <ToolsContent blocks={layout?.blocks ?? []} agents={agents} endpoints={endpoints} />}
+        {effectiveTab === "diff" && <DiffContent runs={scopedRuns} />}
+        {effectiveTab === "memory" && <MemoryContent memoryFiles={memoryFiles} />}
+        {effectiveTab === "details" && <DetailsContent workspace={workspace} block={activeBlock} blocks={layout?.blocks ?? []} />}
+      </main>
+    </aside>
+  );
+}
+
+function WorkflowMap({
+  workspace,
+  runs,
+  liveGroups,
+}: {
+  workspace: Workspace | null;
+  runs: AgentGraphRunSummary[];
+  liveGroups: LiveAgentTaskGroup[];
+}) {
+  const phases = [
+    ["Scope", !!workspace],
+    ["Workspace", !!workspace?.folderPath],
+    ["Agents", liveGroups.length > 0 || runs.some((r) => r.status === "running")],
+    ["Checks", runs.some((r) => (r.toolEventCount ?? 0) > 0)],
+    ["Review", runs.some((r) => r.status === "completed" || r.status === "failed")],
+    ["Ship", false],
+  ] as const;
+
+  return (
+    <section style={sectionBox}>
+      <SectionTitle>Workflow</SectionTitle>
+      <div className="grid grid-cols-6 gap-1">
+        {phases.map(([label, active]) => (
+          <div key={label} className="min-w-0 text-center">
+            <span
+              style={{
+                display: "inline-block",
+                width: 7,
+                height: 7,
+                borderRadius: 999,
+                background: active ? workspaceColorVar.green : surface.hairline,
+              }}
+            />
+            <div className="truncate" style={{ fontSize: 8, fontWeight: 700, color: active ? text.primary : text.tertiary }}>
+              {label}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function TimelineContent({
+  runs,
+  liveGroups,
+  expandedRunId,
+  loadingRunId,
+  eventsByRun,
+  onToggle,
+}: {
+  runs: AgentGraphRunSummary[];
+  liveGroups: LiveAgentTaskGroup[];
+  expandedRunId: string | null;
+  loadingRunId: string | null;
+  eventsByRun: Record<string, AgentGraphEvent[]>;
+  onToggle: (run: AgentGraphRunSummary) => void;
+}) {
+  return (
+    <>
+      <RailSection title="Live Runs">
+        {liveGroups.length === 0 ? (
+          <Muted>No live agent task groups are active.</Muted>
+        ) : (
+          liveGroups.slice(0, 6).map((group) => (
+            <RailRow
+              key={group.id}
+              icon="workflow"
+              color={workspaceColorVar.green}
+              title={liveGroupTitle(group)}
+              detail={group.headline || `${group.tasks.length} tasks`}
+            />
+          ))
+        )}
+      </RailSection>
+      <RailSection title="Recent History">
+        {runs.length === 0 ? (
+          <Muted>No graph ledgers found under ~/.loom/agent-runs.</Muted>
+        ) : (
+          runs.slice(0, 8).map((run) => {
+            const expanded = expandedRunId === run.id;
+            const events = eventsByRun[run.id] ?? [];
+            return (
+              <section key={run.id} style={sectionBox}>
+                <button
+                  type="button"
+                  className="w-full text-left"
+                  onClick={() => onToggle(run)}
+                  style={{ border: 0, background: "transparent", color: "inherit", padding: 0 }}
+                >
+                  <RailRow
+                    icon={run.status === "completed" ? "checkCircle" : run.status === "failed" ? "failedCircle" : "workflow"}
+                    color={run.status === "completed" ? workspaceColorVar.green : run.status === "failed" ? workspaceColorVar.orange : workspaceColorVar.blue}
+                    title={run.title}
+                    detail={summaryChips(run).join(" - ")}
+                  />
+                </button>
+                {expanded && (
+                  <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${surface.hairline}` }}>
+                    {loadingRunId === run.id ? (
+                      <Muted>Loading ledger events...</Muted>
+                    ) : events.length === 0 ? (
+                      <Muted>No ledger events found.</Muted>
+                    ) : (
+                      events.slice(-5).reverse().map((event) => (
+                        <div key={event.eventID ?? event.eventId ?? `${event.type}:${event.occurredAt}`} style={{ marginTop: 6 }}>
+                          <RailRow
+                            icon="listBulletRect"
+                            color={workspaceColorVar.blue}
+                            title={event.type}
+                            detail={event.summary || event.title || event.payload?.tool || event.occurredAt}
+                          />
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </section>
+            );
+          })
+        )}
+      </RailSection>
+    </>
+  );
+}
+
+function FilesContent({ workspace, memoryFiles }: { workspace: Workspace | null; memoryFiles: MemoryFile[] }) {
+  return (
+    <RailSection title="Project Files">
+      {!workspace?.folderPath ? (
+        <Muted>Bind this room to a folder to show project context.</Muted>
+      ) : (
+        <>
+          <CodeLine>{workspace.folderPath}</CodeLine>
+          {memoryFiles.length === 0 ? (
+            <Muted>No agent memory files found in this folder.</Muted>
+          ) : (
+            memoryFiles.map((file) => (
+              <RailRow key={file.id} icon="file" color={workspaceColorVar.blue} title={file.name} detail={`${file.characterCount} chars`} />
+            ))
+          )}
+        </>
+      )}
+    </RailSection>
+  );
+}
+
+function PreviewContent({ workspace, blocks }: { workspace: Workspace | null; blocks: Block[] }) {
+  const previews = blocks.filter((b) => b.kind === "preview");
+  return (
+    <RailSection title="Previews">
+      {previews.length === 0 ? (
+        <Muted>No Preview panes are open in this room.</Muted>
+      ) : (
+        previews.map((block) => (
+          <RailRow
+            key={block.id}
+            icon="eye"
+            color={workspaceColorVar.pink}
+            title={defaultBlockTitle(block)}
+            detail={workspace ? defaultPreviewUrlFor(workspace, block.autoPreviewIndex ?? 0) : `http://localhost:${3000 + (block.autoPreviewIndex ?? 0)}`}
+          />
+        ))
+      )}
+    </RailSection>
+  );
+}
+
+function ToolsContent({
+  blocks,
+  agents,
+  endpoints,
+}: {
+  blocks: Block[];
+  agents: AgentDescriptor[];
+  endpoints: LocalEndpoint[];
+}) {
+  const counts = useMemo(() => {
+    const next = new Map<Panel, number>();
+    for (const block of blocks) next.set(block.kind, (next.get(block.kind) ?? 0) + 1);
+    return Array.from(next.entries());
+  }, [blocks]);
+  return (
+    <RailSection title="Tools">
+      {counts.map(([kind, count]) => (
+        <RailRow key={kind} icon={PANEL_META[kind].icon} color={PANEL_META[kind].color} title={PANEL_META[kind].label} detail={`${count} open`} />
+      ))}
+      <SectionTitle>Local Endpoints</SectionTitle>
+      {endpoints.length === 0 ? (
+        <Muted>No local providers configured. Add Ollama, LM Studio, or OpenAI-compatible endpoints in Settings.</Muted>
+      ) : (
+        endpoints.map((endpoint) => (
+          <RailRow
+            key={endpoint.id}
+            icon="server"
+            color={endpoint.kind === "lmstudio" ? workspaceColorVar.purple : workspaceColorVar.blue}
+            title={endpoint.name}
+            detail={`${endpoint.kind} - ${endpoint.defaultModel || endpoint.baseUrl}`}
+          />
+        ))
+      )}
+      <SectionTitle>Agents</SectionTitle>
+      {agents.length === 0 ? (
+        <Muted>No CLI agents reported by the registry.</Muted>
+      ) : (
+        agents.slice(0, 6).map((agent) => (
+          <RailRow
+            key={`${agent.scope}:${agent.name}`}
+            icon="sparkles"
+            color={agent.color || workspaceColorVar.orange}
+            title={agent.name || "Default"}
+            detail={agent.model || agent.description || agent.scope}
+          />
+        ))
+      )}
+    </RailSection>
+  );
+}
+
+function DiffContent({ runs }: { runs: AgentGraphRunSummary[] }) {
+  const reviewable = runs.filter((run) => run.gitBranch || run.gitDirty !== undefined || (run.toolEventCount ?? 0) > 0);
+  return (
+    <RailSection title="Review Signals">
+      {reviewable.length === 0 ? (
+        <Muted>No changed-file or check signals have been recorded yet.</Muted>
+      ) : (
+        reviewable.slice(0, 8).map((run) => (
+          <RailRow
+            key={run.id}
+            icon="diff"
+            color={run.gitDirty ? workspaceColorVar.orange : workspaceColorVar.green}
+            title={run.gitBranch || run.title}
+            detail={run.gitHead || `${run.toolEventCount ?? 0} tool events`}
+          />
+        ))
+      )}
+    </RailSection>
+  );
+}
+
+function MemoryContent({ memoryFiles }: { memoryFiles: MemoryFile[] }) {
+  return (
+    <RailSection title="Read-only Memory">
+      {memoryFiles.length === 0 ? (
+        <Muted>No CLAUDE.md, AGENTS.md, GUIDE.md, or README.md found for this workspace.</Muted>
+      ) : (
+        memoryFiles.map((file) => (
+          <section key={file.id} style={sectionBox}>
+            <RailRow icon="brain" color={workspaceColorVar.purple} title={file.name} detail={file.path} />
+            <p style={{ marginTop: 6, fontSize: 10, lineHeight: 1.45, color: text.muted }}>
+              {file.excerpt}
+            </p>
+          </section>
+        ))
+      )}
+    </RailSection>
+  );
+}
+
+function DetailsContent({ workspace, block, blocks }: { workspace: Workspace | null; block: Block | null; blocks: Block[] }) {
+  return (
+    <RailSection title="Details">
+      {workspace && (
+        <RailRow icon="layers" color={workspaceColorVar[workspace.colorName]} title={workspace.name} detail={workspace.kindRaw === "code" ? "Prompt" : workspace.kindRaw} />
+      )}
+      {block ? (
+        <RailRow icon={PANEL_META[block.kind].icon} color={PANEL_META[block.kind].color} title={defaultBlockTitle(block)} detail={PANEL_META[block.kind].label} />
+      ) : (
+        <Muted>Select a pane to inspect it.</Muted>
+      )}
+      <Muted>{blocks.length} pane(s) open in this room.</Muted>
+    </RailSection>
+  );
+}
+
+function RailSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section style={{ marginTop: 12 }}>
+      <SectionTitle>{title}</SectionTitle>
+      <div className="flex flex-col gap-2">{children}</div>
+    </section>
+  );
+}
+
+function SectionTitle({ children }: { children: ReactNode }) {
+  return <div style={{ marginBottom: 7, fontSize: 9, fontWeight: 800, color: text.tertiary, textTransform: "uppercase" }}>{children}</div>;
+}
+
+function RailRow({ icon, color, title, detail }: { icon: keyof typeof Icons; color: string; title: string; detail?: string }) {
+  const Icon = Icons[icon];
+  return (
+    <div className="flex min-w-0 gap-2">
+      <Icon size={13} strokeWidth={2.2} color={color} style={{ flex: "0 0 auto", marginTop: 2 }} />
+      <div className="min-w-0 flex-1">
+        <div className="truncate" style={{ fontSize: 11, fontWeight: 700, color: text.primary }}>{title}</div>
+        {detail && <div className="line-clamp-2" style={{ fontSize: 9, color: text.muted }}>{detail}</div>}
+      </div>
+    </div>
+  );
+}
+
+function Muted({ children }: { children: ReactNode }) {
+  return <div style={{ fontSize: 10, lineHeight: 1.45, color: text.muted }}>{children}</div>;
+}
+
+function CodeLine({ children }: { children: ReactNode }) {
+  return (
+    <div className="truncate" style={{ padding: 8, borderRadius: radius.row, background: surface.inset, fontSize: 10, fontFamily: "var(--font-mono)", color: text.muted }}>
+      {children}
+    </div>
+  );
+}
+
+const sectionBox: CSSProperties = {
+  padding: 10,
+  borderRadius: radius.row,
+  background: surface.inset,
+};
+
+function defaultBlockTitle(block: Block): string {
+  if (block.customTitle?.trim()) return block.customTitle.trim();
+  if (block.kind === "chat" && block.autoChatIndex) return block.autoChatIndex === 1 ? "Chat" : `Chat ${block.autoChatIndex}`;
+  return PANEL_META[block.kind].label;
+}
+
+function summaryChips(run: AgentGraphRunSummary): string[] {
+  return [
+    run.status,
+    run.modelLabel,
+    run.gitBranch,
+    (run.toolEventCount ?? 0) > 0 ? `${run.toolEventCount} tools` : null,
+    (run.taskCount ?? 0) > 0 ? `${run.taskCount} tasks` : null,
+  ].filter(Boolean) as string[];
+}
+
+function availableRailTabs(
+  workspace: Workspace | null,
+  blocks: Block[],
+  runs: AgentGraphRunSummary[],
+  memoryFiles: MemoryFile[]
+) {
+  const tabs: typeof RAIL_TABS = [];
+  const byId = new Map(RAIL_TABS.map((tab) => [tab.id, tab]));
+  const add = (id: RightRailTab) => {
+    const tab = byId.get(id);
+    if (tab && !tabs.some((item) => item.id === id)) tabs.push(tab);
+  };
+
+  add("timeline");
+  if (workspace?.folderPath) add("files");
+  if (blocks.some((block) => block.kind === "preview")) add("preview");
+  add("tools");
+  if (
+    workspace?.kindRaw === "review" ||
+    workspace?.kindRaw === "runs" ||
+    runs.some((run) => run.gitBranch || run.gitDirty !== undefined || (run.toolEventCount ?? 0) > 0)
+  ) {
+    add("diff");
+  }
+  if (workspace?.folderPath || memoryFiles.length > 0) add("memory");
+  add("details");
+  return tabs;
+}
+
+function filterRunsForWorkspace(runs: AgentGraphRunSummary[], workspace: Workspace | null): AgentGraphRunSummary[] {
+  if (!workspace?.folderPath) return runs;
+  const root = normalizedPath(workspace.folderPath);
+  return runs.filter((run) => {
+    if (!run.workspacePath) return false;
+    const candidate = normalizedPath(run.workspacePath);
+    return candidate === root || candidate.startsWith(`${root}/`) || candidate.startsWith(`${root}\\`);
+  });
+}
+
+function normalizedPath(path: string): string {
+  return path.replace(/[\\/]+$/, "");
+}
+
+function liveGroupTitle(group: LiveAgentTaskGroup): string {
+  const source = String(group.source || "agent");
+  return group.modelLabel ? `${source} - ${group.modelLabel}` : source;
+}
+
+async function loadMemoryFiles(workspace: Workspace | null): Promise<MemoryFile[]> {
+  if (!workspace?.folderPath) return [];
+  const names = ["CLAUDE.md", "AGENTS.md", "GUIDE.md", "README.md"];
+  const files = await Promise.all(
+    names.map(async (name) => {
+      const path = joinPath(workspace.folderPath, name);
+      try {
+        const raw = await ipc.fs.read(path);
+        const trimmed = raw.trim();
+        if (!trimmed) return null;
+        return {
+          id: path,
+          name,
+          path,
+          characterCount: trimmed.length,
+          excerpt: trimmed.length > 420 ? `${trimmed.slice(0, 420)}...` : trimmed,
+        };
+      } catch {
+        return null;
+      }
+    })
+  );
+  return files.filter((file): file is MemoryFile => Boolean(file));
+}
+
+function joinPath(root: string, name: string): string {
+  const sep = root.includes("\\") ? "\\" : "/";
+  return `${root.replace(/[\\/]+$/, "")}${sep}${name}`;
+}

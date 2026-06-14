@@ -1,16 +1,12 @@
 import { useEffect, useState } from "react";
 import { useApp } from "./lib/store";
 import { useGlobalKeymap } from "./lib/keymap";
-import { WorkspaceSidebar } from "./modules/workspace/WorkspaceSidebar";
-import { WorkspaceView } from "./modules/workspace/WorkspaceView";
 import { CommandPalette } from "./modules/workspace/CommandPalette";
 import { SettingsModal } from "./modules/settings/SettingsModal";
-import { Titlebar } from "./components/Titlebar";
-import { LoomPanel } from "./components/LoomPanel";
 import { ipc, type CrashReport } from "./lib/ipc";
 import { ErrorBoundary } from "./modules/crash/ErrorBoundary";
 import { CrashModal } from "./modules/crash/CrashModal";
-import { cockpit, sidebar } from "./lib/theme";
+import { AppShell } from "./components/AppShell";
 
 function App() {
   const loadWorkspaces = useApp((s) => s.loadWorkspaces);
@@ -74,30 +70,12 @@ function App() {
 
   return (
     <ErrorBoundary>
-      <div
-        className="flex h-full w-full flex-col overflow-hidden"
-        style={{
-          color: "var(--color-loom-text)",
-          padding: cockpit.outerPadding,
-          gap: 10,
-        }}
-      >
-        <Titlebar />
-        <div className="flex flex-1 min-h-0" style={{ gap: cockpit.gap }}>
-          <LoomPanel
-            noShadow
-            style={{ width: sidebar.width, flex: "none" }}
-          >
-            <WorkspaceSidebar />
-          </LoomPanel>
-          <LoomPanel noShadow className="flex-1 min-w-0 min-h-0">
-            <WorkspaceView />
-          </LoomPanel>
-        </div>
+      <>
+        <AppShell />
         <CommandPalette />
         <SettingsModal />
         {crash && <CrashModal report={crash} onClose={() => setCrash(null)} />}
-      </div>
+      </>
     </ErrorBoundary>
   );
 }

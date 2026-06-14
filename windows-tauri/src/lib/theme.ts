@@ -36,6 +36,9 @@ export const surface = {
   terminal: "var(--color-loom-terminal)",
   bgFrom: "var(--color-loom-bg-from)",
   bgTo: "var(--color-loom-bg-to)",
+  shellRail: "color-mix(in srgb, var(--color-loom-bg-from) 78%, var(--color-loom-panel))",
+  shellInspector: "color-mix(in srgb, var(--color-loom-panel) 92%, var(--color-loom-bg-from))",
+  shellStatus: "color-mix(in srgb, var(--color-loom-inset) 82%, transparent)",
 };
 
 export const text = {
@@ -80,6 +83,8 @@ export const cockpit = {
   outerPadding: 12,
   minBlockWidth: 140,
   minBlockHeight: 160,
+  roomRailWidth: 62,
+  inspectorWidth: 308,
 };
 
 export const topbar = {

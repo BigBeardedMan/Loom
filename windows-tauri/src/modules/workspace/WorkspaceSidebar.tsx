@@ -202,7 +202,7 @@ export function WorkspaceSidebar() {
               }
             />
             {notes.length === 0 ? (
-              <EmptyHint label="No ideas yet. Open the Notes block and capture one." />
+              <EmptyHint label="No ideas yet. Open the Notes pane and capture one." />
             ) : (
               <div className="scrollbar-thin flex min-h-0 flex-col gap-1 overflow-y-auto">
                 {notes.map((note) => (
@@ -284,7 +284,7 @@ export function WorkspaceSidebar() {
               }
             />
             {terminalBlocks.length === 0 ? (
-              <EmptyHint label="No terminal blocks open. Use +Terminal in the top bar." />
+              <EmptyHint label="No terminal panes open. Use + Terminal in the top bar." />
             ) : (
               <div className="scrollbar-thin flex min-h-0 flex-col gap-1 overflow-y-auto">
                 {terminalBlocks.map((block, index) => (

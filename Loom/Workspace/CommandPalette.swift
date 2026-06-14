@@ -12,7 +12,7 @@ extension Notification.Name {
 /// Fuzzy-style command palette. Aggregates the most-likely actions from
 /// across the app into a single search-and-execute surface so the user
 /// rarely has to reach for the mouse: switch workspaces, rerun a command
-/// from history, add a block to the current workspace, jump to docs.
+    /// from history, add a pane to the current workspace, jump to docs.
 struct CommandPalette: View {
     @Environment(WorkspaceLayout.self) private var layout
     @Environment(CommandHistoryService.self) private var history
@@ -199,14 +199,14 @@ struct CommandPalette: View {
         let items = layout.currentKind.availablePanels.map { panel in
             PaletteItem(
                 id: "panel:\(panel.rawValue)",
-                title: "Add \(panel.label) block",
+                title: "Add \(panel.label) pane",
                 subtitle: nil,
                 systemImage: panel.systemImage,
                 tint: .accentColor,
                 action: .addBlock(panel)
             )
         }
-        return PaletteSection(title: "Add Block", items: items)
+        return PaletteSection(title: "Add Pane", items: items)
     }
 
     private func quickActionsSection() -> PaletteSection {

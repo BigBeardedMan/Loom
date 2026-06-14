@@ -6,6 +6,8 @@ import os
 private let sidebarLog = Logger(subsystem: "com.chasesims.LoomTestingEdition", category: "sidebar")
 
 struct WorkspaceSidebarView: View {
+    var showsWorkspaceSection: Bool = true
+
     @Query(sort: \Workspace.createdAt) private var workspaces: [Workspace]
     @Query(sort: \IdeaNote.createdAt) private var allNotes: [IdeaNote]
     @Environment(\.modelContext) private var context
@@ -38,8 +40,10 @@ struct WorkspaceSidebarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            workspaceSection
-            Divider().overlay(LoomTheme.hairline)
+            if showsWorkspaceSection {
+                workspaceSection
+                Divider().overlay(LoomTheme.hairline)
+            }
             usageSection
             Divider().overlay(LoomTheme.hairline)
             sessionsSection
@@ -308,7 +312,7 @@ struct WorkspaceSidebarView: View {
                 })
 
                 if sessions.isEmpty {
-                    emptyHint("No terminal blocks open. Use ＋Terminal in the top bar.")
+                    emptyHint("No terminal panes open. Use + Terminal in the top bar.")
                 } else {
                     ScrollView(showsIndicators: false) {
                         VStack(alignment: .leading, spacing: 6) {
@@ -627,7 +631,7 @@ struct WorkspaceSidebarView: View {
             })
 
             if notes.isEmpty {
-                emptyHint("No ideas yet. Open the Notes block and capture one.")
+                emptyHint("No ideas yet. Open the Notes pane and capture one.")
             } else {
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 6) {

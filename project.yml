@@ -15,8 +15,8 @@ settings:
     # release, so the pill never shows a code lower than what's on main.
     # Bump this manually before each testing release; release-testing.sh
     # reads it back out and tags the GitHub pre-release `testing-<version>`.
-    MARKETING_VERSION: "9.0.9"
-    CURRENT_PROJECT_VERSION: "99"
+    MARKETING_VERSION: "9.0.10"
+    CURRENT_PROJECT_VERSION: "100"
     CODE_SIGN_STYLE: Manual
     CODE_SIGN_IDENTITY: "Loom Local Codesign"
     DEVELOPMENT_TEAM: ""
@@ -74,6 +74,7 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         GENERATE_INFOPLIST_FILE: NO
         COMBINE_HIDPI_IMAGES: YES
+        ENABLE_DEBUG_DYLIB: NO
         ENABLE_USER_SCRIPT_SANDBOXING: NO
     preBuildScripts:
       - name: Sweep iCloud shadow duplicates

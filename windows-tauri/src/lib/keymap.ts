@@ -4,6 +4,7 @@
 import { useEffect } from "react";
 import { useApp, type Panel } from "./store";
 import { ipc } from "./ipc";
+import { panelsForKind } from "./commands";
 
 type Binding = {
   combo: string;
@@ -25,23 +26,6 @@ function matches(e: KeyboardEvent, combo: string): boolean {
   return true;
 }
 
-// Order matches macOS LoomApp.swift add-block menu for the current workspace.
-function addBlockOrderForKind(kind?: string): Panel[] {
-  switch (kind) {
-    case "code":
-      return ["terminal", "editor", "tasks", "agent", "commands"];
-    case "ideas":
-      return ["notes", "agent"];
-    case "review":
-    case "build":
-      return ["preview", "agent"];
-    case "runs":
-      return ["tasks", "chat", "agent", "terminal", "commands"];
-    default:
-      return ["terminal", "editor", "tasks", "chat", "agent", "notes", "preview", "commands"];
-  }
-}
-
 export function useGlobalKeymap() {
   const openPalette = useApp((s) => s.openPalette);
   const closePalette = useApp((s) => s.closePalette);
@@ -55,12 +39,15 @@ export function useGlobalKeymap() {
   const updateBlock = useApp((s) => s.updateBlock);
   const setTheme = useApp((s) => s.setTheme);
   const theme = useApp((s) => s.theme);
+  const activeBlockId = useApp((s) => s.activeBlockId);
 
   useEffect(() => {
+    const selectedBlockId =
+      activeBlockId && layout?.blocks.some((block) => block.id === activeBlockId)
+        ? activeBlockId
+        : undefined;
     const focusedBlockId = (() => {
-      // Cheap heuristic: rely on document.activeElement being inside a block
-      // when keystrokes fire. We pick the first block as a fallback so users
-      // can still toggle full-row span without focus tracking.
+      if (selectedBlockId) return selectedBlockId;
       return layout?.blocks[0]?.id;
     })();
     const selectedWorkspace = workspaces.find((w) => w.id === selectedWorkspaceId);
@@ -73,15 +60,17 @@ export function useGlobalKeymap() {
       },
       {
         combo: "ctrl+t",
-        description: "Add Terminal block",
+        description: "Add Terminal pane",
         run: () => addBlock("terminal"),
       },
       {
         combo: "ctrl+w",
-        description: "Close last block",
+        description: "Close selected pane",
         run: () => {
-          const last = layout?.blocks[layout.blocks.length - 1];
-          if (last) removeBlock(last.id);
+          const target =
+            layout?.blocks.find((block) => block.id === selectedBlockId) ??
+            layout?.blocks[layout.blocks.length - 1];
+          if (target) removeBlock(target.id);
         },
       },
       {
@@ -120,7 +109,7 @@ export function useGlobalKeymap() {
       },
       {
         combo: "ctrl+alt+f",
-        description: "Toggle full-row span on first block",
+        description: "Toggle full-row span on selected pane",
         run: () => {
           if (!focusedBlockId || !layout) return;
           const blk = layout.blocks.find((b) => b.id === focusedBlockId);
@@ -142,11 +131,11 @@ export function useGlobalKeymap() {
       });
     }
 
-    // Ctrl+Shift+1..9 → add block of nth kind for the active workspace.
-    addBlockOrderForKind(selectedWorkspace?.kindRaw).forEach((kind, i) => {
+    // Ctrl+Shift+1..9 -> add pane of nth kind for the active workspace.
+    panelsForKind(selectedWorkspace?.kindRaw).forEach((kind, i) => {
       bindings.push({
         combo: `ctrl+shift+${i + 1}`,
-        description: `Add ${kind} block`,
+        description: `Add ${kind} pane`,
         run: () => addBlock(kind),
       });
     });
@@ -180,6 +169,7 @@ export function useGlobalKeymap() {
     updateBlock,
     setTheme,
     theme,
+    activeBlockId,
   ]);
 }
 

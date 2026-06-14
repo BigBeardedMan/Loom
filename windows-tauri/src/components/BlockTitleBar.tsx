@@ -154,7 +154,7 @@ export function BlockTitleBar({
             onClick={onClose}
             onPointerDown={stopBarDrag}
             onMouseDown={stopBarDrag}
-            aria-label="Close block"
+            aria-label="Close pane"
             style={{
               padding: 2,
               borderRadius: 4,

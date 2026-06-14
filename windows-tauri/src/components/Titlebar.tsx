@@ -7,22 +7,9 @@ import { useDictation } from "../lib/dictation";
 import { radius, surface, text, topbar, workspaceColorVar } from "../lib/theme";
 import { toolBrandColor, toolLabel } from "../lib/usage";
 import type { Panel as PanelType } from "../lib/store";
+import { PANEL_META, panelsForKind } from "../lib/commands";
 
 type UsageTool = "claude" | "codex" | "lmstudio";
-
-const PANEL_META: Record<
-  PanelType,
-  { label: string; icon: keyof typeof Icons; color: string }
-> = {
-  terminal: { label: "Terminal", icon: "terminal", color: workspaceColorVar.green },
-  editor: { label: "Editor", icon: "textCursor", color: workspaceColorVar.blue },
-  tasks: { label: "Runs", icon: "checkCircle", color: workspaceColorVar.orange },
-  chat: { label: "Chat", icon: "chat", color: workspaceColorVar.blue },
-  agent: { label: "Agent", icon: "sparkles", color: workspaceColorVar.purple },
-  notes: { label: "Notes", icon: "lightbulb", color: workspaceColorVar.yellow },
-  preview: { label: "Preview", icon: "eye", color: workspaceColorVar.pink },
-  commands: { label: "Commands", icon: "listBulletRect", color: workspaceColorVar.blue },
-};
 
 // Mirrors Loom/Workspace/WorkspaceView.swift topBar (lines 97-238).
 // No window controls here: Windows draws its own chrome above this bar.
@@ -264,7 +251,7 @@ function AddBlockStrip({
             onMouseLeave={(e) => {
               e.currentTarget.style.background = "transparent";
             }}
-            title={`Add ${meta.label} block`}
+            title={`Add ${meta.label} pane`}
           >
             <Icons.plus size={9} strokeWidth={2.5} />
             <Icon size={10} strokeWidth={2} color={meta.color} />
@@ -274,20 +261,4 @@ function AddBlockStrip({
       })}
     </div>
   );
-}
-
-function panelsForKind(kind: string): PanelType[] {
-  switch (kind) {
-    case "code":
-      return ["terminal", "editor", "tasks", "agent", "commands"];
-    case "ideas":
-      return ["notes", "agent"];
-    case "review":
-    case "build":
-      return ["preview", "agent"];
-    case "runs":
-      return ["tasks", "chat", "agent", "terminal", "commands"];
-    default:
-      return [];
-  }
 }

@@ -228,6 +228,7 @@ final class WorkspaceLayout {
     private(set) var previousWorkspaceID: UUID?
 
     var liveAgentTerminalCount: Int = 0
+    var commandTargetBlockID: UUID?
 
     /// True once at least one kind has been hydrated. Suppresses the auto-save
     /// during initial load so prefetch doesn't write back over kinds that are
@@ -241,15 +242,16 @@ final class WorkspaceLayout {
         blocksByKind[currentKind] ?? []
     }
 
-    /// First block on the active deck. Layout shortcuts (⌥⌘ pin / toggle full
-    /// row) act on this so the user always has a deterministic target without
-    /// needing per-block focus tracking.
+    /// Explicit pane selected by the deck. Layout shortcuts act on this target
+    /// only, avoiding accidental first-pane actions after a room switch.
     var commandTargetBlock: WorkspaceBlock? {
-        blocks.first
+        guard let commandTargetBlockID else { return nil }
+        return blocks.first { $0.id == commandTargetBlockID }
     }
 
     func bind(to kind: WorkspaceKind) {
         currentKind = kind
+        commandTargetBlockID = nil
         if blocksByKind[kind] == nil {
             if let restored = LayoutPersistence.load(kind: kind, cwd: defaultCwd) {
                 blocksByKind[kind] = restored
@@ -295,6 +297,7 @@ final class WorkspaceLayout {
         }
         current.append(block)
         blocksByKind[currentKind] = current
+        commandTargetBlockID = block.id
         persistCurrent()
     }
 
@@ -305,6 +308,7 @@ final class WorkspaceLayout {
         block.customTitle = title
         current.append(block)
         blocksByKind[currentKind] = current
+        commandTargetBlockID = block.id
         persistCurrent()
     }
 
@@ -322,6 +326,7 @@ final class WorkspaceLayout {
         ]
         current.append(block)
         blocksByKind[currentKind] = current
+        commandTargetBlockID = block.id
         persistCurrent()
     }
 
@@ -360,6 +365,9 @@ final class WorkspaceLayout {
         current[idx].cleanup()
         current.remove(at: idx)
         blocksByKind[currentKind] = current
+        if commandTargetBlockID == id {
+            commandTargetBlockID = nil
+        }
         persistCurrent()
     }
 

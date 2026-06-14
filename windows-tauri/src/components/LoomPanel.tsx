@@ -6,6 +6,7 @@ type Props = {
   className?: string;
   dragging?: boolean;
   dropTarget?: boolean;
+  selected?: boolean;
   style?: CSSProperties;
   noShadow?: boolean;
 };
@@ -18,6 +19,7 @@ export function LoomPanel({
   className = "",
   dragging = false,
   dropTarget = false,
+  selected = false,
   style,
   noShadow = false,
 }: Props) {
@@ -25,8 +27,10 @@ export function LoomPanel({
     ? "var(--color-ws-orange)"
     : dropTarget
       ? "var(--color-ws-blue)"
+      : selected
+        ? "color-mix(in srgb, var(--color-ws-blue) 44%, transparent)"
       : surface.hairline;
-  const borderWidth = dragging || dropTarget ? 1.5 : 1;
+  const borderWidth = dragging || dropTarget || selected ? 1.5 : 1;
 
   return (
     <div

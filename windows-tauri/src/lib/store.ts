@@ -33,6 +33,14 @@ export type Panel =
 
 type UsageTool = "claude" | "codex" | "lmstudio" | null;
 type UsageTimeframe = "day" | "week" | "month" | "year";
+export type RightRailTab =
+  | "timeline"
+  | "files"
+  | "preview"
+  | "tools"
+  | "diff"
+  | "memory"
+  | "details";
 
 type Theme = "system" | "light" | "dark";
 
@@ -47,6 +55,9 @@ type AppState = {
   updatePill: { version: string } | null;
   blockStatus: Record<string, "idle" | "active" | "warning">;
   theme: Theme;
+  isRightRailVisible: boolean;
+  rightRailTab: RightRailTab;
+  activeBlockId: string | null;
 
   loadWorkspaces: () => Promise<void>;
   selectWorkspace: (id: string | null) => void;
@@ -83,9 +94,34 @@ type AppState = {
   setUsageTimeframe: (tf: UsageTimeframe) => void;
   setUpdatePill: (info: { version: string } | null) => void;
   setTheme: (t: Theme) => void;
+  setRightRailVisible: (visible: boolean) => void;
+  toggleRightRail: () => void;
+  setRightRailTab: (tab: RightRailTab) => void;
+  setActiveBlock: (id: string | null) => void;
 };
 
 const SELECTED_WS_KEY = "loom.selectedWorkspaceId";
+const RIGHT_RAIL_VISIBLE_KEY = "loom.shell.rightRailVisible";
+const RIGHT_RAIL_TAB_KEY = "loom.shell.rightRailTab";
+
+const RIGHT_RAIL_TABS = new Set<RightRailTab>([
+  "timeline",
+  "files",
+  "preview",
+  "tools",
+  "diff",
+  "memory",
+  "details",
+]);
+
+function storedRightRailVisible(): boolean {
+  return localStorage.getItem(RIGHT_RAIL_VISIBLE_KEY) !== "false";
+}
+
+function storedRightRailTab(): RightRailTab {
+  const raw = localStorage.getItem(RIGHT_RAIL_TAB_KEY) as RightRailTab | null;
+  return raw && RIGHT_RAIL_TABS.has(raw) ? raw : "timeline";
+}
 
 const MAC_WORKSPACE_SEEDS: Array<{
   name: string;
@@ -148,6 +184,9 @@ export const useApp = create<AppState>((set, get) => ({
   updatePill: null,
   blockStatus: {},
   theme: (localStorage.getItem("loom.theme") as Theme) || "system",
+  isRightRailVisible: storedRightRailVisible(),
+  rightRailTab: storedRightRailTab(),
+  activeBlockId: null,
 
   loadWorkspaces: async () => {
     const list = await loadCanonicalWorkspaces();
@@ -158,10 +197,10 @@ export const useApp = create<AppState>((set, get) => ({
     if (target) {
       const ws = list.find((w) => w.id === target)!;
       const layout = await loadLayout(ws.id, ws.kindRaw);
-      set({ selectedWorkspaceId: target, layout });
+      set({ selectedWorkspaceId: target, layout, activeBlockId: null });
       if (target) localStorage.setItem(SELECTED_WS_KEY, target);
     } else {
-      set({ selectedWorkspaceId: null, layout: null });
+      set({ selectedWorkspaceId: null, layout: null, activeBlockId: null });
     }
   },
 
@@ -170,18 +209,22 @@ export const useApp = create<AppState>((set, get) => ({
     // usage selection, the workspace swap happens silently behind the usage
     // dashboard and the click feels like a no-op until the user toggles the
     // pill off.
-    set({ selectedWorkspaceId: id, selectedUsageTool: id ? null : get().selectedUsageTool });
+    set({
+      selectedWorkspaceId: id,
+      selectedUsageTool: id ? null : get().selectedUsageTool,
+      activeBlockId: null,
+    });
     if (id) {
       localStorage.setItem(SELECTED_WS_KEY, id);
       ipc.workspace.touchLastOpened(id).catch(() => {});
       const ws = get().workspaces.find((w) => w.id === id);
       if (ws) {
         const layout = await loadLayout(ws.id, ws.kindRaw);
-        set({ layout });
+        set({ layout, activeBlockId: null });
       }
     } else {
       localStorage.removeItem(SELECTED_WS_KEY);
-      set({ layout: null });
+      set({ layout: null, activeBlockId: null });
     }
   },
 
@@ -198,6 +241,7 @@ export const useApp = create<AppState>((set, get) => ({
       workspaces: [ws, ...s.workspaces],
       selectedWorkspaceId: ws.id,
       layout,
+      activeBlockId: null,
     }));
     localStorage.setItem(SELECTED_WS_KEY, ws.id);
     return ws;
@@ -217,6 +261,7 @@ export const useApp = create<AppState>((set, get) => ({
         workspaces: remaining,
         selectedWorkspaceId: nextId,
         layout: null,
+        activeBlockId: null,
       };
     });
     const next = get().selectedWorkspaceId;
@@ -224,7 +269,7 @@ export const useApp = create<AppState>((set, get) => ({
       const ws = get().workspaces.find((w) => w.id === next);
       if (ws) {
         const layout = await loadLayout(ws.id, ws.kindRaw);
-        set({ layout });
+        set({ layout, activeBlockId: null });
       }
     }
   },
@@ -259,7 +304,7 @@ export const useApp = create<AppState>((set, get) => ({
       block.autoChatIndex = nextIndex;
     }
     const next: Layout = { blocks: [...current.blocks, block] };
-    set({ layout: next });
+    set({ layout: next, activeBlockId: block.id });
     await saveLayout(wsId, next);
   },
 
@@ -272,7 +317,7 @@ export const useApp = create<AppState>((set, get) => ({
     block.terminalCount = 1;
     block.restoredTranscript = restore;
     const next: Layout = { blocks: [...current.blocks, block] };
-    set({ layout: next, selectedUsageTool: null });
+    set({ layout: next, selectedUsageTool: null, activeBlockId: block.id });
     await saveLayout(wsId, next);
   },
 
@@ -283,7 +328,7 @@ export const useApp = create<AppState>((set, get) => ({
     const next: Layout = {
       blocks: current.blocks.filter((b) => b.id !== id),
     };
-    set({ layout: next });
+    set({ layout: next, activeBlockId: get().activeBlockId === id ? null : get().activeBlockId });
     await saveLayout(wsId, next);
   },
 
@@ -291,7 +336,7 @@ export const useApp = create<AppState>((set, get) => ({
     const wsId = get().selectedWorkspaceId;
     if (!wsId) return;
     const next: Layout = { blocks: newOrder };
-    set({ layout: next });
+    set({ layout: next, activeBlockId: next.blocks.some((block) => block.id === get().activeBlockId) ? get().activeBlockId : null });
     await saveLayout(wsId, next);
   },
 
@@ -300,7 +345,7 @@ export const useApp = create<AppState>((set, get) => ({
     const ws = get().workspaces.find((w) => w.id === wsId);
     if (!wsId || !ws) return;
     const layout = defaultLayout(ws.kindRaw);
-    set({ layout });
+    set({ layout, activeBlockId: null });
     await saveLayout(wsId, layout);
   },
 
@@ -474,6 +519,20 @@ export const useApp = create<AppState>((set, get) => ({
     else document.documentElement.setAttribute("data-theme", t);
     set({ theme: t });
   },
+  setRightRailVisible: (visible) => {
+    localStorage.setItem(RIGHT_RAIL_VISIBLE_KEY, visible ? "true" : "false");
+    set({ isRightRailVisible: visible });
+  },
+  toggleRightRail: () => {
+    const visible = !get().isRightRailVisible;
+    localStorage.setItem(RIGHT_RAIL_VISIBLE_KEY, visible ? "true" : "false");
+    set({ isRightRailVisible: visible });
+  },
+  setRightRailTab: (tab) => {
+    localStorage.setItem(RIGHT_RAIL_TAB_KEY, tab);
+    set({ rightRailTab: tab, isRightRailVisible: true });
+  },
+  setActiveBlock: (id) => set({ activeBlockId: id }),
 }));
 
 export const workspaceColorClass: Record<Workspace["colorName"], string> = {

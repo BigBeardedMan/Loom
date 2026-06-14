@@ -18,6 +18,9 @@ struct WorkspaceView: View {
     @State private var renamingBlockID: UUID?
     @State private var selectedUsageTool: CLITool? = nil
     @State private var transcriptPreview: TerminalTranscriptSession?
+    @State private var isRightRailVisible: Bool = true
+    @State private var rightRailTab: WorkspaceRightRailTab = .timeline
+    @State private var selectedBlockID: UUID?
 
     private var deckCapacity: Int {
         let cap = WorkspaceLayout.capacity(for: deckSize)
@@ -36,24 +39,57 @@ struct WorkspaceView: View {
         selectedWorkspace?.kind ?? .code
     }
 
+    private var selectedBlock: WorkspaceBlock? {
+        if let selectedBlockID,
+           let block = layout.blocks.first(where: { $0.id == selectedBlockID }) {
+            return block
+        }
+        return nil
+    }
+
     var body: some View {
         ZStack {
             LoomTheme.background
                 .ignoresSafeArea()
 
-            VStack(spacing: 10) {
+            VStack(spacing: 8) {
                 topBar
 
-                HStack(alignment: .top, spacing: 12) {
-                    leftRail
-                        .frame(width: 268)
+                GeometryReader { proxy in
+                    let canFitInspector = proxy.size.width >= 1180
+                    let inspectorWidth = min(308, max(276, proxy.size.width * 0.24))
+                    HStack(alignment: .top, spacing: 12) {
+                        roomRail
+                            .frame(width: 62)
 
-                    deckOrUsage
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        leftRail
+                            .frame(width: canFitInspector ? 232 : 214)
+
+                        deckOrUsage
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                        if isRightRailVisible && canFitInspector {
+                            WorkspaceRightRailView(
+                                selectedTab: $rightRailTab,
+                                workspace: selectedWorkspace,
+                                selectedBlock: selectedBlock,
+                                blocks: layout.blocks
+                            )
+                            .frame(width: inspectorWidth)
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                WorkspaceStatusBar(
+                    workspace: selectedWorkspace,
+                    blocks: layout.blocks,
+                    selectedBlock: selectedBlock,
+                    rightRailTab: rightRailTab
+                )
             }
-            .padding(12)
+            .padding(10)
 
             if let session = transcriptPreview {
                 transcriptPreviewOverlay(session)
@@ -79,6 +115,7 @@ struct WorkspaceView: View {
             if let kind = selectedWorkspace?.kind {
                 layout.bind(to: kind)
             }
+            selectedBlockID = nil
             publishWorkspaceContext()
         }
     }
@@ -110,6 +147,7 @@ struct WorkspaceView: View {
             brandButton
             verticalHairline
             commandPaletteButton
+            workspaceIdentity
 
             Spacer()
 
@@ -120,6 +158,16 @@ struct WorkspaceView: View {
             }
 
             dictationButton
+            LoomIconButton(
+                systemName: "sidebar.right",
+                help: isRightRailVisible ? "Hide inspector" : "Show inspector",
+                tint: LoomTheme.blue,
+                isActive: isRightRailVisible
+            ) {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    isRightRailVisible.toggle()
+                }
+            }
 
             if updates.available != nil {
                 updatePill
@@ -380,6 +428,7 @@ struct WorkspaceView: View {
         Button {
             guard canAddBlock else { return }
             layout.addBlock(panel)
+            selectedBlockID = layout.commandTargetBlockID
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "plus")
@@ -399,15 +448,32 @@ struct WorkspaceView: View {
         .buttonStyle(.plain)
         .pointingHandCursor()
         .disabled(!canAddBlock)
-        .help(canAddBlock ? "Add \(panel.label) block" : "Block limit reached for this window size")
+        .help(canAddBlock ? "Add \(panel.label) pane" : "Pane limit reached for this window size")
     }
 
     // MARK: - Sidebar
+
+    private var roomRail: some View {
+        @Bindable var bindable = layout
+        return WorkspaceRoomRailView(
+            workspaces: workspaces,
+            selectedWorkspaceID: $bindable.selectedWorkspaceID,
+            selectedUsageTool: $selectedUsageTool,
+            isRightRailVisible: isRightRailVisible,
+            toggleRightRail: {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    isRightRailVisible.toggle()
+                }
+            },
+            openSettings: openSettings
+        )
+    }
 
     private var leftRail: some View {
         @Bindable var bindable = layout
         return LoomPanel {
             WorkspaceSidebarView(
+                showsWorkspaceSection: false,
                 selectedWorkspaceID: $bindable.selectedWorkspaceID,
                 selectedUsageTool: $selectedUsageTool,
                 transcriptPreview: $transcriptPreview
@@ -503,7 +569,7 @@ struct WorkspaceView: View {
         }
     }
 
-    // MARK: - Main deck (block grid)
+    // MARK: - Main deck (pane grid)
 
     private var mainDeck: some View {
         Group {
@@ -570,7 +636,7 @@ struct WorkspaceView: View {
                     .coordinateSpace(name: "deck")
                     .animation(.easeOut(duration: 0.12), value: dragTarget)
                     .contextMenu {
-                        Button("Reset Grid Layout") { layout.resetAllWeights() }
+                        Button("Reset Pane Layout") { layout.resetAllWeights() }
                     }
                     .onAppear { deckSize = geo.size }
                     .onChange(of: geo.size) { _, new in deckSize = new }
@@ -590,10 +656,10 @@ struct WorkspaceView: View {
             return false
         }()
 
-        LoomPanel(
-            title: block.displayTitle,
-            systemImage: block.kind.systemImage,
-            onClose: { layout.removeBlock(block.id) },
+            LoomPanel(
+                title: block.displayTitle,
+                systemImage: block.kind.systemImage,
+                onClose: { layout.removeBlock(block.id) },
             onDragChanged: { value in
                 if draggingBlockID != block.id { draggingBlockID = block.id }
                 dragTranslation = value.translation
@@ -622,11 +688,12 @@ struct WorkspaceView: View {
                     dragTarget = nil
                 }
             },
-            isDragging: isDragging,
-            isHoverTarget: isHoverTarget,
-            isRenaming: renamingBlockID == block.id,
-            onRenameStart: { renamingBlockID = block.id },
-            onRenameCommit: { newName in
+                isDragging: isDragging,
+                isHoverTarget: isHoverTarget,
+                isSelected: selectedBlock?.id == block.id,
+                isRenaming: renamingBlockID == block.id,
+                onRenameStart: { renamingBlockID = block.id },
+                onRenameCommit: { newName in
                 layout.setTitle(block.id, to: newName)
                 renamingBlockID = nil
             }
@@ -638,6 +705,12 @@ struct WorkspaceView: View {
         .position(x: cellRect.midX + translation.width, y: cellRect.midY + translation.height)
         .zIndex(isDragging ? 10 : (isHoverTarget ? 1 : 0))
         .id(block.id)
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                selectedBlockID = block.id
+                layout.commandTargetBlockID = block.id
+            }
+        )
         .contextMenu {
             Button("Rename") { renamingBlockID = block.id }
             Button(block.spansFullRow ? "Collapse to grid" : "Expand to full row") {
@@ -650,7 +723,7 @@ struct WorkspaceView: View {
                 Button("Reset name") { layout.setTitle(block.id, to: nil) }
             }
             Divider()
-            Button("Close block", role: .destructive) {
+            Button("Close pane", role: .destructive) {
                 layout.removeBlock(block.id)
             }
         }
@@ -697,10 +770,16 @@ struct WorkspaceView: View {
     private var deckEmptyState: some View {
         LoomEmptyState(
             systemImage: "rectangle.dashed",
-            title: "Empty deck",
+            title: "Empty workroom",
             detail: "Add Terminal, Editor, Runs, Chat, Agent, or Commands from the command bar.",
             tint: selectedWorkspace?.color.color ?? LoomTheme.blue
         )
+    }
+
+    private func openSettings() {
+        #if canImport(AppKit)
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        #endif
     }
 
 }
@@ -911,6 +990,7 @@ struct LoomPanel<Content: View>: View {
     var onDragEnded: ((DragGesture.Value) -> Void)?
     var isDragging: Bool = false
     var isHoverTarget: Bool = false
+    var isSelected: Bool = false
     var isRenaming: Bool = false
     var onRenameStart: (() -> Void)?
     var onRenameCommit: ((String) -> Void)?
@@ -927,6 +1007,7 @@ struct LoomPanel<Content: View>: View {
         onDragEnded: ((DragGesture.Value) -> Void)? = nil,
         isDragging: Bool = false,
         isHoverTarget: Bool = false,
+        isSelected: Bool = false,
         isRenaming: Bool = false,
         onRenameStart: (() -> Void)? = nil,
         onRenameCommit: ((String) -> Void)? = nil,
@@ -939,6 +1020,7 @@ struct LoomPanel<Content: View>: View {
         self.onDragEnded = onDragEnded
         self.isDragging = isDragging
         self.isHoverTarget = isHoverTarget
+        self.isSelected = isSelected
         self.isRenaming = isRenaming
         self.onRenameStart = onRenameStart
         self.onRenameCommit = onRenameCommit
@@ -972,11 +1054,12 @@ struct LoomPanel<Content: View>: View {
     private var borderColor: Color {
         if isDragging { return LoomTheme.orange.opacity(0.6) }
         if isHoverTarget { return LoomTheme.blue.opacity(0.55) }
+        if isSelected { return LoomTheme.blue.opacity(0.38) }
         return LoomTheme.hairline
     }
 
     private var borderWidth: CGFloat {
-        isDragging || isHoverTarget ? 1.5 : 1
+        isDragging || isHoverTarget || isSelected ? 1.5 : 1
     }
 
     @ViewBuilder
@@ -1012,7 +1095,7 @@ struct LoomPanel<Content: View>: View {
                 }
                 .buttonStyle(.plain)
                 .pointingHandCursor()
-                .help("Close block")
+                .help("Close pane")
             }
         }
         .padding(.horizontal, 12)
