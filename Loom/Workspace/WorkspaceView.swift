@@ -75,26 +75,39 @@ struct WorkspaceView: View {
                 GeometryReader { proxy in
                     let canFitInspector = proxy.size.width >= 1180
                     let inspectorWidth = min(308, max(276, proxy.size.width * 0.24))
-                    HStack(alignment: .top, spacing: 12) {
-                        roomRail
-                            .frame(width: 62)
+                    let compactInspectorWidth = min(324, max(260, proxy.size.width - 34))
+                    ZStack(alignment: .topTrailing) {
+                        HStack(alignment: .top, spacing: 12) {
+                            roomRail
+                                .frame(width: 62)
 
-                        leftRail
-                            .frame(width: canFitInspector ? 232 : 214)
+                            leftRail
+                                .frame(width: canFitInspector ? 232 : 214)
 
-                        deckOrUsage
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            deckOrUsage
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                        if isRightRailVisible && canFitInspector {
-                            WorkspaceRightRailView(
-                                selectedTab: rightRailTabBinding,
-                                refreshNonce: rightRailRefreshNonce,
-                                workspace: selectedWorkspace,
-                                selectedBlock: selectedBlock,
-                                blocks: layout.blocks
-                            )
-                            .frame(width: inspectorWidth)
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                            if isRightRailVisible && canFitInspector {
+                                rightRailView(width: inspectorWidth)
+                                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                            }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                        if isRightRailVisible && !canFitInspector {
+                            Color.black.opacity(0.22)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    toggleRightRail()
+                                }
+                                .transition(.opacity)
+                                .zIndex(10)
+
+                            rightRailView(width: compactInspectorWidth)
+                                .frame(maxHeight: .infinity)
+                                .shadow(color: Color.black.opacity(0.22), radius: 22, x: -8, y: 8)
+                                .transition(.move(edge: .trailing).combined(with: .opacity))
+                                .zIndex(11)
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -519,6 +532,17 @@ struct WorkspaceView: View {
         if selectedWorkspace?.folderPath.isEmpty == false { tabs.append(.memory) }
         tabs.append(.details)
         return tabs
+    }
+
+    private func rightRailView(width: CGFloat) -> some View {
+        WorkspaceRightRailView(
+            selectedTab: rightRailTabBinding,
+            refreshNonce: rightRailRefreshNonce,
+            workspace: selectedWorkspace,
+            selectedBlock: selectedBlock,
+            blocks: layout.blocks
+        )
+        .frame(width: width)
     }
 
     private func toggleRightRail() {
