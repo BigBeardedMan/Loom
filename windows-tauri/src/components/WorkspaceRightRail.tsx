@@ -613,7 +613,7 @@ function FolderActions({ path, label }: { path: string; label: string }) {
 
 function PreviewActions({ url, label }: { url: string; label: string }) {
   const copyUrl = () => void navigator.clipboard?.writeText(url);
-  const openUrl = () => void window.open(url, "_blank", "noopener,noreferrer");
+  const openUrl = () => void ipc.shell.open(url);
 
   return (
     <div className="flex items-center gap-1.5" style={{ marginTop: 7 }}>
